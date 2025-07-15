@@ -1,0 +1,18 @@
+# Table of contents
+# Learn more at https://jupyterbook.org/customize/toc.html
+
+format: jb-book
+root: index
+chapters:
+  - file: getting-started
+    title: Getting Started
+  - file: api-reference
+    title: API Reference
+  - file: architecture
+    title: Architecture
+  - file: deployment
+    title: Deployment Guide
+  - file: development
+    title: Development Guide
+  - file: troubleshooting
+    title: Troubleshooting

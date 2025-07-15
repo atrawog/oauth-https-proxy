@@ -1,0 +1,33 @@
+# Test configuration overlay for docker-compose
+# Use with: docker-compose -f docker-compose.yml -f docker-compose.test.yml
+
+services:
+  redis:
+    ports:
+      - "6379:6379"  # Expose Redis for test access
+
+  certmanager:
+    environment:
+      - LOG_LEVEL=DEBUG  # More verbose logging for tests
+      - ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
+    ports:
+      - "8080:80"   # Use different port to avoid conflicts
+      - "8443:443"
+
+  test-runner:
+    build: .
+    command: pixi run pytest tests/ -v --tb=short
+    environment:
+      - TEST_BASE_URL=http://certmanager:80
+      - TEST_REDIS_URL=redis://redis:6379/1
+      - PYTHONPATH=/app
+    depends_on:
+      certmanager:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - acme_network
+    volumes:
+      - ./tests:/app/tests
+      - ./acme_certmanager:/app/acme_certmanager
