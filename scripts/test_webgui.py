@@ -113,7 +113,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
 
 
 if __name__ == "__main__":
-    base_url = "http://localhost:8080"
+    base_url = "http://localhost:80"
     token = sys.argv[1] if len(sys.argv) > 1 else None
     
     if not test_webgui(base_url, token):

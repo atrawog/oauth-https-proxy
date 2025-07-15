@@ -160,3 +160,7 @@ token-generate name:
 # Test authorization system
 test-auth token:
     pixi run python scripts/test_auth.py "{{token}}"
+
+# Test web GUI (optionally with token)
+test-webgui token="":
+    pixi run python scripts/test_webgui.py "{{token}}"
