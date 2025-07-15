@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACME Certificate Manager</title>
+    <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>ACME Certificate Manager</h1>
+            <div id="auth-status" class="auth-status"></div>
+        </header>
+
+        <main>
+            <!-- Login Section -->
+            <section id="login-section" class="section">
+                <h2>Authentication</h2>
+                <form id="login-form" class="form">
+                    <div class="form-group">
+                        <label for="token">Bearer Token:</label>
+                        <input type="password" id="token" name="token" required 
+                               placeholder="Enter your bearer token">
+                    </div>
+                    <button type="submit" class="btn btn-primary">Login</button>
+                </form>
+            </section>
+
+            <!-- Dashboard Section (hidden by default) -->
+            <section id="dashboard-section" class="section hidden">
+                <div class="tabs">
+                    <button class="tab-button active" data-tab="certificates">Certificates</button>
+                    <button class="tab-button" data-tab="new-certificate">New Certificate</button>
+                </div>
+
+                <!-- Certificates Tab -->
+                <div id="certificates-tab" class="tab-content active">
+                    <h2>Your Certificates</h2>
+                    <div id="certificates-list" class="certificates-list">
+                        <div class="loading">Loading certificates...</div>
+                    </div>
+                </div>
+
+                <!-- New Certificate Tab -->
+                <div id="new-certificate-tab" class="tab-content hidden">
+                    <h2>Generate New Certificate</h2>
+                    <form id="new-certificate-form" class="form">
+                        <div class="form-group">
+                            <label for="cert-name">Certificate Name:</label>
+                            <input type="text" id="cert-name" name="cert_name" required 
+                                   placeholder="e.g., production">
+                        </div>
+                        <div class="form-group">
+                            <label for="domain">Domain:</label>
+                            <input type="text" id="domain" name="domain" required 
+                                   placeholder="e.g., example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="email">Email:</label>
+                            <input type="email" id="email" name="email" required 
+                                   placeholder="admin@example.com">
+                        </div>
+                        <div class="form-group">
+                            <label for="acme-url">ACME Directory URL:</label>
+                            <select id="acme-url" name="acme_directory_url">
+                                <option value="https://acme-v02.api.letsencrypt.org/directory">Let's Encrypt Production</option>
+                                <option value="https://acme-staging-v02.api.letsencrypt.org/directory">Let's Encrypt Staging</option>
+                            </select>
+                        </div>
+                        <button type="submit" class="btn btn-primary">Generate Certificate</button>
+                    </form>
+                </div>
+            </section>
+
+            <!-- Certificate Details Modal -->
+            <div id="cert-modal" class="modal hidden">
+                <div class="modal-content">
+                    <span class="close">&times;</span>
+                    <h2>Certificate Details</h2>
+                    <div id="cert-details"></div>
+                </div>
+            </div>
+        </main>
+
+        <footer>
+            <button id="logout-btn" class="btn btn-secondary hidden">Logout</button>
+        </footer>
+    </div>
+
+    <script src="/static/app.js"></script>
+</body>
+</html>

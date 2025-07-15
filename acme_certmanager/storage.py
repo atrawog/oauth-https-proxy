@@ -150,3 +150,36 @@ class RedisStorage:
         except RedisError as e:
             logger.error(f"Failed to get expiring certificates: {e}")
             return []
+    
+    # API Token operations
+    def store_api_token(self, token_hash: str, name: str) -> bool:
+        """Store API token metadata."""
+        try:
+            key = f"auth:token:{token_hash}"
+            data = {
+                "name": name,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            return self.redis_client.set(key, json.dumps(data))
+        except RedisError as e:
+            logger.error(f"Failed to store API token: {e}")
+            return False
+    
+    def get_api_token(self, token_hash: str) -> Optional[dict]:
+        """Get API token metadata."""
+        try:
+            key = f"auth:token:{token_hash}"
+            value = self.redis_client.get(key)
+            return json.loads(value) if value else None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get API token: {e}")
+            return None
+    
+    def delete_api_token(self, token_hash: str) -> bool:
+        """Delete API token."""
+        try:
+            key = f"auth:token:{token_hash}"
+            return bool(self.redis_client.delete(key))
+        except RedisError as e:
+            logger.error(f"Failed to delete API token: {e}")
+            return False

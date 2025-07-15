@@ -7,6 +7,7 @@ from urllib.parse import urlparse
 
 import josepy as jose
 from acme import client, challenges, messages, crypto_util, errors
+from acme.challenges import HTTP01Response
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization, hashes
@@ -136,12 +137,7 @@ class ACMEClient:
         for auth in order.authorizations:
             self._process_authorization(acme_client, auth)
         
-        # Wait a moment for Let's Encrypt to validate challenges
-        import time
-        logger.info("Waiting for challenge validation...")
-        time.sleep(10)
-        
-        # Finalize order
+        # Finalize order (challenges are already validated)
         order = acme_client.poll_and_finalize(order)
         
         # Get certificate
@@ -212,12 +208,17 @@ class ACMEClient:
         # Get challenge response
         response, validation = http_challenge.chall.response_and_validation(acme_client.net.key)
         
+        # Validate response object
+        if not isinstance(response, HTTP01Response):
+            raise Exception(f"Invalid response type: {type(response)}, expected HTTP01Response")
+        
         # Store challenge in Redis
         # The token needs to be the base64url-encoded string, not raw bytes
         token = http_challenge.chall.encode('token')
         
         logger.info(f"Storing challenge token: {token}")
         logger.info(f"Challenge validation: {validation[:50]}...")
+        logger.info(f"Response details: typ={getattr(response, 'typ', 'N/A')}, key_authorization={getattr(response, 'key_authorization', 'N/A')}")
         
         success = self.storage.store_challenge(token, validation)
         if not success:
@@ -231,10 +232,96 @@ class ACMEClient:
         
         # Answer challenge
         logger.info("Answering ACME challenge...")
-        acme_client.answer_challenge(http_challenge, response)
+        logger.info(f"  Challenge URI: {http_challenge.uri}")
+        logger.info(f"  Challenge type: {http_challenge.chall.typ}")
+        logger.info(f"  Response type: {type(response)}")
+        logger.info(f"  Response content: {response}")
+        
+        # Add request/response logging to debug ACME protocol
+        import json
+        original_post = acme_client.net.post
+        
+        def logged_post(url, *args, **kwargs):
+            logger.info(f"ACME POST to {url}")
+            if args:
+                logger.info(f"  Body: {args[0]}")
+            result = original_post(url, *args, **kwargs)
+            logger.info(f"  Response status: {result.status_code}")
+            logger.info(f"  Response headers: {dict(result.headers)}")
+            try:
+                logger.info(f"  Response body: {result.json()}")
+            except:
+                logger.info(f"  Response body: {result.text}")
+            return result
+        
+        # Temporarily patch the post method
+        acme_client.net.post = logged_post
+        
+        try:
+            acme_client.answer_challenge(http_challenge, response)
+        finally:
+            # Restore original method
+            acme_client.net.post = original_post
+        
+        # Don't wait here - Let's Encrypt will validate when ready
+        logger.info("Challenge answer submitted, Let's Encrypt will validate when ready")
+        
+        # Check status with shorter intervals to avoid blocking too long
+        import os
+        import time
+        max_attempts = int(os.getenv("ACME_POLL_MAX_ATTEMPTS", "60"))
+        poll_interval = int(os.getenv("ACME_POLL_INTERVAL_SECONDS", "2"))
+        
+        logger.info("Checking authorization status...")
+        for attempt in range(max_attempts):
+            try:
+                # Refresh the authorization status
+                authz_resource = acme_client.net.get(authz.uri)
+                authz = messages.AuthorizationResource(
+                    body=messages.Authorization.from_json(authz_resource.json()),
+                    uri=authz.uri
+                )
+                
+                status = authz.body.status
+                logger.info(f"Authorization status: {status} (attempt {attempt + 1}/{max_attempts})")
+                
+                if status == messages.STATUS_VALID:
+                    logger.info("Authorization validated successfully!")
+                    return
+                elif status == messages.STATUS_INVALID:
+                    # Get detailed error information
+                    logger.error(f"Authorization invalid! Full details:")
+                    logger.error(f"  Authorization URI: {authz.uri}")
+                    logger.error(f"  Domain: {authz.body.identifier.value if authz.body.identifier else 'unknown'}")
+                    
+                    for idx, challenge in enumerate(authz.body.challenges):
+                        logger.error(f"  Challenge {idx + 1}:")
+                        logger.error(f"    Type: {challenge.chall.typ if hasattr(challenge.chall, 'typ') else 'unknown'}")
+                        logger.error(f"    Status: {challenge.status}")
+                        logger.error(f"    Token: {challenge.chall.encode('token') if hasattr(challenge.chall, 'encode') else 'unknown'}")
+                        if challenge.error:
+                            logger.error(f"    Error: {challenge.error}")
+                            logger.error(f"    Error detail: {challenge.error.detail if hasattr(challenge.error, 'detail') else 'no detail'}")
+                    
+                    raise Exception(f"Authorization failed with status: {status}")
+                
+                # Still pending, wait before next check
+                if attempt < max_attempts - 1:
+                    logger.info(f"Still pending, waiting {poll_interval}s before next check...")
+                    import time
+                    time.sleep(poll_interval)
+                
+            except Exception as e:
+                if "Authorization failed" in str(e):
+                    raise  # Don't retry on explicit failure
+                logger.error(f"Error checking authorization: {e}")
+                if attempt == max_attempts - 1:
+                    raise
+                time.sleep(poll_interval)
+        
+        raise Exception("Authorization validation timed out")
         
         # Don't delete challenge here - let it expire naturally with TTL
-        # Let's Encrypt needs time to validate
     
     def renew_certificate(self, cert_name: str) -> Optional[Certificate]:
         """Renew existing certificate."""

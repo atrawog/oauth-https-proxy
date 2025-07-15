@@ -36,6 +36,8 @@ class Certificate(BaseModel):
     fingerprint: Optional[str] = None
     fullchain_pem: Optional[str] = None
     private_key_pem: Optional[str] = None
+    owner_token_hash: Optional[str] = None  # SHA256 hash of owner token
+    created_by: Optional[str] = None        # Token name for display
     
     class Config:
         json_encoders = {

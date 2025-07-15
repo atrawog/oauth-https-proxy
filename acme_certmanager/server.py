@@ -8,13 +8,17 @@ import tempfile
 from contextlib import asynccontextmanager
 from typing import Dict, Optional
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import PlainTextResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
+import time
 
 from .manager import CertificateManager
 from .models import CertificateRequest, Certificate, HealthStatus
 from .scheduler import CertificateScheduler
+from .async_acme import create_certificate_task, get_generation_status
+from .auth import get_current_token_info, require_owner
 
 logger = logging.getLogger(__name__)
 
@@ -192,45 +196,107 @@ app = FastAPI(
     lifespan=lifespan
 )
 
+# Mount static files for web GUI
+app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+
+# Add middleware to log ALL requests
+@app.middleware("http")
+async def log_all_requests(request: Request, call_next):
+    """Log all incoming HTTP requests with full details."""
+    start_time = time.time()
+    
+    # Log request details
+    logger.info(f"\n{'='*60}")
+    logger.info(f"INCOMING REQUEST:")
+    logger.info(f"  Method: {request.method}")
+    logger.info(f"  URL: {request.url}")
+    logger.info(f"  Path: {request.url.path}")
+    logger.info(f"  Client: {request.client}")
+    logger.info(f"  Headers:")
+    for name, value in request.headers.items():
+        logger.info(f"    {name}: {value}")
+    
+    # Check if it's an ACME challenge request
+    if request.url.path.startswith("/.well-known/acme-challenge/"):
+        token = request.url.path.split("/")[-1]
+        logger.info(f"  ACME Challenge Token: {token}")
+        logger.info(f"  User-Agent indicates: {'Let\'s Encrypt' if 'Let' in request.headers.get('user-agent', '') else 'Other'}")
+    
+    # Process request
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        logger.info(f"  Response Status: {response.status_code}")
+        logger.info(f"  Process Time: {process_time*1000:.1f}ms")
+        logger.info(f"{'='*60}\n")
+        return response
+    except Exception as e:
+        process_time = time.time() - start_time
+        logger.error(f"  Request failed after {process_time*1000:.1f}ms: {e}")
+        logger.error(f"{'='*60}\n")
+        raise
+
 
 # API Endpoints
 
-@app.post("/certificates", response_model=Certificate)
-async def create_certificate(request: CertificateRequest, background_tasks: BackgroundTasks):
+@app.get("/")
+async def read_root():
+    """Serve the web GUI."""
+    from fastapi.responses import FileResponse
+    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
+
+
+@app.post("/certificates")
+async def create_certificate(
+    request: CertificateRequest,
+    token_info: tuple = Depends(get_current_token_info)
+):
     """Create new certificate via ACME."""
-    try:
-        certificate = manager.create_certificate(request)
-        
-        # Update SSL context in background
-        background_tasks.add_task(https_server.update_ssl_context, certificate)
-        
-        return certificate
-    except Exception as e:
-        import traceback
-        error_details = traceback.format_exc()
-        logger.error(f"Failed to create certificate: {type(e).__name__}: {e}")
-        logger.error(f"Traceback:\n{error_details}")
-        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
+    token_hash, token_name = token_info
+    
+    # Run certificate generation in background to avoid blocking
+    result = await create_certificate_task(
+        manager, request, https_server,
+        owner_token_hash=token_hash,
+        created_by=token_name
+    )
+    return result
 
 
 @app.get("/certificates")
-async def list_certificates():
-    """List all certificates."""
-    return manager.list_certificates()
+async def list_certificates(
+    token_info: tuple = Depends(get_current_token_info)
+):
+    """List certificates owned by the current token."""
+    token_hash, _ = token_info
+    all_certs = manager.list_certificates()
+    # Filter to only show certificates owned by this token
+    return [cert for cert in all_certs if cert.owner_token_hash == token_hash]
 
 
-@app.get("/certificates/{cert_name}", response_model=Certificate)
+@app.get("/certificates/{cert_name}/status")
+async def get_certificate_status(cert_name: str):
+    """Get status of certificate generation."""
+    return get_generation_status(cert_name)
+
+
+@app.get("/certificates/{cert_name}", 
+         response_model=Certificate,
+         dependencies=[Depends(require_owner)])
 async def get_certificate(cert_name: str):
-    """Get certificate by name."""
+    """Get certificate by name (owner only)."""
     certificate = manager.get_certificate(cert_name)
     if not certificate:
         raise HTTPException(status_code=404, detail="Certificate not found")
     return certificate
 
 
-@app.post("/certificates/{cert_name}/renew", response_model=Certificate)
+@app.post("/certificates/{cert_name}/renew", 
+          response_model=Certificate,
+          dependencies=[Depends(require_owner)])
 async def renew_certificate(cert_name: str, background_tasks: BackgroundTasks):
-    """Renew certificate."""
+    """Renew certificate (owner only)."""
     try:
         certificate = manager.renew_certificate(cert_name)
         if not certificate:
@@ -245,9 +311,10 @@ async def renew_certificate(cert_name: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.delete("/certificates/{cert_name}/domains/{domain}")
+@app.delete("/certificates/{cert_name}/domains/{domain}",
+            dependencies=[Depends(require_owner)])
 async def remove_domain(cert_name: str, domain: str, background_tasks: BackgroundTasks):
-    """Remove domain from certificate."""
+    """Remove domain from certificate (owner only)."""
     try:
         certificate = manager.remove_domain_from_certificate(cert_name, domain)
         
@@ -266,14 +333,18 @@ async def remove_domain(cert_name: str, domain: str, background_tasks: Backgroun
 
 
 @app.get("/.well-known/acme-challenge/{token}", response_class=PlainTextResponse)
-async def acme_challenge(token: str):
+async def acme_challenge(request: Request, token: str):
     """ACME HTTP-01 challenge endpoint."""
-    logger.info(f"Challenge request for token: {token}")
+    logger.info(f"Challenge endpoint called for token: {token}")
+    logger.info(f"Request from: {request.client}")
+    logger.info(f"User-Agent: {request.headers.get('user-agent', 'None')}")
+    
     authorization = manager.get_challenge_response(token)
     if not authorization:
         logger.warning(f"Challenge not found for token: {token}")
         raise HTTPException(status_code=404, detail="Challenge not found")
-    logger.info(f"Returning challenge authorization: {authorization[:50]}...")
+    
+    logger.info(f"Found authorization, returning: {authorization[:50]}...")
     return authorization
 
 

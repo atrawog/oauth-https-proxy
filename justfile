@@ -141,3 +141,22 @@ test-env:
 # Quick certificate generation test
 test-cert-quick:
     pixi run python scripts/test_cert_quick.py
+
+# Test challenge timing
+test-timing:
+    pixi run python scripts/test_challenge_timing.py
+
+# Test external access
+test-external:
+    pixi run python scripts/test_external_access.py
+
+# Generate a new API token
+token-generate name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Generating API token: {{name}}"
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}"
+
+# Test authorization system
+test-auth token:
+    pixi run python scripts/test_auth.py "{{token}}"

@@ -122,9 +122,11 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
 - Account key management
 - Certificate lifecycle operations
 - Redis-exclusive storage
+- Async certificate generation (non-blocking)
 
 ### HTTPS Server
-- Dual HTTP/HTTPS operation (ports 80/443)
+- HTTP operation (port 80) for ACME challenges
+- HTTPS operation (port 443) with dynamic certificates
 - SNI support for multi-domain certificates
 - Dynamic SSL context loading
 - Zero-downtime certificate updates
@@ -163,13 +165,29 @@ Request:
   "acme_directory_url": "https://acme-v02.api.letsencrypt.org/directory"
 }
 ```
-Response: Certificate object with status
+Response (async): 
+```
+{
+  "status": "accepted",
+  "message": "Certificate generation started for example.com",
+  "cert_name": "production"
+}
+```
 
 ### `GET /certificates`
 Response: Array of certificate objects
 
 ### `GET /certificates/{cert_name}`
 Response: Certificate object
+
+### `GET /certificates/{cert_name}/status`
+Response: Generation status
+```
+{
+  "status": "in_progress|completed|failed|not_found",
+  "message": "Certificate generation in progress"
+}
+```
 
 ### `POST /certificates/{cert_name}/renew`
 Response: Updated certificate object
@@ -219,15 +237,18 @@ Response:
 
 ## ACME Workflow
 
-### Certificate Generation
-1. Get/create account key for email
-2. Register/login ACME account via provided directory URL
-3. Create order for all domains
-4. Store HTTP-01 challenges in Redis
-5. Respond to challenges
-6. Poll for completion
-7. Store certificate in Redis
-8. Update SSL contexts
+### Certificate Generation (Async)
+1. Accept request immediately (non-blocking)
+2. Execute in background thread:
+   - Get/create account key for email
+   - Register/login ACME account via provided directory URL
+   - Create order for all domains
+   - Store HTTP-01 challenges in Redis
+   - Answer challenge to Let's Encrypt
+   - Poll authorization status (2s intervals)
+   - Finalize order and get certificate
+   - Store certificate in Redis
+   - Update SSL contexts
 
 ### Challenge Validation
 - Path: `/.well-known/acme-challenge/{token}`
@@ -252,3 +273,7 @@ Response:
 - `REDIS_URL`: Redis connection string
 - `HTTP_PORT`: HTTP listen port (default: 80)
 - `HTTPS_PORT`: HTTPS listen port (default: 443)
+- `ACME_POLL_MAX_ATTEMPTS`: Max polling attempts (default: 60)
+- `ACME_POLL_INTERVAL_SECONDS`: Poll interval (default: 2)
+- `RENEWAL_CHECK_INTERVAL`: Renewal check interval (default: 86400)
+- `RENEWAL_THRESHOLD_DAYS`: Days before expiry to renew (default: 30)

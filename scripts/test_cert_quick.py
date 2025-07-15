@@ -20,10 +20,35 @@ response = client.post('/certificates', json={
 })
 
 print(f"Status: {response.status_code}")
-if response.status_code == 200:
-    cert = response.json()
-    print(f"SUCCESS! Certificate issued for: {cert['domains']}")
-    print(f"Expires: {cert['expires_at']}")
-    print(f"Certificate valid: {cert['fullchain_pem'].startswith('-----BEGIN CERTIFICATE-----')}")
+result = response.json()
+print(f"Response: {result}")
+
+if response.status_code == 200 and result.get("status") == "accepted":
+    # Poll for completion
+    cert_name = result["cert_name"]
+    print(f"\nPolling for completion...")
+    
+    import time
+    for i in range(60):
+        time.sleep(2)
+        status_response = client.get(f"/certificates/{cert_name}/status")
+        status = status_response.json()
+        print(f"  Attempt {i+1}: {status['status']} - {status['message']}")
+        
+        if status["status"] in ["completed", "failed"]:
+            break
+    
+    # Try to get the certificate
+    if status["status"] == "completed":
+        cert_response = client.get(f"/certificates/{cert_name}")
+        if cert_response.status_code == 200:
+            cert = cert_response.json()
+            print(f"\nSUCCESS! Certificate issued for: {cert['domains']}")
+            print(f"Expires: {cert['expires_at']}")
+            print(f"Certificate valid: {cert['fullchain_pem'].startswith('-----BEGIN CERTIFICATE-----')}")
+        else:
+            print(f"\nFailed to retrieve certificate: {cert_response.status_code}")
+    else:
+        print(f"\nCertificate generation failed!")
 else:
     print(f"Error: {response.text[:500]}")
