@@ -5,7 +5,7 @@ import subprocess
 import os
 
 def main():
-    test_domain = os.getenv("TEST_DOMAIN", "test.atradev.org")
+    test_domain = os.getenv("TEST_DOMAIN")
     
     print("Testing IPv6 connectivity to Docker container...")
     

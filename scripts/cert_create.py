@@ -11,7 +11,16 @@ def create_certificate(cert_name: str, domain: str, email: str, token: str, stag
         print("Error: All parameters are required")
         return False
     
-    base_url = os.getenv('BASE_URL', 'http://localhost:80')
+    base_url = os.getenv('BASE_URL')
+
+    
+    if not base_url:
+
+    
+        print("Error: BASE_URL must be set in .env")
+
+    
+        return False
     headers = {"Authorization": f"Bearer {token}"}
     
     data = {

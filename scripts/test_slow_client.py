@@ -7,7 +7,7 @@ import os
 
 def test_slow_request():
     """Simulate a slow client that connects but delays sending the request."""
-    test_domain = os.getenv("TEST_DOMAIN", "test.atradev.org")
+    test_domain = os.getenv("TEST_DOMAIN")
     
     print(f"Testing slow client behavior to {test_domain}...")
     
@@ -48,7 +48,7 @@ def test_slow_request():
 
 def test_connect_only():
     """Test connecting without sending any data."""
-    test_domain = os.getenv("TEST_DOMAIN", "test.atradev.org")
+    test_domain = os.getenv("TEST_DOMAIN")
     
     print(f"\nTesting connect-only behavior to {test_domain}...")
     

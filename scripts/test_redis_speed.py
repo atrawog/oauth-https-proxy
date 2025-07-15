@@ -7,9 +7,7 @@ import os
 
 def main():
     redis_url = os.getenv("REDIS_URL")
-    assert redis_url, "REDIS_URL must be set"
-    
-    client = redis.from_url(redis_url, decode_responses=True)
+    assert redis_url)
     
     print("Testing Redis operation speed...")
     

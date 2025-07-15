@@ -14,7 +14,7 @@ def show_token(token_name: str):
         print("Error: Token name is required")
         return False
     
-    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    redis_url = os.getenv('REDIS_URL')
     storage = RedisStorage(redis_url)
     
     # Get token by name
@@ -32,7 +32,7 @@ def show_token(token_name: str):
     print(f"=== Token Details ===")
     print(f"Name: {token_name}")
     print(f"Token: {full_token}")
-    print(f"Created: {token_data.get('created_at', 'Unknown')}")
+    print(f"Created: {token_data.get('created_at')}")
     print(f"\nUse this token to:")
     print(f"- Login to the web GUI at http://localhost:80")
     print(f"- Make API calls with Authorization: Bearer {full_token}")

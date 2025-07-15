@@ -18,7 +18,7 @@ async def make_request(client, url, request_id):
         return request_id, None, elapsed, str(e)
 
 async def main():
-    base_url = os.getenv("TEST_BASE_URL", "http://localhost:80")
+    base_url = os.getenv("TEST_BASE_URL")
     
     # Test concurrent health checks
     print("Testing concurrent requests to /health...")

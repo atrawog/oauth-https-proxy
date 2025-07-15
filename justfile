@@ -48,7 +48,7 @@ test-docker:
         exit 1
     fi
     echo "Running tests..."
-    TEST_BASE_URL=http://localhost:80 TEST_REDIS_URL=redis://localhost:6379/1 pixi run pytest tests/ -v --tb=short
+    TEST_BASE_URL=http://localhost:80 pixi run pytest tests/ -v --tb=short
 
 # Run tests inside Docker
 test-integration:
@@ -274,10 +274,14 @@ cert-renew name token force="":
 cert-status name token="" wait="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{wait}}" ]; then
+    if [ -n "{{wait}}" ] && [ -n "{{token}}" ]; then
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}" "{{token}}" --wait
-    else
+    elif [ -n "{{wait}}" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}" --wait
+    elif [ -n "{{token}}" ]; then
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}" "{{token}}"
+    else
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}"
     fi
 
 # Test authorization system
@@ -295,3 +299,7 @@ test-public-access:
 # Demo public certificate access
 demo-public-access:
     pixi run python scripts/demo_public_access.py
+
+# Test all certificate commands comprehensively
+test-cert-commands:
+    pixi run python scripts/test_all_cert_commands.py

@@ -1,6 +1,7 @@
 """ACME protocol client implementation."""
 
 import logging
+import os
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
@@ -26,10 +27,10 @@ class ACMEClient:
     def __init__(self, storage: RedisStorage):
         """Initialize ACME client with storage backend."""
         self.storage = storage
-        self.account_key_size = 2048
-        self.cert_key_size = 2048
+        self.account_key_size = int(os.getenv('RSA_KEY_SIZE'))
+        self.cert_key_size = int(os.getenv('RSA_KEY_SIZE'))
     
-    def _generate_rsa_key(self, key_size: int = 2048) -> Tuple[rsa.RSAPrivateKey, str]:
+    def _generate_rsa_key(self, key_size: int) -> Tuple[rsa.RSAPrivateKey, str]:
         """Generate RSA key pair."""
         private_key = rsa.generate_private_key(
             public_exponent=65537,

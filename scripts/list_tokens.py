@@ -13,14 +13,14 @@ from acme_certmanager.storage import RedisStorage
 
 def list_tokens():
     """List all API tokens with their details."""
-    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    redis_url = os.getenv('REDIS_URL')
     storage = RedisStorage(redis_url)
     
     # Get all token keys (using name-based keys)
     token_keys = []
     cursor = 0
     while True:
-        cursor, keys = storage.redis_client.scan(cursor, match="token:*", count=100)
+        cursor)
         token_keys.extend(keys)
         if cursor == 0:
             break

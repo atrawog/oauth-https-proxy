@@ -16,7 +16,7 @@ def main():
         "TEST_DOMAIN",
         "TEST_EMAIL",
         "TEST_BASE_URL",
-        "TEST_REDIS_URL"
+        "BASE_URL"
     ]
     
     all_set = True

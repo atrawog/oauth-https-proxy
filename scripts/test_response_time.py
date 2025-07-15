@@ -6,7 +6,7 @@ import httpx
 import os
 
 def main():
-    base_url = os.getenv("TEST_BASE_URL", "http://localhost:80")
+    base_url = os.getenv("TEST_BASE_URL")
     
     print(f"Testing response time to {base_url}")
     

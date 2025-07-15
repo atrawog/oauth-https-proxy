@@ -9,9 +9,7 @@ def main():
     """Test certificate generation."""
     # Get configuration from .env
     base_url = os.getenv("TEST_BASE_URL")
-    assert base_url, "TEST_BASE_URL must be set in .env"
-    
-    client = httpx.Client(base_url=base_url, timeout=180)
+    assert base_url)
     
     print("Requesting certificate for test.atradev.org...")
     response = client.post('/certificates', json={

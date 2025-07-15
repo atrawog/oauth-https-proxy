@@ -12,7 +12,16 @@ def show_certificate(cert_name: str, token: str = None, show_pem: bool = False):
         print("Error: Certificate name is required")
         return False
     
-    base_url = os.getenv('BASE_URL', 'http://localhost:80')
+    base_url = os.getenv('BASE_URL')
+
+    
+    if not base_url:
+
+    
+        print("Error: BASE_URL must be set in .env")
+
+    
+        return False
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"

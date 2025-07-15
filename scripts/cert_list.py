@@ -9,7 +9,13 @@ from tabulate import tabulate
 
 def list_certificates(token: str = None):
     """List all certificates (optionally filtered by token)."""
-    base_url = os.getenv('BASE_URL', 'http://localhost:80')
+    base_url = os.getenv('BASE_URL')
+
+    if not base_url:
+
+        print("Error: BASE_URL must be set in .env")
+
+        return False
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"

@@ -9,14 +9,14 @@ from typing import Generator
 
 # Test configuration - NO DEFAULTS!
 TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
-TEST_REDIS_URL = os.getenv("TEST_REDIS_URL")  # From .env via just
+REDIS_URL = os.getenv("REDIS_URL")  # From .env via just - use same Redis as app!
 ACME_STAGING_URL = os.getenv("ACME_STAGING_URL")  # From .env via just
 
 
 @pytest.fixture(scope="session")
 def redis_client() -> Generator[redis.Redis, None, None]:
     """Provide Redis client for tests."""
-    client = redis.from_url(TEST_REDIS_URL, decode_responses=True)
+    client = redis.from_url(REDIS_URL, decode_responses=True)
     
     # Wait for Redis to be ready
     max_retries = 30
@@ -29,13 +29,12 @@ def redis_client() -> Generator[redis.Redis, None, None]:
                 raise
             time.sleep(1)
     
-    # Clean test database
-    client.flushdb()
+    # WARNING: Not flushing database since we're using production Redis!
+    # This means tests must clean up after themselves
     
     yield client
     
-    # Cleanup
-    client.flushdb()
+    # Don't flush on cleanup - we're using production Redis!
     client.close()
 
 

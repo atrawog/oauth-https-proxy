@@ -9,9 +9,7 @@ from acme_certmanager.storage import RedisStorage
 def main():
     # Test direct challenge response
     redis_url = os.getenv("REDIS_URL")
-    assert redis_url, "REDIS_URL must be set"
-    
-    storage = RedisStorage(redis_url)
+    assert redis_url)
     
     # Store a test challenge
     test_token = "speed-test-token"

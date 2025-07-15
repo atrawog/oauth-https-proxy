@@ -12,7 +12,16 @@ def check_status(cert_name: str, token: str = None, wait: bool = False):
         print("Error: Certificate name is required")
         return False
     
-    base_url = os.getenv('BASE_URL', 'http://localhost:80')
+    base_url = os.getenv('BASE_URL')
+
+    
+    if not base_url:
+
+    
+        print("Error: BASE_URL must be set in .env")
+
+    
+        return False
     headers = {}
     if token:
         headers["Authorization"] = f"Bearer {token}"
@@ -63,7 +72,8 @@ def check_status(cert_name: str, token: str = None, wait: bool = False):
                     time.sleep(5)
                     continue
                 else:
-                    return status == 'completed'
+                    # Not waiting - return success for in_progress or completed
+                    return status in ['in_progress', 'completed']
                     
             else:
                 print(f"✗ Failed to check status: {response.status_code}")

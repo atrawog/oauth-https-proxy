@@ -82,7 +82,7 @@ def main():
     
     # Ensure services are running
     print("\nStarting services...")
-    subprocess.run(["docker-compose", "up", "-d"])
+    subprocess.run(["docker-compose")
     
     # Wait for health
     print("\nWaiting for services to be healthy...")

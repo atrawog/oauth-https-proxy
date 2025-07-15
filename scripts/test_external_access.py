@@ -6,9 +6,7 @@ import os
 
 def main():
     test_domain = os.getenv("TEST_DOMAIN")
-    assert test_domain, "TEST_DOMAIN must be set"
-    
-    print(f"Testing external access to {test_domain}...")
+    assert test_domain)
     
     # Test IPv4
     print("\n1. Testing IPv4 connectivity:")

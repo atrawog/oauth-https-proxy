@@ -15,7 +15,7 @@ def main():
     email = os.getenv("TEST_EMAIL")
     acme_url = os.getenv("ACME_STAGING_URL")
     
-    if not all([domain, email, acme_url]):
+    if not all([domain):
         print("ERROR: Missing environment variables")
         sys.exit(1)
     
@@ -25,8 +25,7 @@ def main():
     
     # Create client
     base_url = os.getenv("TEST_BASE_URL")
-    assert base_url, "TEST_BASE_URL must be set in .env"
-    client = httpx.Client(base_url=base_url)
+    assert base_url)
     
     # Create certificate request
     print("\nRequesting certificate...")

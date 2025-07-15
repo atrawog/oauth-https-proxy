@@ -89,12 +89,13 @@ class HTTPSServer:
             # Generate key
             key = rsa.generate_private_key(
                 public_exponent=65537,
-                key_size=2048,
+                key_size=int(os.getenv('RSA_KEY_SIZE')),
             )
             
             # Generate certificate
+            cn = os.getenv('SELF_SIGNED_CN')
             subject = issuer = x509.Name([
-                x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+                x509.NameAttribute(NameOID.COMMON_NAME, cn),
             ])
             
             cert = x509.CertificateBuilder().subject_name(
@@ -108,7 +109,7 @@ class HTTPSServer:
             ).not_valid_before(
                 datetime.now(timezone.utc)
             ).not_valid_after(
-                datetime.now(timezone.utc) + timedelta(days=365)
+                datetime.now(timezone.utc) + timedelta(days=int(os.getenv('SELF_SIGNED_DAYS')))
             ).sign(key, hashes.SHA256())
             
             # Create SSL context
@@ -394,12 +395,13 @@ def create_temp_cert_files():
     # Generate key
     key = rsa.generate_private_key(
         public_exponent=65537,
-        key_size=2048,
+        key_size=int(os.getenv('RSA_KEY_SIZE')),
     )
     
     # Generate certificate
+    cn = os.getenv('SELF_SIGNED_CN')
     subject = issuer = x509.Name([
-        x509.NameAttribute(NameOID.COMMON_NAME, "localhost"),
+        x509.NameAttribute(NameOID.COMMON_NAME, cn),
     ])
     
     cert = x509.CertificateBuilder().subject_name(
@@ -413,11 +415,11 @@ def create_temp_cert_files():
     ).not_valid_before(
         datetime.now(timezone.utc)
     ).not_valid_after(
-        datetime.now(timezone.utc) + timedelta(days=365)
+        datetime.now(timezone.utc) + timedelta(days=int(os.getenv('SELF_SIGNED_DAYS')))
     ).add_extension(
         x509.SubjectAlternativeName([
-            x509.DNSName("localhost"),
-            x509.DNSName("127.0.0.1"),
+            x509.DNSName(cn),
+            x509.DNSName(os.getenv('SERVER_HOST')),
         ]),
         critical=False,
     ).sign(key, hashes.SHA256())
@@ -440,8 +442,8 @@ def create_temp_cert_files():
 
 def run_server():
     """Run the HTTPS server."""
-    http_port = int(os.getenv('HTTP_PORT', '80'))
-    https_port = int(os.getenv('HTTPS_PORT', '443'))
+    http_port = int(os.getenv('HTTP_PORT'))
+    https_port = int(os.getenv('HTTPS_PORT'))
     
     # For now, just run HTTP server for ACME challenges
     # HTTPS with dynamic certificates is complex with uvicorn
@@ -452,9 +454,9 @@ def run_server():
     # HTTP server config
     config = uvicorn.Config(
         app=app,
-        host="0.0.0.0",
+        host=os.getenv('SERVER_HOST'),
         port=http_port,
-        log_level=os.getenv('LOG_LEVEL', 'info').lower()
+        log_level=os.getenv('LOG_LEVEL').lower()
     )
     
     server = uvicorn.Server(config)

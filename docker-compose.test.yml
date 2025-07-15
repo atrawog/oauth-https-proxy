@@ -19,7 +19,7 @@ services:
     command: pixi run pytest tests/ -v --tb=short
     environment:
       - TEST_BASE_URL=http://acme-certmanager:80
-      - TEST_REDIS_URL=redis://redis:6379/1
+      - REDIS_URL=redis://redis:6379/0
       - PYTHONPATH=/app
     depends_on:
       acme-certmanager:

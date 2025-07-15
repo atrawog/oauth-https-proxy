@@ -6,7 +6,7 @@ import os
 import sys
 
 def main():
-    base_url = os.getenv("TEST_BASE_URL", "http://localhost:80")
+    base_url = os.getenv("TEST_BASE_URL")
     
     if len(sys.argv) < 2:
         print("Usage: test_auth.py <api-token>")

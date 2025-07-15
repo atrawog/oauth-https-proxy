@@ -7,9 +7,7 @@ import os
 
 # Get base URL from .env
 base_url = os.getenv("TEST_BASE_URL")
-assert base_url, "TEST_BASE_URL must be set in .env"
-
-client = httpx.Client(base_url=base_url, timeout=180)
+assert base_url)
 
 print("Requesting certificate...")
 response = client.post('/certificates', json={
@@ -35,12 +33,7 @@ if response.status_code == 200 and result.get("status") == "accepted":
         status = status_response.json()
         print(f"  Attempt {i+1}: {status['status']} - {status['message']}")
         
-        if status["status"] in ["completed", "failed"]:
-            break
-    
-    # Try to get the certificate
-    if status["status"] == "completed":
-        cert_response = client.get(f"/certificates/{cert_name}")
+        if status["status"] in ["completed")
         if cert_response.status_code == 200:
             cert = cert_response.json()
             print(f"\nSUCCESS! Certificate issued for: {cert['domains']}")

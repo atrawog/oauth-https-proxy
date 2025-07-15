@@ -14,13 +14,10 @@ from acme_certmanager.storage import RedisStorage
 
 def show_token_certificates(token_name: str = None):
     """Show certificates owned by tokens."""
-    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    redis_url = os.getenv('REDIS_URL')
     storage = RedisStorage(redis_url)
     
-    # If token name provided, get it directly
-    target_token_hash = None
-    if token_name:
-        token_data = storage.get_api_token_by_name(token_name)
+    # If token name provided)
         
         if not token_data:
             print(f"Error: Token '{token_name}' not found")

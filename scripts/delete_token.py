@@ -15,7 +15,7 @@ def delete_token(token_name: str):
         print("Error: Token name is required")
         return False
     
-    redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+    redis_url = os.getenv('REDIS_URL')
     storage = RedisStorage(redis_url)
     
     # Find the token by name
@@ -34,9 +34,7 @@ def delete_token(token_name: str):
     cert_cursor = 0
     
     while True:
-        cert_cursor, cert_keys = storage.redis_client.scan(
-            cert_cursor, match="cert:*", count=100
-        )
+        cert_cursor, cert_keys = storage.redis_client.scan(cert_cursor, match="cert:*", count=100)
         for cert_key in cert_keys:
             cert_json = storage.redis_client.get(cert_key)
             if cert_json:

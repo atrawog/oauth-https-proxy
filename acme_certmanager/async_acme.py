@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import os
 from typing import Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
@@ -11,10 +12,13 @@ from .models import CertificateRequest, Certificate
 logger = logging.getLogger(__name__)
 
 # Global executor for running blocking operations
-executor = ThreadPoolExecutor(max_workers=5)
+max_workers = int(os.getenv('CERT_GEN_MAX_WORKERS'))
+executor = ThreadPoolExecutor(max_workers=max_workers)
 
 # Track ongoing certificate generations
 ongoing_generations: Dict[str, asyncio.Task] = {}
+# Track generation results (success/failure) for status reporting
+generation_results: Dict[str, Dict[str, Any]] = {}
 
 
 async def generate_certificate_async(
@@ -57,6 +61,13 @@ async def create_certificate_task(
         try:
             logger.info(f"Starting async certificate generation for {cert_name}")
             
+            # Update status to in_progress
+            generation_results[cert_name] = {
+                "status": "in_progress",
+                "message": f"Generating certificate for {request.domain}",
+                "started_at": asyncio.get_event_loop().time()
+            }
+            
             # Generate certificate
             certificate = await generate_certificate_async(manager, request)
             
@@ -71,9 +82,26 @@ async def create_certificate_task(
             https_server.update_ssl_context(certificate)
             
             logger.info(f"Certificate generation completed for {cert_name}")
+            
+            # Update status to completed
+            generation_results[cert_name] = {
+                "status": "completed",
+                "message": f"Certificate generated successfully for {request.domain}",
+                "completed_at": asyncio.get_event_loop().time()
+            }
+            
             return certificate
         except Exception as e:
             logger.error(f"Certificate generation failed for {cert_name}: {e}")
+            
+            # Update status to failed
+            generation_results[cert_name] = {
+                "status": "failed",
+                "message": f"Certificate generation failed: {str(e)}",
+                "error": str(e),
+                "failed_at": asyncio.get_event_loop().time()
+            }
+            
             raise
         finally:
             # Remove from ongoing tasks
@@ -91,30 +119,49 @@ async def create_certificate_task(
 
 
 def get_generation_status(cert_name: str) -> Dict[str, Any]:
-    """Get status of ongoing certificate generation."""
-    if cert_name not in ongoing_generations:
-        return {
-            "status": "not_found",
-            "message": "No ongoing generation for this certificate"
-        }
+    """Get status of certificate generation."""
+    # First check if there's a stored result
+    if cert_name in generation_results:
+        result = generation_results[cert_name].copy()
+        
+        # Clean up old results after 5 minutes
+        if "completed_at" in result or "failed_at" in result:
+            try:
+                elapsed = asyncio.get_event_loop().time() - result.get("completed_at", result.get("failed_at", 0))
+                retention_seconds = int(os.getenv('CERT_STATUS_RETENTION_SECONDS'))
+                if elapsed > retention_seconds:
+                    generation_results.pop(cert_name, None)
+            except RuntimeError:
+                # Handle case where there's no event loop
+                pass
+        
+        return result
     
-    task = ongoing_generations[cert_name]
+    # Then check ongoing generations
+    if cert_name in ongoing_generations:
+        task = ongoing_generations[cert_name]
+        
+        if task.done():
+            try:
+                # Try to get the result (will raise if there was an error)
+                task.result()
+                return {
+                    "status": "completed",
+                    "message": "Certificate generation completed successfully"
+                }
+            except Exception as e:
+                return {
+                    "status": "failed",
+                    "message": f"Certificate generation failed: {str(e)}"
+                }
+        else:
+            return {
+                "status": "in_progress",
+                "message": "Certificate generation in progress"
+            }
     
-    if task.done():
-        try:
-            # Try to get the result (will raise if there was an error)
-            task.result()
-            return {
-                "status": "completed",
-                "message": "Certificate generation completed successfully"
-            }
-        except Exception as e:
-            return {
-                "status": "failed",
-                "message": f"Certificate generation failed: {str(e)}"
-            }
-    else:
-        return {
-            "status": "in_progress",
-            "message": "Certificate generation in progress"
-        }
+    # Not found
+    return {
+        "status": "not_found",
+        "message": "No generation found for this certificate"
+    }

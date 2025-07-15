@@ -7,7 +7,13 @@ import sys
 
 def test_public_access():
     """Test that certificate read operations work without authentication."""
-    base_url = os.getenv('BASE_URL', 'http://localhost:80')
+    base_url = os.getenv('BASE_URL')
+
+    if not base_url:
+
+        print("Error: BASE_URL must be set in .env")
+
+        return False
     
     print("Testing public certificate access (no authentication)...\n")
     
@@ -19,7 +25,7 @@ def test_public_access():
             certs = response.json()
             print(f"   ✓ Success: Found {len(certs)} certificates")
             if certs:
-                cert_name = certs[0].get('cert_name', 'unknown')
+                cert_name = certs[0].get('cert_name')
                 print(f"   ✓ First certificate: {cert_name}")
             else:
                 print("   ℹ No certificates found (expected if none exist)")
