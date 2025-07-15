@@ -2,8 +2,8 @@
 
 import hashlib
 import secrets
-from typing import Optional, Tuple
-from fastapi import HTTPException, Depends
+from typing import Optional, Tuple, Union
+from fastapi import HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 security = HTTPBearer()
@@ -79,3 +79,28 @@ async def require_owner(
     # Check ownership
     if not hasattr(certificate, 'owner_token_hash') or certificate.owner_token_hash != token_hash:
         raise HTTPException(403, "Not authorized to modify this certificate")
+
+
+async def get_optional_token_info(
+    request: Request,
+) -> Optional[Tuple[str, Optional[str]]]:
+    """Get token info if provided, otherwise return None.
+    
+    This allows endpoints to work with or without authentication.
+    """
+    auth_header = request.headers.get("Authorization")
+    if not auth_header or not auth_header.startswith("Bearer "):
+        return None
+    
+    token = auth_header.split(" ", 1)[1]
+    token_hash = hash_token(token)
+    
+    from .server import manager  # Import here to avoid circular import
+    
+    # Check if token exists in storage
+    token_data = manager.storage.get_api_token(token_hash)
+    if not token_data:
+        # Invalid token - treat as no auth
+        return None
+    
+    return token_hash, token_data.get("name")

@@ -277,3 +277,51 @@ Response:
 - `ACME_POLL_INTERVAL_SECONDS`: Poll interval (default: 2)
 - `RENEWAL_CHECK_INTERVAL`: Renewal check interval (default: 86400)
 - `RENEWAL_THRESHOLD_DAYS`: Days before expiry to renew (default: 30)
+
+## Recent Updates
+
+### Token Authentication System
+- Bearer token auth for all API endpoints
+- Dual-key storage: by hash (auth) and by name (management)
+- Full token retrieval - no "cannot retrieve" nonsense
+- Ownership tracking - tokens own their certificates
+- Cascade deletion - deleting token removes its certificates
+
+### Web GUI
+- Available at http://localhost:80
+- Token-based login
+- Certificate management dashboard
+- Real-time status updates
+- Static files served by FastAPI
+
+### Token Commands
+```bash
+just token-generate <name>     # Create token
+just token-show <name>        # Retrieve full token
+just token-list              # List all tokens
+just token-delete <name>     # Delete token + certs
+just token-show-certs [name] # Show certs by token
+```
+
+### Certificate Commands
+```bash
+# Public access (no token required)
+just cert-list [token-name]          # List certificates
+just cert-show <name> [token] [pem]  # Show certificate details
+just cert-status <name> [token] [wait] # Check generation status
+
+# Authenticated access (token required)
+just cert-create <name> <domain> <email> <token-name> [staging] # Create cert
+just cert-delete <name> <token> [force]  # Delete certificate
+just cert-renew <name> <token> [force]   # Renew certificate
+```
+
+### Key Changes
+- Certificates have `owner_token_hash` field
+- Tokens stored with full value (not just preview)
+- Token names can be used instead of full tokens in commands
+- Public read access for certificate operations
+- Authenticated write access enforced via Bearer tokens
+- `/certificates` endpoint returns all certs (public) or filtered (authenticated)
+- Public access on port 80 for ACME challenges
+- Tabulate for pretty CLI output

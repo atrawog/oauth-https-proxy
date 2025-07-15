@@ -27,13 +27,13 @@ def main():
     token = generate_token()
     token_hash = hash_token(token)
     
-    # Store in Redis
+    # Store in Redis with full token
     storage = RedisStorage(redis_url)
-    if storage.store_api_token(token_hash, name):
+    if storage.store_api_token(token_hash, name, token):
         print(f"Token generated successfully!")
         print(f"Name: {name}")
         print(f"Token: {token}")
-        print(f"\nIMPORTANT: Save this token securely. It cannot be retrieved again.")
+        print(f"\nToken stored securely. You can retrieve it later with: just token-show {name}")
     else:
         print("Failed to store token in Redis")
         sys.exit(1)

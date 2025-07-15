@@ -152,15 +152,30 @@ class RedisStorage:
             return []
     
     # API Token operations
-    def store_api_token(self, token_hash: str, name: str) -> bool:
-        """Store API token metadata."""
+    def store_api_token(self, token_hash: str, name: str, full_token: str) -> bool:
+        """Store API token with full token for retrieval."""
         try:
-            key = f"auth:token:{token_hash}"
             data = {
                 "name": name,
+                "hash": token_hash,
+                "token": full_token,  # Store full token
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            return self.redis_client.set(key, json.dumps(data))
+            
+            # Store by hash (for auth)
+            auth_key = f"auth:token:{token_hash}"
+            result1 = self.redis_client.set(auth_key, json.dumps(data))
+            
+            # Store by name (for management)
+            name_key = f"token:{name}"
+            result2 = self.redis_client.hset(name_key, mapping={
+                "name": name,
+                "hash": token_hash,
+                "token": full_token,
+                "created_at": data["created_at"]
+            })
+            
+            return result1 and result2
         except RedisError as e:
             logger.error(f"Failed to store API token: {e}")
             return False
@@ -175,11 +190,60 @@ class RedisStorage:
             logger.error(f"Failed to get API token: {e}")
             return None
     
-    def delete_api_token(self, token_hash: str) -> bool:
-        """Delete API token."""
+    def get_api_token_by_name(self, name: str) -> Optional[dict]:
+        """Get API token metadata by name."""
         try:
-            key = f"auth:token:{token_hash}"
-            return bool(self.redis_client.delete(key))
+            key = f"token:{name}"
+            data = self.redis_client.hgetall(key)
+            return data if data else None
+        except RedisError as e:
+            logger.error(f"Failed to get API token by name: {e}")
+            return None
+    
+    def delete_api_token(self, token_hash: str) -> bool:
+        """Delete API token by hash."""
+        try:
+            # Get token data to find name
+            auth_key = f"auth:token:{token_hash}"
+            token_json = self.redis_client.get(auth_key)
+            
+            if token_json:
+                token_data = json.loads(token_json)
+                name = token_data.get('name')
+                
+                # Delete both keys
+                result1 = bool(self.redis_client.delete(auth_key))
+                result2 = True
+                if name:
+                    name_key = f"token:{name}"
+                    result2 = bool(self.redis_client.delete(name_key))
+                
+                return result1 and result2
+            
+            return False
         except RedisError as e:
             logger.error(f"Failed to delete API token: {e}")
+            return False
+    
+    def delete_api_token_by_name(self, name: str) -> bool:
+        """Delete API token by name."""
+        try:
+            # Get token hash from name
+            name_key = f"token:{name}"
+            token_data = self.redis_client.hgetall(name_key)
+            
+            if not token_data:
+                return False
+            
+            token_hash = token_data.get('hash')
+            if token_hash:
+                # Delete both keys
+                auth_key = f"auth:token:{token_hash}"
+                result1 = bool(self.redis_client.delete(auth_key))
+                result2 = bool(self.redis_client.delete(name_key))
+                return result1 and result2
+            
+            return False
+        except RedisError as e:
+            logger.error(f"Failed to delete API token by name: {e}")
             return False

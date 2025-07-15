@@ -6,7 +6,7 @@ import os
 import ssl
 import tempfile
 from contextlib import asynccontextmanager
-from typing import Dict, Optional
+from typing import Dict, Optional, Union
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
 from fastapi.responses import PlainTextResponse
@@ -18,7 +18,7 @@ from .manager import CertificateManager
 from .models import CertificateRequest, Certificate, HealthStatus
 from .scheduler import CertificateScheduler
 from .async_acme import create_certificate_task, get_generation_status
-from .auth import get_current_token_info, require_owner
+from .auth import get_current_token_info, require_owner, get_optional_token_info
 
 logger = logging.getLogger(__name__)
 
@@ -266,13 +266,18 @@ async def create_certificate(
 
 @app.get("/certificates")
 async def list_certificates(
-    token_info: tuple = Depends(get_current_token_info)
+    token_info: Optional[tuple] = Depends(get_optional_token_info)
 ):
-    """List certificates owned by the current token."""
-    token_hash, _ = token_info
+    """List certificates - all if no auth, filtered if authenticated."""
     all_certs = manager.list_certificates()
-    # Filter to only show certificates owned by this token
-    return [cert for cert in all_certs if cert.owner_token_hash == token_hash]
+    
+    if token_info:
+        # Authenticated - show only owned certificates
+        token_hash, _ = token_info
+        return [cert for cert in all_certs if cert.get('owner_token_hash') == token_hash]
+    else:
+        # Not authenticated - show all certificates
+        return all_certs
 
 
 @app.get("/certificates/{cert_name}/status")
@@ -281,11 +286,9 @@ async def get_certificate_status(cert_name: str):
     return get_generation_status(cert_name)
 
 
-@app.get("/certificates/{cert_name}", 
-         response_model=Certificate,
-         dependencies=[Depends(require_owner)])
+@app.get("/certificates/{cert_name}", response_model=Certificate)
 async def get_certificate(cert_name: str):
-    """Get certificate by name (owner only)."""
+    """Get certificate by name - public access."""
     certificate = manager.get_certificate(cert_name)
     if not certificate:
         raise HTTPException(status_code=404, detail="Certificate not found")
