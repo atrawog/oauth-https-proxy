@@ -147,9 +147,9 @@ class TestDockerServices:
         assert result.returncode == 0
         assert "PONG" in result.stdout
         
-        # Check certmanager health
+        # Check acme-certmanager health
         result = subprocess.run(
-            ["docker-compose", "exec", "-T", "certmanager", "curl", "-f", "http://localhost/health"],
+            ["docker-compose", "exec", "-T", "acme-certmanager", "curl", "-f", "http://localhost/health"],
             capture_output=True,
             text=True
         )

@@ -153,10 +153,10 @@ class HTTPSServer:
                 logger.info(f"Removed SSL context for domain: {domain}")
 
 
-# Global instances
-manager = CertificateManager()
-https_server = HTTPSServer(manager)
-scheduler = CertificateScheduler(manager)
+# Global instances - initialized on startup
+manager: Optional[CertificateManager] = None
+https_server: Optional[HTTPSServer] = None
+scheduler: Optional[CertificateScheduler] = None
 
 
 @asynccontextmanager
@@ -164,6 +164,12 @@ async def lifespan(app: FastAPI):
     """Application lifespan manager."""
     # Startup
     logger.info("Starting ACME Certificate Manager")
+    
+    # Initialize global instances
+    global manager, https_server, scheduler
+    manager = CertificateManager()
+    https_server = HTTPSServer(manager)
+    scheduler = CertificateScheduler(manager)
     
     # Load certificates
     https_server.load_certificates()
@@ -200,8 +206,11 @@ async def create_certificate(request: CertificateRequest, background_tasks: Back
         
         return certificate
     except Exception as e:
-        logger.error(f"Failed to create certificate: {e}")
-        raise HTTPException(status_code=500, detail=str(e))
+        import traceback
+        error_details = traceback.format_exc()
+        logger.error(f"Failed to create certificate: {type(e).__name__}: {e}")
+        logger.error(f"Traceback:\n{error_details}")
+        raise HTTPException(status_code=500, detail=f"{type(e).__name__}: {str(e)}")
 
 
 @app.get("/certificates")
@@ -259,9 +268,12 @@ async def remove_domain(cert_name: str, domain: str, background_tasks: Backgroun
 @app.get("/.well-known/acme-challenge/{token}", response_class=PlainTextResponse)
 async def acme_challenge(token: str):
     """ACME HTTP-01 challenge endpoint."""
+    logger.info(f"Challenge request for token: {token}")
     authorization = manager.get_challenge_response(token)
     if not authorization:
+        logger.warning(f"Challenge not found for token: {token}")
         raise HTTPException(status_code=404, detail="Challenge not found")
+    logger.info(f"Returning challenge authorization: {authorization[:50]}...")
     return authorization
 
 

@@ -27,6 +27,7 @@ wheel = ">=0.41.0"
 build = ">=1.0.3"
 twine = ">=4.0.2"
 ruff = ">=0.1.6"
+requests = ">=2.31.0"
 
 [tasks]
 test = "pytest tests/ -v"

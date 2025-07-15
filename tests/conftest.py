@@ -7,10 +7,10 @@ import httpx
 import redis
 from typing import Generator
 
-# Test configuration
-TEST_BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:80")
-TEST_REDIS_URL = os.getenv("TEST_REDIS_URL", "redis://localhost:6379/1")
-ACME_STAGING_URL = "https://acme-staging-v02.api.letsencrypt.org/directory"
+# Test configuration - NO DEFAULTS!
+TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
+TEST_REDIS_URL = os.getenv("TEST_REDIS_URL")  # From .env via just
+ACME_STAGING_URL = os.getenv("ACME_STAGING_URL")  # From .env via just
 
 
 @pytest.fixture(scope="session")
@@ -61,15 +61,19 @@ def http_client() -> Generator[httpx.Client, None, None]:
 @pytest.fixture
 def test_domain():
     """Provide test domain for ACME staging."""
-    # Use a unique subdomain to avoid rate limits
+    # NO DEFAULTS! Must come from .env
+    base_domain = os.getenv("TEST_DOMAIN_BASE")
+    assert base_domain, "TEST_DOMAIN_BASE not set - must be loaded from .env via just"
     import uuid
-    return f"test-{uuid.uuid4().hex[:8]}.example.com"
+    return f"test-{uuid.uuid4().hex[:8]}.{base_domain}"
 
 
 @pytest.fixture
 def test_email():
     """Provide test email for ACME."""
-    return "test@example.com"
+    email = os.getenv("TEST_EMAIL")
+    assert email, "TEST_EMAIL not set - must be loaded from .env via just"
+    return email
 
 
 @pytest.fixture

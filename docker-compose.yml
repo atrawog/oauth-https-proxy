@@ -16,7 +16,7 @@ services:
     networks:
       - acme_network
 
-  certmanager:
+  acme-certmanager:
     build: .
     restart: unless-stopped
     ports:

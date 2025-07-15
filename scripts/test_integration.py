@@ -36,7 +36,7 @@ def wait_for_services():
     """Wait for Docker services to be healthy."""
     print("Waiting for services to be ready...")
     
-    services_to_check = ["redis", "certmanager"]
+    services_to_check = ["redis", "acme-certmanager"]
     max_retries = 60
     
     for i in range(max_retries):
@@ -93,11 +93,11 @@ def run_tests():
     if not wait_for_services():
         return 1
     
-    # Set test environment
+    # Set test environment - all config from .env
     test_env = os.environ.copy()
+    # .env should already be loaded by docker-compose and just
+    # No hardcoded values!
     test_env.update({
-        "TEST_BASE_URL": "http://localhost:80",
-        "TEST_REDIS_URL": "redis://localhost:6379/1",
         "PYTHONPATH": project_dir
     })
     

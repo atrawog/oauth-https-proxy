@@ -6,7 +6,7 @@ from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
 import josepy as jose
-from acme import client, challenges, messages, crypto_util
+from acme import client, challenges, messages, crypto_util, errors
 from cryptography import x509
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import serialization, hashes
@@ -28,7 +28,7 @@ class ACMEClient:
         self.account_key_size = 2048
         self.cert_key_size = 2048
     
-    def _generate_rsa_key(self, key_size: int = 2048) -> Tuple[jose.JWKRSA, str]:
+    def _generate_rsa_key(self, key_size: int = 2048) -> Tuple[rsa.RSAPrivateKey, str]:
         """Generate RSA key pair."""
         private_key = rsa.generate_private_key(
             public_exponent=65537,
@@ -42,8 +42,7 @@ class ACMEClient:
             encryption_algorithm=serialization.NoEncryption()
         ).decode('utf-8')
         
-        jwk = jose.JWKRSA(key=private_key)
-        return jwk, private_pem
+        return private_key, private_pem
     
     def _get_or_create_account_key(self, provider: str, email: str) -> jose.JWKRSA:
         """Get existing or create new account key."""
@@ -63,12 +62,13 @@ class ACMEClient:
             return jose.JWKRSA(key=private_key)
         
         # Generate new key
-        jwk, private_pem = self._generate_rsa_key(self.account_key_size)
+        private_key, private_pem = self._generate_rsa_key(self.account_key_size)
         
         # Store key
         self.storage.store_account_key(provider_name, email, private_pem)
         
-        return jwk
+        # Convert to JWKRSA for ACME
+        return jose.JWKRSA(key=private_key)
     
     def _create_acme_client(self, directory_url: str, account_key: jose.JWKRSA) -> client.ClientV2:
         """Create ACME client instance."""
@@ -88,16 +88,21 @@ class ACMEClient:
             )
             logger.info(f"Registered new ACME account for {email}")
             return regr
-        except messages.Error as e:
-            if e.code == 'accountDoesNotExist':
-                raise
-            # Account exists, query it
-            regr = acme_client.query_registration(messages.RegistrationResource(
+        except errors.ConflictError as e:
+            # Account already exists, need to find it
+            # The Location header in the ConflictError contains the account URI
+            logger.info(f"Account already exists for {email}, retrieving it")
+            
+            # Query existing registration
+            regr = messages.RegistrationResource(
                 body=messages.Registration(key=acme_client.net.key.public_key()),
-                uri=None
-            ))
+                uri=str(e.location) if hasattr(e, 'location') else None
+            )
+            
+            # Update the registration to get current info
+            updated_regr = acme_client.query_registration(regr)
             logger.info(f"Using existing ACME account for {email}")
-            return regr
+            return updated_regr
     
     def generate_certificate(
         self,
@@ -109,11 +114,11 @@ class ACMEClient:
         """Generate certificate using ACME protocol."""
         logger.info(f"Generating certificate for domains: {domains}")
         
-        # Get or create account key
-        account_key = self._get_or_create_account_key(acme_directory_url, email)
+        # Get or create account key - returns jose.JWKRSA
+        account_jwk = self._get_or_create_account_key(acme_directory_url, email)
         
         # Create ACME client
-        acme_client = self._create_acme_client(acme_directory_url, account_key)
+        acme_client = self._create_acme_client(acme_directory_url, account_jwk)
         
         # Register or login
         registration = self._register_or_login(acme_client, email)
@@ -122,7 +127,7 @@ class ACMEClient:
         cert_key, cert_key_pem = self._generate_rsa_key(self.cert_key_size)
         
         # Create CSR
-        csr = self._create_csr(cert_key.key, domains)
+        csr = self._create_csr(cert_key, domains)
         
         # Create order
         order = acme_client.new_order(csr)
@@ -130,6 +135,11 @@ class ACMEClient:
         # Process challenges
         for auth in order.authorizations:
             self._process_authorization(acme_client, auth)
+        
+        # Wait a moment for Let's Encrypt to validate challenges
+        import time
+        logger.info("Waiting for challenge validation...")
+        time.sleep(10)
         
         # Finalize order
         order = acme_client.poll_and_finalize(order)
@@ -166,7 +176,7 @@ class ACMEClient:
         return certificate
     
     def _create_csr(self, private_key, domains: List[str]) -> bytes:
-        """Create Certificate Signing Request."""
+        """Create Certificate Signing Request in PEM format."""
         builder = x509.CertificateSigningRequestBuilder()
         
         # Add common name (first domain)
@@ -184,7 +194,8 @@ class ACMEClient:
         # Sign CSR
         csr = builder.sign(private_key, hashes.SHA256(), default_backend())
         
-        return csr.public_bytes(serialization.Encoding.DER)
+        # Return as PEM format (ACME expects PEM, not DER)
+        return csr.public_bytes(serialization.Encoding.PEM)
     
     def _process_authorization(self, acme_client: client.ClientV2, authz: messages.AuthorizationResource):
         """Process authorization challenges."""
@@ -202,19 +213,28 @@ class ACMEClient:
         response, validation = http_challenge.chall.response_and_validation(acme_client.net.key)
         
         # Store challenge in Redis
-        token = http_challenge.chall.token.decode('utf-8')
-        self.storage.store_challenge(token, validation)
+        # The token needs to be the base64url-encoded string, not raw bytes
+        token = http_challenge.chall.encode('token')
         
-        try:
-            # Answer challenge
-            acme_client.answer_challenge(http_challenge, response)
-            
-            # Wait for challenge validation
-            finalized = acme_client.poll_and_finalize(authz)
-            
-        finally:
-            # Clean up challenge
-            self.storage.delete_challenge(token)
+        logger.info(f"Storing challenge token: {token}")
+        logger.info(f"Challenge validation: {validation[:50]}...")
+        
+        success = self.storage.store_challenge(token, validation)
+        if not success:
+            raise Exception("Failed to store challenge in Redis")
+        
+        # Verify storage
+        stored = self.storage.get_challenge(token)
+        if not stored:
+            raise Exception("Challenge not found after storage")
+        logger.info(f"Challenge stored successfully, retrieved: {stored[:50]}...")
+        
+        # Answer challenge
+        logger.info("Answering ACME challenge...")
+        acme_client.answer_challenge(http_challenge, response)
+        
+        # Don't delete challenge here - let it expire naturally with TTL
+        # Let's Encrypt needs time to validate
     
     def renew_certificate(self, cert_name: str) -> Optional[Certificate]:
         """Renew existing certificate."""

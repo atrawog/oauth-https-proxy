@@ -17,7 +17,10 @@ class CertificateManager:
     
     def __init__(self, redis_url: Optional[str] = None):
         """Initialize certificate manager."""
-        self.redis_url = redis_url or os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        # Redis URL MUST come from .env - no defaults!
+        self.redis_url = redis_url or os.getenv('REDIS_URL')
+        if not self.redis_url:
+            raise ValueError("REDIS_URL must be set in .env")
         self.storage = RedisStorage(self.redis_url)
         self.acme_client = ACMEClient(self.storage)
         self.ssl_contexts: Dict[str, any] = {}

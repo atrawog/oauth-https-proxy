@@ -24,12 +24,12 @@ test-docker:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Starting services..."
-    docker-compose up -d redis certmanager
+    docker-compose up -d redis acme-certmanager
     echo "Waiting for services to be healthy..."
     max_wait=120
     waited=0
     while [ $waited -lt $max_wait ]; do
-        if docker-compose ps | grep -q "healthy.*redis" && docker-compose ps | grep -q "healthy.*certmanager"; then
+        if docker-compose ps | grep -q "healthy.*redis" && docker-compose ps | grep -q "healthy.*acme-certmanager"; then
             echo "Services are healthy!"
             break
         fi
@@ -63,6 +63,17 @@ test-all:
 test-verbose:
     pixi run pytest tests/ -vvv
 
+# Run REAL ACME tests with actual domains
+test-acme:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Starting REAL ACME tests with domain: $TEST_DOMAIN"
+    docker-compose up -d redis acme-certmanager
+    echo "Waiting for services..."
+    sleep 10
+    echo "Running REAL tests..."
+    pixi run python scripts/run_real_acme_tests.py
+
 # Run linting and formatting
 lint:
     pixi run ruff check .
@@ -89,9 +100,17 @@ rebuild service:
     docker-compose build {{service}}
     docker-compose up -d {{service}}
 
+# Restart specific service
+restart service:
+    docker-compose restart {{service}}
+
 # View service logs
 logs:
     docker-compose logs -f
+
+# View service logs with tail
+logs-tail service n="50":
+    docker-compose logs {{service}} --tail {{n}}
 
 # Run the ACME certificate manager server
 run-server:
@@ -114,3 +133,11 @@ clean:
     rm -rf dist/ build/ *.egg-info
     find . -type d -name __pycache__ -exec rm -rf {} +
     find . -type f -name "*.pyc" -delete
+
+# Test environment loading
+test-env:
+    pixi run python scripts/test_env_loading.py
+
+# Quick certificate generation test
+test-cert-quick:
+    pixi run python scripts/test_cert_quick.py

@@ -6,7 +6,7 @@ services:
     ports:
       - "6379:6379"  # Expose Redis for test access
 
-  certmanager:
+  acme-certmanager:
     environment:
       - LOG_LEVEL=DEBUG  # More verbose logging for tests
       - ACME_DIRECTORY_URL=https://acme-staging-v02.api.letsencrypt.org/directory
@@ -18,11 +18,11 @@ services:
     build: .
     command: pixi run pytest tests/ -v --tb=short
     environment:
-      - TEST_BASE_URL=http://certmanager:80
+      - TEST_BASE_URL=http://acme-certmanager:80
       - TEST_REDIS_URL=redis://redis:6379/1
       - PYTHONPATH=/app
     depends_on:
-      certmanager:
+      acme-certmanager:
         condition: service_healthy
       redis:
         condition: service_healthy
