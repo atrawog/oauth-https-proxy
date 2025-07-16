@@ -111,7 +111,9 @@ class ACMEClient:
         domains: List[str],
         email: str,
         acme_directory_url: str,
-        cert_name: str
+        cert_name: str,
+        owner_token_hash: str = None,
+        created_by: str = None
     ) -> Certificate:
         """Generate certificate using ACME protocol."""
         logger.info(f"Generating certificate for domains: {domains}")
@@ -164,7 +166,9 @@ class ACMEClient:
             issued_at=cert_obj.not_valid_before.replace(tzinfo=timezone.utc),
             fingerprint=fingerprint,
             fullchain_pem=fullchain_pem,
-            private_key_pem=cert_key_pem
+            private_key_pem=cert_key_pem,
+            owner_token_hash=owner_token_hash,
+            created_by=created_by
         )
         
         # Store certificate
@@ -335,10 +339,12 @@ class ACMEClient:
         
         logger.info(f"Renewing certificate {cert_name}")
         
-        # Generate new certificate with same parameters
+        # Generate new certificate with same parameters, preserving ownership
         return self.generate_certificate(
             domains=existing_cert.domains,
             email=existing_cert.email,
             acme_directory_url=existing_cert.acme_directory_url,
-            cert_name=cert_name
+            cert_name=cert_name,
+            owner_token_hash=existing_cert.owner_token_hash,
+            created_by=existing_cert.created_by
         )

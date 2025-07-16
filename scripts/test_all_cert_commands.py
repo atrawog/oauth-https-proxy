@@ -43,117 +43,145 @@ def test_all_cert_commands():
     
     # Track test results
     results = []
-    
-    # 1. Create a test token first
-    print(f"\n1️⃣ Creating test token: {test_token_name}...")
-    success, stdout, stderr = run_command(f"just token-generate {test_token_name}")
-    if not success:
-        print("❌ Failed to create token")
-        print(f"   Error output: {stderr}")
-        return False
-    
-    # Extract the token from output
     token = None
-    for line in stdout.split('\n'):
-        if line.startswith("Token:"):
-            token = line.split("Token:")[1].strip()
-            break
+    cert_created = False
     
-    if not token:
-        print("❌ Could not extract token from output")
-        return False
-    
-    print(f"✅ Token created: {test_token_name}")
-    
-    # 2. Test cert-list without token (public)
-    print("\n2️⃣ Testing cert-list without token (public access)...")
-    success, stdout, stderr = run_command("just cert-list")
-    results.append(("cert-list (no token)", success))
-    
-    # 3. Test cert-list with token
-    print("\n3️⃣ Testing cert-list with token...")
-    success, stdout, stderr = run_command(f"just cert-list {test_token_name}")
-    results.append(("cert-list (with token)", success))
-    
-    # 4. Test cert-create (requires token)
-    print("\n4️⃣ Testing cert-create...")
-    success, stdout, stderr = run_command(
-        f"just cert-create {test_cert_name} {test_domain} {test_email} {test_token_name} true"
-    )
-    results.append(("cert-create", success))
-    
-    if success:
-        # Wait a bit for async generation and storage
-        print("   ⏳ Waiting for certificate generation to start and be stored...")
-        time.sleep(5)
+    try:
+        # 1. Create a test token first
+        print(f"\n1️⃣ Creating test token: {test_token_name}...")
+        success, stdout, stderr = run_command(f"just token-generate {test_token_name}")
+        if not success:
+            print("❌ Failed to create token")
+            print(f"   Error output: {stderr}")
+            return False
         
-        # 5. Test cert-status without token
-        print("\n5️⃣ Testing cert-status without token...")
-        success, stdout, stderr = run_command(f"just cert-status {test_cert_name}")
-        results.append(("cert-status (no token)", success))
+        # Extract the token from output
+        token = None
+        for line in stdout.split('\n'):
+            if line.startswith("Token:"):
+                token = line.split("Token:")[1].strip()
+                break
         
-        # 6. Test cert-status with token
-        print("\n6️⃣ Testing cert-status with token...")
-        success, stdout, stderr = run_command(f"just cert-status {test_cert_name} {token}")
-        results.append(("cert-status (with token)", success))
+        if not token:
+            print("❌ Could not extract token from output")
+            return False
         
-        # 7. Test cert-show without token
-        print("\n7️⃣ Testing cert-show without token...")
-        success, stdout, stderr = run_command(f"just cert-show {test_cert_name}")
-        results.append(("cert-show (no token)", success))
-        
-        # 8. Test cert-show with token
-        print("\n8️⃣ Testing cert-show with token...")
-        success, stdout, stderr = run_command(f"just cert-show {test_cert_name} {token}")
-        results.append(("cert-show (with token)", success))
-        
-        # 9. Test cert-show with --pem flag
-        print("\n9️⃣ Testing cert-show with --pem...")
-        success, stdout, stderr = run_command(f"just cert-show {test_cert_name} {token} pem")
-        results.append(("cert-show --pem", success))
-        
-        # 10. Test cert-renew (requires token)
-        print("\n🔟 Testing cert-renew...")
-        success, stdout, stderr = run_command(f"just cert-renew {test_cert_name} {token} force")
-        results.append(("cert-renew", success))
-        
-        # 11. Test cert-delete (requires token)
-        print("\n1️⃣1️⃣ Testing cert-delete...")
-        success, stdout, stderr = run_command(f"just cert-delete {test_cert_name} {token} force")
-        results.append(("cert-delete", success))
+        print(f"✅ Token created: {test_token_name}")
     
-    # 12. Clean up - delete test token
-    print("\n1️⃣2️⃣ Cleaning up - deleting test token...")
-    # Use echo to provide input instead of <<< to avoid TTY issues
-    success, stdout, stderr = run_command(f"echo 'yes' | docker exec -i mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_token.py {test_token_name}")
-    results.append(("cleanup", success))
+        # 2. Test cert-list without token (public)
+        print("\n2️⃣ Testing cert-list without token (public access)...")
+        success, stdout, stderr = run_command("just cert-list")
+        results.append(("cert-list (no token)", success))
+        
+        # 3. Test cert-list with token
+        print("\n3️⃣ Testing cert-list with token...")
+        success, stdout, stderr = run_command(f"just cert-list {test_token_name}")
+        results.append(("cert-list (with token)", success))
     
-    # Print summary
-    print("\n" + "=" * 60)
-    print("📊 TEST RESULTS SUMMARY")
-    print("=" * 60)
-    
-    passed = 0
-    failed = 0
-    
-    for test_name, success in results:
-        status = "✅ PASS" if success else "❌ FAIL"
-        print(f"{status} - {test_name}")
+        # 4. Test cert-create (requires token)
+        print("\n4️⃣ Testing cert-create...")
+        success, stdout, stderr = run_command(
+            f"just cert-create {test_cert_name} {test_domain} {test_email} {test_token_name} true"
+        )
+        results.append(("cert-create", success))
+        
         if success:
-            passed += 1
+            cert_created = True
+            # Wait a bit for async generation and storage
+            print("   ⏳ Waiting for certificate generation to start and be stored...")
+            time.sleep(5)
+            
+            # 5. Test cert-status without token
+            print("\n5️⃣ Testing cert-status without token...")
+            success, stdout, stderr = run_command(f"just cert-status {test_cert_name}")
+            results.append(("cert-status (no token)", success))
+            
+            # 6. Test cert-status with token
+            print("\n6️⃣ Testing cert-status with token...")
+            success, stdout, stderr = run_command(f"just cert-status {test_cert_name} {token}")
+            results.append(("cert-status (with token)", success))
+            
+            # 7. Test cert-show without token
+            print("\n7️⃣ Testing cert-show without token...")
+            success, stdout, stderr = run_command(f"just cert-show {test_cert_name}")
+            results.append(("cert-show (no token)", success))
+            
+            # 8. Test cert-show with token
+            print("\n8️⃣ Testing cert-show with token...")
+            success, stdout, stderr = run_command(f"just cert-show {test_cert_name} {token}")
+            results.append(("cert-show (with token)", success))
+            
+            # 9. Test cert-show with --pem flag
+            print("\n9️⃣ Testing cert-show with --pem...")
+            success, stdout, stderr = run_command(f"just cert-show {test_cert_name} {token} pem")
+            results.append(("cert-show --pem", success))
+            
+            # 10. Test cert-renew (requires token)
+            print("\n🔟 Testing cert-renew...")
+            success, stdout, stderr = run_command(f"just cert-renew {test_cert_name} {token} force")
+            results.append(("cert-renew", success))
+        
+            # 11. Test cert-delete (requires token)
+            print("\n1️⃣1️⃣ Testing cert-delete...")
+            success, stdout, stderr = run_command(f"just cert-delete {test_cert_name} {token} force")
+            results.append(("cert-delete", success))
+            if success:
+                cert_created = False  # Mark as deleted
+    
+    finally:
+        # Cleanup - ensure we delete both certificate and token
+        cleanup_success = True
+        
+        # Clean up certificate if it was created but not deleted
+        if cert_created and token:
+            print("\n🧹 Cleaning up certificate...")
+            success, stdout, stderr = run_command(f"just cert-delete {test_cert_name} {token} force")
+            if success:
+                print("✓ Certificate cleaned up")
+            else:
+                print(f"⚠ Failed to clean up certificate: {stderr}")
+                cleanup_success = False
+        
+        # Clean up token
+        if token:
+            print("\n🧹 Cleaning up token...")
+            # Use echo to provide input instead of <<< to avoid TTY issues
+            success, stdout, stderr = run_command(f"echo 'yes' | docker exec -i mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_token.py {test_token_name}")
+            if success:
+                print("✓ Token cleaned up")
+            else:
+                print(f"⚠ Failed to clean up token: {stderr}")
+                cleanup_success = False
+        
+        # Print summary
+        print("\n" + "=" * 60)
+        print("📊 TEST RESULTS SUMMARY")
+        print("=" * 60)
+        
+        passed = 0
+        failed = 0
+        
+        for test_name, success in results:
+            status = "✅ PASS" if success else "❌ FAIL"
+            print(f"{status} - {test_name}")
+            if success:
+                passed += 1
+            else:
+                failed += 1
+        
+        if not cleanup_success:
+            print("\n⚠️  Cleanup had issues")
+        
+        print(f"\nTotal: {len(results)} tests")
+        print(f"Passed: {passed}")
+        print(f"Failed: {failed}")
+        
+        if failed > 0:
+            print("\n⚠️  Some tests failed. Check the output above for details.")
+            return False
         else:
-            failed += 1
-    
-    print(f"\nTotal: {len(results)} tests")
-    print(f"Passed: {passed}")
-    print(f"Failed: {failed}")
-    
-    if failed > 0:
-        print("\n⚠️  Some tests failed. Check the output above for details.")
-        return False
-    else:
-        print("\n✅ All tests passed!")
-        return True
+            print("\n✅ All tests passed!")
+            return True
 
 
 if __name__ == "__main__":

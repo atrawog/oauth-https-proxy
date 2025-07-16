@@ -338,3 +338,7 @@ test-cert-commands:
 # Test all token and cert commands
 test-all-commands:
     pixi run python scripts/test_all_commands.py
+
+# Clean up all tokens and certificates
+cleanup-all:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cleanup_all.py

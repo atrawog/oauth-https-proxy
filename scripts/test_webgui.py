@@ -65,6 +65,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
         "acme_directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory"
     }
     
+    cert_created = False
     try:
         response = requests.post(
             urljoin(base_url, "/certificates"),
@@ -74,6 +75,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
         if response.status_code == 200:
             result = response.json()
             print(f"✓ Certificate generation started: {result['message']}")
+            cert_created = True
             
             # Check status
             time.sleep(2)
@@ -102,6 +104,23 @@ def test_webgui(base_url="http://localhost:8080", token=None):
     except Exception as e:
         print(f"✗ Failed to test unauthorized access: {e}")
         return False
+    
+    # Cleanup if we created a test certificate
+    if cert_created and token:
+        print("\n🧹 Cleaning up test certificate...")
+        try:
+            delete_response = requests.delete(
+                urljoin(base_url, f"/certificates/{test_cert['cert_name']}"),
+                headers=headers
+            )
+            if delete_response.status_code == 200:
+                print("✓ Test certificate deleted successfully")
+            elif delete_response.status_code == 404:
+                print("✓ Test certificate already deleted")
+            else:
+                print(f"⚠ Failed to delete test certificate: {delete_response.status_code}")
+        except Exception as e:
+            print(f"⚠ Error during cleanup: {e}")
     
     print("\n✅ All Web GUI tests passed!")
     print("\nYou can now access the GUI at:")
