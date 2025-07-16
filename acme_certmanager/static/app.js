@@ -346,7 +346,10 @@ async function handleNewProxyTarget(e) {
     const data = {
         hostname: formData.get('hostname'),
         target_url: formData.get('target_url'),
-        preserve_host_header: formData.get('preserve_host_header') === 'on'
+        preserve_host_header: formData.get('preserve_host_header') === 'on',
+        enable_http: formData.get('enable_http') === 'on',
+        enable_https: formData.get('enable_https') === 'on',
+        acme_directory_url: formData.get('acme_directory_url')
     };
 
     try {
@@ -464,11 +467,17 @@ async function loadProxyTargets() {
         let html = '<div class="proxy-grid">';
         proxyTargets.forEach(target => {
             const status = target.enabled ? 'enabled' : 'disabled';
+            const protocols = [];
+            if (target.enable_http) protocols.push('HTTP');
+            if (target.enable_https) protocols.push('HTTPS');
+            const protocolStr = protocols.length > 0 ? protocols.join('/') : 'None';
+            
             html += `
                 <div class="proxy-card">
                     <h3>${target.hostname}</h3>
                     <p class="target-url">→ ${target.target_url}</p>
                     <p class="status ${status}">${status.toUpperCase()}</p>
+                    <p class="protocols">Protocols: ${protocolStr}</p>
                     <p class="created">Created: ${formatDate(target.created_at)}</p>
                     ${target.cert_name ? `<p class="cert">Certificate: ${target.cert_name}</p>` : ''}
                     <div class="proxy-actions">

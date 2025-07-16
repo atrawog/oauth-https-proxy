@@ -41,6 +41,8 @@ def list_proxy_targets(token: str = None):
                     'Target URL': proxy.get('target_url', 'Unknown'),
                     'Certificate': proxy.get('cert_name', 'N/A'),
                     'Enabled': '✓' if proxy.get('enabled', True) else '✗',
+                    'HTTP': '✓' if proxy.get('enable_http', True) else '✗',
+                    'HTTPS': '✓' if proxy.get('enable_https', True) else '✗',
                     'Preserve Host': '✓' if proxy.get('preserve_host_header', True) else '✗',
                     'Created': proxy.get('created_at', 'Unknown')[:10] if proxy.get('created_at') else 'Unknown'
                 })

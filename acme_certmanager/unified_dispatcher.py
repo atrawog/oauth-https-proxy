@@ -16,6 +16,8 @@ from datetime import datetime
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
 
+from .routes import Route, RouteTargetType
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,13 +43,19 @@ class DomainInstance:
         http_enabled = False
         https_enabled = False
         
-        for domain in self.domains:
-            if domain in self.proxy_configs:
-                config = self.proxy_configs[domain]
-                if config.enable_http:
-                    http_enabled = True
-                if config.enable_https:
-                    https_enabled = True
+        # Special case for localhost - always enable HTTP for API access
+        if 'localhost' in self.domains or '127.0.0.1' in self.domains:
+            http_enabled = True
+            # No HTTPS for localhost API
+        else:
+            # For other domains, check proxy configs
+            for domain in self.domains:
+                if domain in self.proxy_configs:
+                    config = self.proxy_configs[domain]
+                    if config.enable_http:
+                        http_enabled = True
+                    if config.enable_https:
+                        https_enabled = True
         
         # Start HTTP instance if any domain has HTTP enabled
         if http_enabled:
@@ -142,12 +150,17 @@ class DomainInstance:
 class UnifiedDispatcher:
     """Dispatcher that routes both HTTP and HTTPS traffic to domain instances."""
     
-    def __init__(self, host='0.0.0.0'):
+    def __init__(self, host='0.0.0.0', storage=None):
         self.host = host
+        self.storage = storage
         self.hostname_to_http_port: Dict[str, int] = {}
         self.hostname_to_https_port: Dict[str, int] = {}
         self.http_server = None
         self.https_server = None
+        # Generic routing rules sorted by priority (highest first)
+        self.routes: List[Route] = []
+        # Named instances for routing targets
+        self.named_instances: Dict[str, int] = {}  # name -> port
         
     def register_instance(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
@@ -161,6 +174,58 @@ class UnifiedDispatcher:
                 logger.info(f"Registered {domain} -> HTTPS:{https_port}")
             if not enable_http and not enable_https:
                 logger.warning(f"Domain {domain} has no protocols enabled!")
+    
+    def register_named_instance(self, name: str, port: int):
+        """Register a named instance for routing targets."""
+        self.named_instances[name] = port
+        logger.info(f"Registered named instance: {name} -> port {port}")
+    
+    def load_routes_from_storage(self):
+        """Load routes from Redis storage."""
+        if not self.storage:
+            logger.warning("No storage available for loading routes")
+            return
+        
+        try:
+            # Initialize default routes if needed
+            self.storage.initialize_default_routes()
+            
+            # Load all routes from storage
+            self.routes = self.storage.list_routes()
+            
+            # Filter only enabled routes
+            self.routes = [r for r in self.routes if r.enabled]
+            
+            logger.info(f"Loaded {len(self.routes)} routes from storage")
+            for route in self.routes:
+                logger.info(f"  {route.priority}: {route.path_pattern} -> {route.target_type.value}:{route.target_value} - {route.description}")
+        except Exception as e:
+            logger.error(f"Failed to load routes from storage: {e}")
+    
+    def get_request_info(self, data: bytes) -> Tuple[Optional[str], Optional[str]]:
+        """Extract request method and path from HTTP request."""
+        try:
+            request_str = data.decode('utf-8', errors='ignore')
+            lines = request_str.split('\r\n')
+            if lines:
+                # First line should be like: GET /path HTTP/1.1
+                parts = lines[0].split(' ')
+                if len(parts) >= 2:
+                    return parts[0].upper(), parts[1]
+            return None, None
+        except Exception as e:
+            logger.debug(f"Error parsing HTTP request: {e}")
+            return None, None
+    
+    def resolve_route_target(self, route: Route) -> Optional[int]:
+        """Resolve a route to a target port."""
+        if route.target_type == RouteTargetType.PORT:
+            return route.target_value if isinstance(route.target_value, int) else int(route.target_value)
+        elif route.target_type == RouteTargetType.INSTANCE:
+            return self.named_instances.get(route.target_value)
+        elif route.target_type == RouteTargetType.HOSTNAME:
+            return self.hostname_to_http_port.get(route.target_value)
+        return None
     
     def get_hostname_from_http_request(self, data: bytes) -> Optional[str]:
         """Extract hostname from HTTP request headers."""
@@ -271,6 +336,19 @@ class UnifiedDispatcher:
             data = await reader.read(4096)
             if not data:
                 return
+            
+            # First check generic routes
+            method, request_path = self.get_request_info(data)
+            if request_path:
+                for route in self.routes:
+                    if route.matches(request_path, method):
+                        target_port = self.resolve_route_target(route)
+                        if target_port:
+                            logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target_port}")
+                            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port)
+                            return
+                        else:
+                            logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
             
             # Extract hostname from HTTP Host header
             hostname = self.get_hostname_from_http_request(data)
@@ -436,7 +514,9 @@ class UnifiedMultiInstanceServer:
         self.app = app
         self.host = host
         self.instances: List[DomainInstance] = []
-        self.dispatcher = UnifiedDispatcher(host)
+        # Pass storage to dispatcher for route management
+        storage = https_server_instance.manager.storage if https_server_instance else None
+        self.dispatcher = UnifiedDispatcher(host, storage)
         self.next_http_port = 9000   # Starting port for HTTP instances
         self.next_https_port = 10000 # Starting port for HTTPS instances
         
@@ -471,9 +551,43 @@ class UnifiedMultiInstanceServer:
                     cert_to_domains['no-cert'] = []
                 cert_to_domains['no-cert'].append(hostname)
         
+        # ALWAYS create a localhost instance for API access
+        localhost_domains = ['localhost', '127.0.0.1']
+        localhost_instance = DomainInstance(
+            app=self.app,
+            domains=localhost_domains,
+            http_port=self.next_http_port,
+            https_port=self.next_https_port,
+            cert=None,  # Will use self-signed
+            proxy_configs={}  # No proxy config for localhost
+        )
+        
+        self.instances.append(localhost_instance)
+        await localhost_instance.start()
+        
+        # Register localhost with dispatcher - HTTP only for API access
+        self.dispatcher.register_instance(
+            localhost_domains, 
+            self.next_http_port, 
+            self.next_https_port,
+            enable_http=True,    # Enable HTTP for API access
+            enable_https=False   # No HTTPS needed for localhost API
+        )
+        
+        # Register localhost as a named instance for routing
+        self.dispatcher.register_named_instance('localhost', self.next_http_port)
+        self.dispatcher.register_named_instance('api', self.next_http_port)  # Alias for API access
+        
+        # Load routes from Redis storage
+        self.dispatcher.load_routes_from_storage()
+        
+        self.next_http_port += 1
+        self.next_https_port += 1
+        
+        logger.info("Created localhost instance for API access")
+        
         if not cert_to_domains and not domain_to_proxy:
-            logger.warning("No certificates or proxy configurations available")
-            return
+            logger.info("No additional certificates or proxy configurations available")
         
         # Create instances for each group of domains
         for cert_name, domains in cert_to_domains.items():

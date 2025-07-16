@@ -7,6 +7,7 @@ from typing import Dict, List, Optional
 import redis
 from redis.exceptions import RedisError
 from .models import Certificate, ChallengeToken, ProxyTarget
+from .routes import Route, DEFAULT_ROUTES
 
 logger = logging.getLogger(__name__)
 
@@ -433,3 +434,102 @@ class RedisStorage:
         except RedisError as e:
             logger.error(f"Failed to get targets by owner: {e}")
             return []
+    
+    # Route operations
+    def store_route(self, route: Route) -> bool:
+        """Store route in Redis."""
+        try:
+            # Store in main route hash
+            key = f"route:{route.route_id}"
+            value = route.to_redis()
+            result = self.redis_client.set(key, value)
+            
+            # Also store in priority index for efficient sorting
+            priority_key = f"route:priority:{route.priority:03d}:{route.route_id}"
+            self.redis_client.set(priority_key, route.route_id)
+            
+            return bool(result)
+        except RedisError as e:
+            logger.error(f"Failed to store route: {e}")
+            return False
+    
+    def get_route(self, route_id: str) -> Optional[Route]:
+        """Get route by ID."""
+        try:
+            key = f"route:{route_id}"
+            value = self.redis_client.get(key)
+            if value:
+                return Route.from_redis(value)
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get route: {e}")
+            return None
+    
+    def list_routes(self) -> List[Route]:
+        """List all routes sorted by priority (highest first)."""
+        try:
+            routes = []
+            # Get all route IDs from priority index
+            priority_keys = self.redis_client.keys("route:priority:*")
+            # Sort by priority (descending)
+            priority_keys.sort(reverse=True)
+            
+            seen_ids = set()
+            for priority_key in priority_keys:
+                route_id = self.redis_client.get(priority_key)
+                if route_id and route_id not in seen_ids:
+                    seen_ids.add(route_id)
+                    route = self.get_route(route_id)
+                    if route:
+                        routes.append(route)
+            
+            # Also get any routes not in priority index
+            all_route_keys = self.redis_client.keys("route:*")
+            for key in all_route_keys:
+                if not key.startswith("route:priority:"):
+                    route_id = key.split(":", 1)[1]
+                    if route_id not in seen_ids:
+                        route = self.get_route(route_id)
+                        if route:
+                            routes.append(route)
+            
+            # Sort by priority
+            routes.sort(key=lambda r: r.priority, reverse=True)
+            return routes
+        except RedisError as e:
+            logger.error(f"Failed to list routes: {e}")
+            return []
+    
+    def delete_route(self, route_id: str) -> bool:
+        """Delete route."""
+        try:
+            # Get route first to find priority
+            route = self.get_route(route_id)
+            if not route:
+                return False
+            
+            # Delete main key
+            key = f"route:{route_id}"
+            result1 = bool(self.redis_client.delete(key))
+            
+            # Delete priority index key
+            priority_key = f"route:priority:{route.priority:03d}:{route_id}"
+            result2 = bool(self.redis_client.delete(priority_key))
+            
+            return result1 and result2
+        except RedisError as e:
+            logger.error(f"Failed to delete route: {e}")
+            return False
+    
+    def initialize_default_routes(self) -> None:
+        """Initialize default routes if they don't exist."""
+        try:
+            for route_config in DEFAULT_ROUTES:
+                route_id = route_config["route_id"]
+                existing = self.get_route(route_id)
+                if not existing:
+                    route = Route(**route_config)
+                    self.store_route(route)
+                    logger.info(f"Initialized default route: {route_id}")
+        except Exception as e:
+            logger.error(f"Failed to initialize default routes: {e}")

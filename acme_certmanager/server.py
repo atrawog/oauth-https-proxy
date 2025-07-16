@@ -24,6 +24,7 @@ from .models import (
     CertificateRequest, Certificate, HealthStatus,
     ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 )
+from .routes import Route, RouteCreateRequest, RouteUpdateRequest, RouteTargetType
 from .scheduler import CertificateScheduler
 from .async_acme import create_certificate_task, get_generation_status
 from .auth import get_current_token_info, require_owner, get_optional_token_info
@@ -612,6 +613,112 @@ async def delete_proxy_target(
         manager.delete_certificate(target.cert_name)
     
     return {"message": f"Proxy target {hostname} deleted successfully"}
+
+
+# Route management endpoints
+@app.post("/routes",
+          dependencies=[Depends(get_current_token_info)])
+async def create_route(
+    request: RouteCreateRequest,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Create a new routing rule."""
+    token_hash, token_name, _ = token_info
+    
+    # Generate unique route ID
+    import uuid
+    route_id = f"{request.path_pattern.replace('/', '-').strip('-')}-{uuid.uuid4().hex[:8]}"
+    
+    # Create route
+    route = Route(
+        route_id=route_id,
+        path_pattern=request.path_pattern,
+        target_type=request.target_type,
+        target_value=request.target_value,
+        priority=request.priority,
+        methods=request.methods,
+        is_regex=request.is_regex,
+        description=request.description,
+        enabled=request.enabled,
+        created_by=token_name
+    )
+    
+    # Store in Redis
+    if not manager.storage.store_route(route):
+        raise HTTPException(500, "Failed to store route")
+    
+    return route
+
+
+@app.get("/routes")
+async def list_routes():
+    """List all routing rules sorted by priority."""
+    routes = manager.storage.list_routes()
+    return routes
+
+
+@app.get("/routes/{route_id}")
+async def get_route(route_id: str):
+    """Get specific route details."""
+    route = manager.storage.get_route(route_id)
+    if not route:
+        raise HTTPException(404, f"Route {route_id} not found")
+    return route
+
+
+@app.put("/routes/{route_id}",
+         dependencies=[Depends(get_current_token_info)])
+async def update_route(
+    route_id: str,
+    request: RouteUpdateRequest
+):
+    """Update an existing route."""
+    # Get existing route
+    route = manager.storage.get_route(route_id)
+    if not route:
+        raise HTTPException(404, f"Route {route_id} not found")
+    
+    # Update fields
+    update_data = request.dict(exclude_unset=True)
+    for field, value in update_data.items():
+        setattr(route, field, value)
+    
+    # Re-validate if pattern changed
+    if request.path_pattern is not None or request.is_regex is not None:
+        try:
+            # This will trigger validation
+            route = Route(**route.dict())
+        except Exception as e:
+            raise HTTPException(400, f"Invalid route configuration: {e}")
+    
+    # Update priority index if priority changed
+    if request.priority is not None:
+        # Delete old priority index
+        manager.storage.delete_route(route_id)
+    
+    # Store updated route
+    if not manager.storage.store_route(route):
+        raise HTTPException(500, "Failed to update route")
+    
+    return route
+
+
+@app.delete("/routes/{route_id}",
+            dependencies=[Depends(get_current_token_info)])
+async def delete_route(route_id: str):
+    """Delete a route."""
+    route = manager.storage.get_route(route_id)
+    if not route:
+        raise HTTPException(404, f"Route {route_id} not found")
+    
+    # Don't allow deletion of default routes
+    if route_id in ["acme-challenge", "api", "health"]:
+        raise HTTPException(403, "Cannot delete default routes")
+    
+    if not manager.storage.delete_route(route_id):
+        raise HTTPException(500, "Failed to delete route")
+    
+    return {"message": f"Route {route_id} deleted successfully"}
 
 
 # Catch-all proxy route - MUST be last

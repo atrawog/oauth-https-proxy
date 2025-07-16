@@ -111,6 +111,28 @@
                                 </label>
                                 <small>Keep original hostname in forwarded requests</small>
                             </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="enable-http" name="enable_http" checked>
+                                    Enable HTTP
+                                </label>
+                                <small>Allow HTTP traffic on port 80</small>
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="enable-https" name="enable_https" checked>
+                                    Enable HTTPS
+                                </label>
+                                <small>Allow HTTPS traffic on port 443 (requires certificate)</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="proxy-acme-url">Certificate Type:</label>
+                                <select id="proxy-acme-url" name="acme_directory_url">
+                                    <option value="https://acme-v02.api.letsencrypt.org/directory">Let's Encrypt Production</option>
+                                    <option value="https://acme-staging-v02.api.letsencrypt.org/directory">Let's Encrypt Staging (Testing)</option>
+                                </select>
+                                <small>Staging certificates are for testing only and not trusted by browsers</small>
+                            </div>
                             <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">Create Proxy Target</button>
                                 <button type="button" class="btn btn-secondary cancel-btn" onclick="toggleProxyForm()">Cancel</button>

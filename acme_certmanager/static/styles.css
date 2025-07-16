@@ -447,6 +447,13 @@ select:focus {
     margin: 10px 0;
 }
 
+.proxy-card .protocols {
+    color: #2980b9;
+    font-size: 14px;
+    margin: 10px 0;
+    font-weight: 500;
+}
+
 .proxy-actions {
     display: flex;
     gap: 10px;
