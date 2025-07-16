@@ -379,7 +379,7 @@ test-streaming-proxy:
 test-proxy-all:
     pixi run python scripts/test_proxy_all.py
 
-# Clean up proxy targets
+# Clean up proxy targets (bypasses auth for admin cleanup)
 proxy-cleanup hostname="":
     #!/usr/bin/env bash
     set -euo pipefail
@@ -390,6 +390,168 @@ proxy-cleanup hostname="":
         echo "Cleaning up proxy target: {{hostname}}"
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cleanup.py "{{hostname}}"
     fi
+
+# Create a new proxy target (can use token name instead of full token)
+proxy-create hostname target-url token-name staging="false" preserve-host="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Creating proxy target: {{hostname}} -> {{target-url}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py "{{hostname}}" "{{target-url}}" "$token" "{{staging}}" "{{preserve-host}}"
+
+# List all proxy targets (optionally filtered by token)
+proxy-list token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{token-name}}" ]; then
+        echo "Listing all proxy targets..."
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py
+    else
+        echo "Listing proxy targets for token..."
+        # Get the actual token if a name was provided
+        token="{{token-name}}"
+        if [[ ! "$token" =~ ^acm_ ]]; then
+            echo "Looking up token: {{token-name}}"
+            token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+            if [ -z "$token" ]; then
+                echo "Error: Could not find token '{{token-name}}'"
+                exit 1
+            fi
+        fi
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py "$token"
+    fi
+
+# Show proxy target details
+proxy-show hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Showing proxy target: {{hostname}}"
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_show.py "{{hostname}}"
+
+# Update proxy target (can use token name instead of full token)
+proxy-update hostname token-name target-url="" preserve-host="" custom-headers="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Updating proxy target: {{hostname}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    args=()
+    if [ -n "{{target-url}}" ]; then
+        args+=("--target-url" "{{target-url}}")
+    fi
+    if [ -n "{{preserve-host}}" ]; then
+        args+=("--preserve-host" "{{preserve-host}}")
+    fi
+    if [ -n "{{custom-headers}}" ]; then
+        args+=("--custom-headers" "{{custom-headers}}")
+    fi
+    if [ ${#args[@]} -eq 0 ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_update.py "{{hostname}}" "$token"
+    else
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_update.py "{{hostname}}" "$token" "${args[@]}"
+    fi
+
+# Delete a proxy target (can use token name instead of full token)
+proxy-delete hostname token-name delete-cert="false" force="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Deleting proxy target: {{hostname}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    args=()
+    if [ "{{delete-cert}}" = "true" ]; then
+        args+=("--delete-certificate")
+    fi
+    if [ -n "{{force}}" ]; then
+        args+=("--force")
+    fi
+    if [ -n "{{force}}" ]; then
+        if [ ${#args[@]} -eq 0 ]; then
+            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py "{{hostname}}" "$token"
+        else
+            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py "{{hostname}}" "$token" "${args[@]}"
+        fi
+    else
+        if [ ${#args[@]} -eq 0 ]; then
+            docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py "{{hostname}}" "$token"
+        else
+            docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py "{{hostname}}" "$token" "${args[@]}"
+        fi
+    fi
+
+# Enable a proxy target (can use token name instead of full token)
+proxy-enable hostname token-name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Enabling proxy target: {{hostname}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_enable.py "{{hostname}}" "$token"
+
+# Disable a proxy target (can use token name instead of full token)
+proxy-disable hostname token-name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Disabling proxy target: {{hostname}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_disable.py "{{hostname}}" "$token"
+
+# Test all proxy management commands
+test-proxy-commands:
+    pixi run python scripts/test_proxy_commands.py
+
+# Show proxy targets owned by a token (or all if no token specified)
+proxy-show-targets token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{token}}" ]; then
+        echo "Showing all proxy targets by token..."
+    else
+        echo "Showing proxy targets for token: {{token}}"
+    fi
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token_proxies.py "{{token}}"
 
 # Test proxy with example.com
 test-proxy-example:
