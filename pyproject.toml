@@ -29,7 +29,7 @@ classifiers = [
 
 dependencies = [
     "fastapi>=0.104.1",
-    "uvicorn[standard]>=0.24.0",
+    "hypercorn>=0.14.0",
     "acme>=2.8.0",
     "josepy>=1.14.0",
     "cryptography>=41.0.7",
@@ -38,6 +38,7 @@ dependencies = [
     "pydantic>=2.5.0",
     "python-multipart>=0.0.6",
     "httpx>=0.25.2",
+    "websockets>=11.0",
 ]
 
 [project.optional-dependencies]

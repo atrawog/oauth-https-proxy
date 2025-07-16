@@ -5,13 +5,15 @@ import logging
 import os
 import ssl
 import tempfile
+import threading
 from contextlib import asynccontextmanager
 from typing import Dict, Optional, Union
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-import uvicorn
+from hypercorn.asyncio import serve
+from hypercorn.config import Config as HypercornConfig
 import time
 from datetime import datetime, timezone
 from typing import Tuple
@@ -167,6 +169,7 @@ class HTTPSServer:
 manager: Optional[CertificateManager] = None
 https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
+proxy_handler: Optional[ProxyHandler] = None
 
 
 @asynccontextmanager
@@ -693,30 +696,131 @@ def create_temp_cert_files():
     return cert_file.name, key_file.name
 
 
+def create_ssl_context_with_sni(https_server_instance=None):
+    """Create SSL context with SNI callback for dynamic certificate selection."""
+    # Create base SSL context
+    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
+    
+    # SNI callback function
+    def sni_callback(ssl_obj, server_name, original_context):
+        if not server_name:
+            return None
+            
+        logger.debug(f"SNI callback for: {server_name}")
+        
+        # Use the global https_server if available, otherwise use the passed instance
+        server = https_server if https_server else https_server_instance
+        if not server:
+            logger.warning("No HTTPS server instance available for SNI callback")
+            return None
+        
+        # Check exact match
+        if server_name in server.ssl_contexts:
+            logger.info(f"Serving certificate for: {server_name}")
+            return server.ssl_contexts[server_name]
+        
+        # Check wildcard
+        parts = server_name.split('.')
+        if len(parts) > 2:
+            wildcard = f"*.{'.'.join(parts[1:])}"
+            if wildcard in server.ssl_contexts:
+                logger.info(f"Serving wildcard certificate for: {server_name}")
+                return server.ssl_contexts[wildcard]
+        
+        # Use default
+        if server.default_context:
+            logger.info(f"Serving default certificate for: {server_name}")
+            return server.default_context
+            
+        logger.warning(f"No certificate found for: {server_name}")
+        return None
+    
+    # Set the SNI callback
+    ssl_context.sni_callback = sni_callback
+    
+    # Use the global https_server if available, otherwise use the passed instance
+    server = https_server if https_server else https_server_instance
+    
+    # Load a default certificate (required for initial handshake)
+    if server and server.default_context:
+        # Use the default context but keep our SNI callback
+        ssl_context = server.default_context
+        ssl_context.sni_callback = sni_callback
+    else:
+        # Create self-signed as fallback
+        cert_file, key_file = create_temp_cert_files()
+        ssl_context.load_cert_chain(cert_file, key_file)
+        ssl_context.sni_callback = sni_callback
+        os.unlink(cert_file)
+        os.unlink(key_file)
+    
+    return ssl_context
+
+
 def run_server():
-    """Run the HTTP and HTTPS servers."""
+    """Run the HTTP and HTTPS servers with Hypercorn."""
     http_port = int(os.getenv('HTTP_PORT'))
     https_port = int(os.getenv('HTTPS_PORT'))
     
-    # For now, run HTTP only - HTTPS with dynamic certificates requires
-    # a more complex setup. In production, use a reverse proxy like nginx
-    # or Traefik for SSL termination with SNI support.
-    
     logger.info(f"Starting HTTP server on port {http_port}")
-    logger.info(f"HTTPS server available on port {https_port} (use reverse proxy)")
+    logger.info(f"Starting HTTPS server on port {https_port} with dynamic SNI support")
     
-    # HTTP server config
-    config = uvicorn.Config(
-        app=app,
-        host=os.getenv('SERVER_HOST'),
-        port=http_port,
-        log_level=os.getenv('LOG_LEVEL').lower()
-    )
+    # Initialize the global instances before running the server
+    global manager, https_server, scheduler, proxy_handler
+    if not manager:
+        manager = CertificateManager()
+    if not https_server:
+        https_server = HTTPSServer(manager)
+        https_server.load_certificates()
+    if not scheduler:
+        scheduler = CertificateScheduler(manager)
+    if not proxy_handler:
+        proxy_handler = ProxyHandler(manager.storage)
     
-    server = uvicorn.Server(config)
+    async def run_hypercorn():
+        # Create SSL context with SNI support
+        ssl_context = create_ssl_context_with_sni(https_server)
+        
+        # Configure Hypercorn
+        config = HypercornConfig()
+        config.bind = [
+            f"{os.getenv('SERVER_HOST')}:{http_port}",  # HTTP
+            f"{os.getenv('SERVER_HOST')}:{https_port}"  # HTTPS
+        ]
+        config.loglevel = os.getenv('LOG_LEVEL', 'INFO').upper()
+        
+        # Create temp cert files for Hypercorn config (it requires file paths)
+        # But the SNI callback will override with the correct cert
+        cert_file, key_file = create_temp_cert_files()
+        config.certfile = cert_file
+        config.keyfile = key_file
+        
+        # Override the SSL context creation in Hypercorn
+        original_create_ssl_context = config.create_ssl_context
+        
+        def custom_create_ssl_context():
+            # Return our context with SNI callback
+            return ssl_context
+        
+        config.create_ssl_context = custom_create_ssl_context
+        
+        try:
+            # Start the scheduler
+            scheduler.start()
+            
+            # Run the server
+            await serve(app, config)
+        finally:
+            # Stop the scheduler
+            scheduler.stop()
+            
+            # Clean up temp files
+            if os.path.exists(cert_file):
+                os.unlink(cert_file)
+            if os.path.exists(key_file):
+                os.unlink(key_file)
     
-    # Run server
-    asyncio.run(server.serve())
+    asyncio.run(run_hypercorn())
 
 
 if __name__ == "__main__":

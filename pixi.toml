@@ -9,7 +9,7 @@ pip = "*"
 
 [pypi-dependencies]
 fastapi = ">=0.104.1"
-uvicorn = { version = ">=0.24.0", extras = ["standard"] }
+hypercorn = ">=0.14.0"
 acme = ">=2.8.0"
 josepy = ">=1.14.0"
 cryptography = ">=41.0.7"
@@ -29,11 +29,12 @@ twine = ">=4.0.2"
 ruff = ">=0.1.6"
 requests = ">=2.31.0"
 tabulate = ">=0.9.0"
+websockets = ">=11.0"
 
 [tasks]
 test = "pytest tests/ -v"
 test-all = "pytest tests/ -v --tb=short"
 test-verbose = "pytest tests/ -vvv"
 lint = "ruff check . && ruff format ."
-dev = "uvicorn acme_certmanager.server:app --reload --host 0.0.0.0 --port 8000"
+dev = "hypercorn acme_certmanager.server:app --reload --bind 0.0.0.0:8000"
 docs-build = "jupyter-book build docs"

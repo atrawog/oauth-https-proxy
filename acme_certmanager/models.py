@@ -14,12 +14,14 @@ class CertificateRequest(BaseModel):
     
     @validator('domain')
     def validate_domain(cls, v):
+        v = v.strip()  # Remove leading/trailing whitespace
         if not v or not '.' in v:
             raise ValueError('Invalid domain format')
         return v.lower()
     
     @validator('email')
     def validate_email(cls, v):
+        v = v.strip()  # Remove leading/trailing whitespace
         if not v or '@' not in v:
             raise ValueError('Invalid email format')
         return v.lower()
@@ -39,6 +41,17 @@ class Certificate(BaseModel):
     private_key_pem: Optional[str] = None
     owner_token_hash: Optional[str] = None  # SHA256 hash of owner token
     created_by: Optional[str] = None        # Token name for display
+    
+    @validator('domains', pre=True)
+    def validate_domains(cls, v):
+        if isinstance(v, list):
+            # Strip whitespace from each domain
+            return [domain.strip().lower() for domain in v if domain.strip()]
+        return v
+    
+    @validator('email')
+    def validate_email(cls, v):
+        return v.strip().lower() if v else v
     
     class Config:
         json_encoders = {
@@ -92,6 +105,7 @@ class ProxyTargetRequest(BaseModel):
     
     @validator('hostname')
     def validate_hostname(cls, v):
+        v = v.strip()  # Remove leading/trailing whitespace
         if not v or not '.' in v:
             raise ValueError('Invalid hostname format')
         # Basic hostname validation
