@@ -45,60 +45,70 @@ def delete_token(token_name: str):
         if cert_cursor == 0:
             break
     
+    # Check if any proxy targets are owned by this token
+    proxy_count = 0
+    owned_proxies = []
+    proxy_cursor = 0
+    
+    while True:
+        proxy_cursor, proxy_keys = storage.redis_client.scan(proxy_cursor, match="proxy:*", count=100)
+        for proxy_key in proxy_keys:
+            proxy_json = storage.redis_client.get(proxy_key)
+            if proxy_json:
+                proxy = json.loads(proxy_json)
+                if proxy.get('owner_token_hash') == token_hash:
+                    proxy_count += 1
+                    hostname = proxy_key.split(':', 1)[1]
+                    owned_proxies.append(hostname)
+        if proxy_cursor == 0:
+            break
+    
     # Confirm deletion
     print(f"\n=== Token Details ===")
     print(f"Name: {token_name}")
     print(f"Created: {token_data.get('created_at', 'Unknown')}")
     print(f"Last Used: {token_data.get('last_used', 'Never')}")
     print(f"Certificates Owned: {cert_count}")
+    print(f"Proxy Targets Owned: {proxy_count}")
     
     if owned_certs:
         print(f"\nThis token owns the following certificates:")
         for cert_name in owned_certs:
             print(f"  - {cert_name}")
-        print("\nWARNING: Deleting this token will ALSO DELETE all certificates owned by it!")
+    
+    if owned_proxies:
+        print(f"\nThis token owns the following proxy targets:")
+        for hostname in owned_proxies:
+            print(f"  - {hostname}")
+    
+    if owned_certs or owned_proxies:
+        print("\nWARNING: Deleting this token will ALSO DELETE all resources owned by it!")
     
     # Ask for confirmation
-    confirm = input(f"\nAre you sure you want to delete token '{token_name}' and all its certificates? (yes/no): ")
+    confirm = input(f"\nAre you sure you want to delete token '{token_name}' and all its resources? (yes/no): ")
     
     if confirm.lower() != 'yes':
         print("Deletion cancelled.")
         return False
     
-    # Delete all certificates owned by this token
-    deleted_certs = 0
-    if owned_certs:
-        print("\nDeleting certificates...")
-        cert_cursor = 0
-        while True:
-            cert_cursor, cert_keys = storage.redis_client.scan(
-                cert_cursor, match="cert:*", count=100
-            )
-            for cert_key in cert_keys:
-                cert_json = storage.redis_client.get(cert_key)
-                if cert_json:
-                    cert = json.loads(cert_json)
-                    if cert.get('owner_token_hash') == token_hash:
-                        cert_name = cert.get('cert_name', 'Unknown')
-                        if storage.redis_client.delete(cert_key):
-                            deleted_certs += 1
-                            print(f"  ✓ Deleted certificate: {cert_name}")
-                        else:
-                            print(f"  ✗ Failed to delete certificate: {cert_name}")
-            if cert_cursor == 0:
-                break
+    # Delete the token and all owned resources using cascade deletion
+    print("\nDeleting token and all owned resources...")
+    result = storage.delete_api_token_cascade_by_name(token_name)
     
-    # Delete the token using storage method
-    result = storage.delete_api_token_by_name(token_name)
-    
-    if result:
+    if result['token_deleted']:
         print(f"\n✓ Token '{token_name}' deleted successfully")
-        if deleted_certs > 0:
-            print(f"✓ Deleted {deleted_certs} certificate(s)")
+        if result['certificates_deleted'] > 0:
+            print(f"✓ Deleted {result['certificates_deleted']} certificate(s)")
+        if result['proxy_targets_deleted'] > 0:
+            print(f"✓ Deleted {result['proxy_targets_deleted']} proxy target(s)")
         
         return True
     else:
         print(f"\n✗ Failed to delete token '{token_name}'")
+        if result['errors']:
+            print("Errors encountered:")
+            for error in result['errors']:
+                print(f"  - {error}")
         return False
 
 

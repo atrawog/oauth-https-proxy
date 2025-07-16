@@ -53,13 +53,31 @@ def list_tokens():
                     if cert_cursor == 0:
                         break
                 
+                # Count proxy targets owned by this token
+                proxy_count = 0
+                proxy_cursor = 0
+                while True:
+                    proxy_cursor, proxy_keys = storage.redis_client.scan(
+                        proxy_cursor, match="proxy:*", count=100
+                    )
+                    for proxy_key in proxy_keys:
+                        proxy_json = storage.redis_client.get(proxy_key)
+                        if proxy_json:
+                            proxy = json.loads(proxy_json)
+                            if proxy.get('owner_token_hash') == token_hash:
+                                proxy_count += 1
+                    if proxy_cursor == 0:
+                        break
+                
                 tokens.append({
                     'Name': token_data.get('name', 'Unknown'),
                     'Token': token_data.get('token', 'N/A'),
+                    'Email': token_data.get('cert_email') or '(not set)',
                     'Created': datetime.fromisoformat(
                         token_data.get('created_at', '')
                     ).strftime('%Y-%m-%d %H:%M') if token_data.get('created_at') else 'Unknown',
-                    'Certificates': cert_count
+                    'Certs': cert_count,
+                    'Proxies': proxy_count
                 })
         except Exception as e:
             print(f"Error processing token {key}: {e}")

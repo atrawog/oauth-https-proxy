@@ -3,13 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>ACME Certificate Manager</title>
+    <title>MCP Proxy Manager</title>
     <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
     <div class="container">
         <header>
-            <h1>ACME Certificate Manager</h1>
+            <h1>MCP Proxy Manager</h1>
             <div id="auth-status" class="auth-status"></div>
         </header>
 
@@ -31,88 +31,123 @@
             <section id="dashboard-section" class="section hidden">
                 <div class="tabs">
                     <button class="tab-button active" data-tab="certificates">Certificates</button>
-                    <button class="tab-button" data-tab="new-certificate">New Certificate</button>
-                    <button class="tab-button" data-tab="proxy">Proxy Targets</button>
-                    <button class="tab-button" data-tab="new-proxy">New Proxy Target</button>
+                    <button class="tab-button" data-tab="proxies">Proxies</button>
+                    <button class="tab-button" data-tab="settings">Settings</button>
                 </div>
 
                 <!-- Certificates Tab -->
                 <div id="certificates-tab" class="tab-content active">
-                    <h2>Your Certificates</h2>
+                    <div class="tab-header">
+                        <h2>Certificates</h2>
+                        <button id="add-certificate-btn" class="btn btn-primary">Add Certificate</button>
+                    </div>
+                    
+                    <!-- Certificate List -->
                     <div id="certificates-list" class="certificates-list">
                         <div class="loading">Loading certificates...</div>
                     </div>
-                </div>
-
-                <!-- New Certificate Tab -->
-                <div id="new-certificate-tab" class="tab-content hidden">
-                    <h2>Generate New Certificate</h2>
-                    <form id="new-certificate-form" class="form">
-                        <div class="form-group">
-                            <label for="cert-name">Certificate Name:</label>
-                            <input type="text" id="cert-name" name="cert_name" required 
-                                   placeholder="e.g., production">
-                        </div>
-                        <div class="form-group">
-                            <label for="domain">Domain:</label>
-                            <input type="text" id="domain" name="domain" required 
-                                   placeholder="e.g., example.com">
-                        </div>
-                        <div class="form-group">
-                            <label for="email">Email:</label>
-                            <input type="email" id="email" name="email" required 
-                                   placeholder="admin@example.com">
-                        </div>
-                        <div class="form-group">
-                            <label for="acme-url">ACME Directory URL:</label>
-                            <select id="acme-url" name="acme_directory_url">
-                                <option value="https://acme-v02.api.letsencrypt.org/directory">Let's Encrypt Production</option>
-                                <option value="https://acme-staging-v02.api.letsencrypt.org/directory">Let's Encrypt Staging</option>
-                            </select>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Generate Certificate</button>
-                    </form>
-                </div>
-
-                <!-- Proxy Targets Tab -->
-                <div id="proxy-tab" class="tab-content hidden">
-                    <h2>Your Proxy Targets</h2>
-                    <div id="proxy-list" class="proxy-list">
-                        <div class="loading">Loading proxy targets...</div>
+                    
+                    <!-- New Certificate Form (hidden by default) -->
+                    <div id="new-certificate-form-container" class="form-container hidden">
+                        <h3>Generate New Certificate</h3>
+                        <form id="new-certificate-form" class="form">
+                            <div class="form-group">
+                                <label for="cert-name">Certificate Name:</label>
+                                <input type="text" id="cert-name" name="cert_name" required 
+                                       placeholder="e.g., production">
+                            </div>
+                            <div class="form-group">
+                                <label for="domain">Domain:</label>
+                                <input type="text" id="domain" name="domain" required 
+                                       placeholder="e.g., example.com">
+                            </div>
+                            <div class="form-group">
+                                <label for="acme-url">ACME Directory URL:</label>
+                                <select id="acme-url" name="acme_directory_url">
+                                    <option value="https://acme-v02.api.letsencrypt.org/directory">Let's Encrypt Production</option>
+                                    <option value="https://acme-staging-v02.api.letsencrypt.org/directory">Let's Encrypt Staging</option>
+                                </select>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">Generate Certificate</button>
+                                <button type="button" class="btn btn-secondary cancel-btn" onclick="toggleCertificateForm()">Cancel</button>
+                            </div>
+                        </form>
                     </div>
                 </div>
 
-                <!-- New Proxy Target Tab -->
-                <div id="new-proxy-tab" class="tab-content hidden">
-                    <h2>Create Proxy Target</h2>
-                    <form id="new-proxy-form" class="form">
-                        <div class="form-group">
-                            <label for="proxy-hostname">Hostname:</label>
-                            <input type="text" id="proxy-hostname" name="hostname" required 
-                                   placeholder="e.g., api.example.com">
-                            <small>The domain that will be proxied</small>
+                <!-- Proxies Tab -->
+                <div id="proxies-tab" class="tab-content hidden">
+                    <div class="tab-header">
+                        <h2>Proxies</h2>
+                        <button id="add-proxy-btn" class="btn btn-primary">Add Proxy</button>
+                    </div>
+                    
+                    <!-- Proxy List -->
+                    <div id="proxy-list" class="proxy-list">
+                        <div class="loading">Loading proxy targets...</div>
+                    </div>
+                    
+                    <!-- New Proxy Form (hidden by default) -->
+                    <div id="new-proxy-form-container" class="form-container hidden">
+                        <h3>Create Proxy Target</h3>
+                        <form id="new-proxy-form" class="form">
+                            <div class="form-group">
+                                <label for="proxy-hostname">Hostname:</label>
+                                <input type="text" id="proxy-hostname" name="hostname" required 
+                                       placeholder="e.g., api.example.com">
+                                <small>The domain that will be proxied</small>
+                            </div>
+                            <div class="form-group">
+                                <label for="proxy-target">Target URL:</label>
+                                <input type="url" id="proxy-target" name="target_url" required 
+                                       placeholder="e.g., http://backend:8080">
+                                <small>Where to forward requests</small>
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="preserve-host" name="preserve_host_header" checked>
+                                    Preserve Host Header
+                                </label>
+                                <small>Keep original hostname in forwarded requests</small>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">Create Proxy Target</button>
+                                <button type="button" class="btn btn-secondary cancel-btn" onclick="toggleProxyForm()">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Settings Tab -->
+                <div id="settings-tab" class="tab-content hidden">
+                    <h2>Settings</h2>
+                    <div class="settings-section">
+                        <h3>Certificate Email Configuration</h3>
+                        <p class="info-text">Configure the default email address for Let's Encrypt certificate notifications. This email will be used for all certificates created with this token.</p>
+                        
+                        <form id="email-settings-form" class="form">
+                            <div class="form-group">
+                                <label for="cert-email">Certificate Email:</label>
+                                <input type="email" id="cert-email" name="cert_email" 
+                                       placeholder="admin@example.com">
+                                <small>Leave empty to require email for each certificate</small>
+                            </div>
+                            <button type="submit" class="btn btn-primary">Update Email</button>
+                        </form>
+                        
+                        <div id="current-email" class="current-settings">
+                            <strong>Current Email:</strong> <span id="current-email-value">Loading...</span>
                         </div>
-                        <div class="form-group">
-                            <label for="proxy-target">Target URL:</label>
-                            <input type="url" id="proxy-target" name="target_url" required 
-                                   placeholder="e.g., http://backend:8080">
-                            <small>Where to forward requests</small>
+                    </div>
+                    
+                    <div class="settings-section">
+                        <h3>Token Information</h3>
+                        <div class="token-info">
+                            <p><strong>Token Name:</strong> <span id="token-name">Loading...</span></p>
+                            <p><strong>Token Preview:</strong> <span id="token-preview">Loading...</span></p>
                         </div>
-                        <div class="form-group">
-                            <label for="proxy-email">Certificate Email:</label>
-                            <input type="email" id="proxy-email" name="cert_email" required 
-                                   placeholder="admin@example.com">
-                            <small>Email for Let's Encrypt notifications</small>
-                        </div>
-                        <div class="form-group">
-                            <label>
-                                <input type="checkbox" id="preserve-host" name="preserve_host_header" checked>
-                                Preserve Host Header
-                            </label>
-                            <small>Keep original hostname in forwarded requests</small>
-                        </div>
-                        <button type="submit" class="btn btn-primary">Create Proxy Target</button>
-                    </form>
+                    </div>
                 </div>
             </section>
 

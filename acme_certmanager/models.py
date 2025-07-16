@@ -60,6 +60,7 @@ class HealthStatus(BaseModel):
     redis: str
     certificates_loaded: int
     https_enabled: bool
+    orphaned_resources: Optional[int] = None
 
 
 class ProxyTarget(BaseModel):
@@ -84,7 +85,7 @@ class ProxyTargetRequest(BaseModel):
     """Request model for creating proxy target."""
     hostname: str
     target_url: str
-    cert_email: str                 # For Let's Encrypt
+    cert_email: Optional[str] = None  # Optional - uses token's cert_email if not provided
     acme_directory_url: Optional[str] = None  # Allow specifying staging URL
     preserve_host_header: bool = True
     custom_headers: Optional[Dict[str, str]] = None

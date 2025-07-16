@@ -328,12 +328,12 @@ Request:
 {
   "hostname": "api.example.com",
   "target_url": "http://backend:8080",
-  "cert_email": "admin@example.com",
   "acme_directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
   "preserve_host_header": true,
   "custom_headers": {"X-Custom": "value"}
 }
 ```
+Note: Certificate email is inherited from token's cert_email setting.
 Response:
 ```
 {
@@ -353,6 +353,34 @@ Request: Partial update fields
 
 #### `DELETE /proxy/targets/{hostname}?delete_certificate=true`
 Response: 200 OK
+
+#### `PUT /token/email`
+Update certificate email for the current token.
+Request:
+```
+{
+  "cert_email": "newemail@example.com"
+}
+```
+Response:
+```
+{
+  "status": "success",  
+  "message": "Certificate email updated to newemail@example.com",
+  "cert_email": "newemail@example.com"
+}
+```
+
+#### `GET /token/info`
+Get information about the current token.
+Response:
+```
+{
+  "name": "my-token",
+  "cert_email": "admin@example.com",
+  "hash_preview": "479719852dbf16c7..."
+}
+```
 
 ### Proxy Operations
 
@@ -387,6 +415,13 @@ just test-proxy-all             # Run all proxy tests
 
 ## Recent Updates
 
+### Per-Token Certificate Email Configuration
+- Tokens now have optional cert_email field
+- Email configurable via web GUI Settings tab  
+- Certificate generation uses token's email automatically
+- Token creation remains CLI-only via `just` commands
+- No email fields in certificate/proxy forms - inherited from token
+
 ### Token Authentication System
 - Bearer token auth for all API endpoints
 - Dual-key storage: by hash (auth) and by name (management)
@@ -397,17 +432,18 @@ just test-proxy-all             # Run all proxy tests
 ### Web GUI
 - Available at http://localhost:80
 - Token-based login
-- Certificate management dashboard
+- Certificate and proxy management dashboard
+- Settings tab for email configuration
 - Real-time status updates
 - Static files served by FastAPI
 
 ### Token Commands
 ```bash
-just token-generate <name>     # Create token
-just token-show <name>        # Retrieve full token
-just token-list              # List all tokens
-just token-delete <name>     # Delete token + certs
-just token-show-certs [name] # Show certs by token
+just token-generate <name> [cert-email]  # Create token with optional cert email
+just token-show <name>                   # Retrieve full token
+just token-list                          # List all tokens
+just token-delete <name>                 # Delete token + certs
+just token-show-certs [name]             # Show certs by token
 ```
 
 ### Certificate Commands
@@ -432,3 +468,7 @@ just cert-renew <name> <token> [force]   # Renew certificate
 - `/certificates` endpoint returns all certs (public) or filtered (authenticated)
 - Public access on port 80 for ACME challenges
 - Tabulate for pretty CLI output
+- Tokens can have default `cert_email` for certificate generation
+- Proxy targets use token's cert_email if not specified in request
+- Web GUI renamed to "MCP Proxy Manager"
+- Email fields removed from cert/proxy forms - managed via Settings tab

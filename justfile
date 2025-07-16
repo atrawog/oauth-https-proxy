@@ -151,11 +151,15 @@ test-external:
     pixi run python scripts/test_external_access.py
 
 # Generate a new API token
-token-generate name:
+token-generate name cert-email="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Generating API token: {{name}}"
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}"
+    if [ -n "{{cert-email}}" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}" "{{cert-email}}"
+    else
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}"
+    fi
 
 # List all tokens
 token-list:
@@ -165,11 +169,15 @@ token-list:
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/list_tokens.py
 
 # Delete a token (and all its certificates)
-token-delete name:
+token-delete name force="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Deleting token: {{name}}"
-    docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_token.py "{{name}}"
+    if [ -n "{{force}}" ]; then
+        echo "yes" | docker exec -i mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_token.py "{{name}}"
+    else
+        docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_token.py "{{name}}"
+    fi
 
 # Show certificates owned by a token (or all if no token specified)
 token-show-certs token="":
@@ -386,3 +394,95 @@ proxy-cleanup hostname="":
 # Test proxy with example.com
 test-proxy-example:
     pixi run python scripts/test_proxy_example.py
+
+# Test certificate email configuration
+test-cert-email:
+    pixi run python scripts/test_cert_email.py
+
+# Update JavaScript for web GUI
+update-js:
+    pixi run python scripts/update_app_js.py
+
+# Test email settings functionality
+test-email-settings token-name:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/test_email_settings.py "{{token-name}}"
+
+# Verify web GUI updates
+verify-webgui:
+    pixi run python scripts/verify_webgui.py
+
+# Test full implementation end-to-end
+test-full-implementation:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/test_full_implementation.py
+
+# Show demo workflow
+demo-workflow:
+    @bash scripts/demo_workflow.sh
+
+# Debug token info endpoint
+debug-token-info token:
+    pixi run python scripts/debug_token_info.py "{{token}}"
+
+# Add JavaScript debug logging
+add-js-debug:
+    pixi run python scripts/add_js_debug.py
+
+# Browser console debugging guide
+browser-debug:
+    @pixi run python scripts/check_browser_console.py
+
+# Test settings tab flow
+test-settings-flow:
+    pixi run python scripts/test_settings_flow.py
+
+# Fix loadTokenInfo function
+fix-loadtokeninfo:
+    pixi run python scripts/fix_loadtokeninfo.py
+
+# Remove JavaScript debug logging
+remove-js-debug:
+    pixi run python scripts/remove_js_debug.py
+
+# Test settings for ALL tokens
+test-all-tokens-settings:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/test_all_tokens_settings.py
+
+# Create test tokens for testing
+create-test-tokens:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/create_test_tokens.py
+
+# Cleanup test tokens
+cleanup-test-tokens:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cleanup_test_tokens.py
+
+# Test individual token email update
+test-token-email-update token:
+    pixi run python scripts/test_individual_email_update.py "{{token}}"
+
+# Debug certificate ownership
+debug-cert-ownership:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/debug_cert_ownership.py
+
+# Cleanup orphaned certificates
+cleanup-orphaned-certs delete="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -n "{{delete}}" ]; then
+        echo "Cleaning up orphaned certificates (DELETE MODE)..."
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cleanup_orphaned_certs.py --delete
+    else
+        echo "Checking for orphaned certificates (DRY RUN)..."
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cleanup_orphaned_certs.py
+    fi
+
+# Check for orphaned resources (certificates and proxy targets)
+check-orphaned-resources:
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/check_orphaned_resources.py
+
+# Test merged tabs in web GUI
+test-merged-tabs:
+    pixi run python scripts/test_merged_tabs.py
+
+# Demo merged tabs functionality
+demo-merged-tabs:
+    pixi run python scripts/demo_merged_tabs.py

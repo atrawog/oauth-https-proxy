@@ -12,11 +12,12 @@ from acme_certmanager.storage import RedisStorage
 
 
 def main():
-    if len(sys.argv) != 2:
-        print("Usage: generate_token.py <token-name>")
+    if len(sys.argv) < 2:
+        print("Usage: generate_token.py <token-name> [cert-email]")
         sys.exit(1)
     
     name = sys.argv[1]
+    cert_email = sys.argv[2] if len(sys.argv) > 2 else None
     redis_url = os.getenv("REDIS_URL")
     
     if not redis_url:
@@ -29,10 +30,12 @@ def main():
     
     # Store in Redis with full token
     storage = RedisStorage(redis_url)
-    if storage.store_api_token(token_hash, name, token):
+    if storage.store_api_token(token_hash, name, token, cert_email):
         print(f"Token generated successfully!")
         print(f"Name: {name}")
         print(f"Token: {token}")
+        if cert_email:
+            print(f"Certificate Email: {cert_email}")
         print(f"\nToken stored securely. You can retrieve it later with: just token-show {name}")
     else:
         print("Failed to store token in Redis")

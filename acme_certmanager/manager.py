@@ -91,10 +91,44 @@ class CertificateManager:
     
     def check_health(self) -> Dict[str, any]:
         """Check system health."""
+        orphaned_count = self.count_orphaned_resources()
         return {
             "redis": "healthy" if self.storage.health_check() else "unhealthy",
-            "certificates_loaded": len(self.list_certificates())
+            "certificates_loaded": len(self.list_certificates()),
+            "orphaned_resources": orphaned_count
         }
+    
+    def count_orphaned_resources(self) -> int:
+        """Count orphaned certificates and proxy targets."""
+        try:
+            # Get all valid token hashes by scanning Redis
+            valid_token_hashes = set()
+            cursor = 0
+            while True:
+                cursor, keys = self.storage.redis_client.scan(cursor, match="token:*", count=100)
+                for key in keys:
+                    token_data = self.storage.redis_client.hgetall(key)
+                    if token_data and 'hash' in token_data:
+                        valid_token_hashes.add(token_data['hash'])
+                if cursor == 0:
+                    break
+            
+            orphaned_count = 0
+            
+            # Check certificates
+            for cert in self.list_certificates():
+                if not cert.owner_token_hash or cert.owner_token_hash not in valid_token_hashes:
+                    orphaned_count += 1
+            
+            # Check proxy targets  
+            for target in self.storage.list_proxy_targets():
+                if not target.owner_token_hash or target.owner_token_hash not in valid_token_hashes:
+                    orphaned_count += 1
+            
+            return orphaned_count
+        except Exception as e:
+            logger.error(f"Error counting orphaned resources: {e}")
+            return 0
     
     def get_expiring_certificates(self, days: int = 30) -> List[tuple[str, Certificate]]:
         """Get certificates expiring within specified days."""

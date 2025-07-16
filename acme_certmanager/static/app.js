@@ -118,6 +118,16 @@ const tabContents = document.querySelectorAll('.tab-content');
 loginForm.addEventListener('submit', handleLogin);
 newCertForm.addEventListener('submit', handleNewCertificate);
 newProxyForm.addEventListener('submit', handleNewProxyTarget);
+
+// Add button listeners
+document.getElementById('add-certificate-btn')?.addEventListener('click', toggleCertificateForm);
+document.getElementById('add-proxy-btn')?.addEventListener('click', toggleProxyForm);
+
+// Settings form listener
+const emailSettingsForm = document.getElementById('email-settings-form');
+if (emailSettingsForm) {
+    emailSettingsForm.addEventListener('submit', handleEmailUpdate);
+}
 logoutBtn.addEventListener('click', handleLogout);
 closeModal.addEventListener('click', () => certModal.classList.add('hidden'));
 
@@ -192,10 +202,75 @@ function switchTab(tab) {
         }
     });
 
+    // Hide forms when switching tabs
+    hideCertificateForm();
+    hideProxyForm();
+
     if (tab === 'certificates') {
         loadCertificates();
-    } else if (tab === 'proxy') {
+    } else if (tab === 'proxies') {
         loadProxyTargets();
+    } else if (tab === 'settings') {
+        loadTokenInfo();
+    }
+}
+
+// Form Toggle Functions
+function toggleCertificateForm() {
+    const formContainer = document.getElementById('new-certificate-form-container');
+    const addButton = document.getElementById('add-certificate-btn');
+    
+    if (formContainer.classList.contains('hidden')) {
+        formContainer.classList.remove('hidden');
+        addButton.textContent = 'Cancel';
+        addButton.classList.add('btn-secondary');
+        addButton.classList.remove('btn-primary');
+    } else {
+        formContainer.classList.add('hidden');
+        addButton.textContent = 'Add Certificate';
+        addButton.classList.remove('btn-secondary');
+        addButton.classList.add('btn-primary');
+    }
+}
+
+function hideCertificateForm() {
+    const formContainer = document.getElementById('new-certificate-form-container');
+    const addButton = document.getElementById('add-certificate-btn');
+    
+    if (formContainer && addButton) {
+        formContainer.classList.add('hidden');
+        addButton.textContent = 'Add Certificate';
+        addButton.classList.remove('btn-secondary');
+        addButton.classList.add('btn-primary');
+    }
+}
+
+function toggleProxyForm() {
+    const formContainer = document.getElementById('new-proxy-form-container');
+    const addButton = document.getElementById('add-proxy-btn');
+    
+    if (formContainer.classList.contains('hidden')) {
+        formContainer.classList.remove('hidden');
+        addButton.textContent = 'Cancel';
+        addButton.classList.add('btn-secondary');
+        addButton.classList.remove('btn-primary');
+    } else {
+        formContainer.classList.add('hidden');
+        addButton.textContent = 'Add Proxy';
+        addButton.classList.remove('btn-secondary');
+        addButton.classList.add('btn-primary');
+    }
+}
+
+function hideProxyForm() {
+    const formContainer = document.getElementById('new-proxy-form-container');
+    const addButton = document.getElementById('add-proxy-btn');
+    
+    if (formContainer && addButton) {
+        formContainer.classList.add('hidden');
+        addButton.textContent = 'Add Proxy';
+        addButton.classList.remove('btn-secondary');
+        addButton.classList.add('btn-primary');
     }
 }
 
@@ -247,7 +322,6 @@ async function handleNewCertificate(e) {
     const data = {
         cert_name: formData.get('cert_name'),
         domain: formData.get('domain'),
-        email: formData.get('email'),
         acme_directory_url: formData.get('acme_directory_url')
     };
 
@@ -255,7 +329,8 @@ async function handleNewCertificate(e) {
         const result = await api.createCertificate(data);
         showNotification('Certificate generation started', 'success');
         e.target.reset();
-        switchTab('certificates');
+        hideCertificateForm();
+        loadCertificates();
         
         // Start polling for status
         pollCertificateStatus(data.cert_name);
@@ -271,7 +346,6 @@ async function handleNewProxyTarget(e) {
     const data = {
         hostname: formData.get('hostname'),
         target_url: formData.get('target_url'),
-        cert_email: formData.get('cert_email'),
         preserve_host_header: formData.get('preserve_host_header') === 'on'
     };
 
@@ -288,7 +362,8 @@ async function handleNewProxyTarget(e) {
         }
         
         e.target.reset();
-        switchTab('proxy');
+        hideProxyForm();
+        loadProxyTargets();
     } catch (error) {
         showNotification(`Error: ${error.message}`, 'error');
     }
@@ -466,6 +541,77 @@ document.addEventListener('DOMContentLoaded', () => {
         showLogin();
     }
 });
+
+// Settings Management
+async function loadTokenInfo() {    
+    // Check if token exists
+    if (!api.token) {        showNotification('Please login first', 'error');
+        return;
+    }
+    
+    try {        const response = await fetch('/token/info', {
+            headers: {
+                'Authorization': `Bearer ${api.token}`
+            }
+        });
+        
+        if (!response.ok) {            throw new Error('Failed to load token info');
+        }        
+        const data = await response.json();        
+        // Update token info display
+        document.getElementById('token-name').textContent = data.name || 'N/A';
+        document.getElementById('token-preview').textContent = data.hash_preview || 'N/A';
+        document.getElementById('current-email-value').textContent = data.cert_email || '(not set)';
+        
+        // Update email input placeholder
+        const emailInput = document.getElementById('cert-email');
+        if (emailInput && data.cert_email) {
+            emailInput.placeholder = data.cert_email;
+        }
+    } catch (error) {
+        console.error('Error loading token info:', error);
+        showNotification('Failed to load token information', 'error');
+    }
+}
+
+async function handleEmailUpdate(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(e.target);
+    const certEmail = formData.get('cert_email');
+    
+    if (!certEmail) {
+        showNotification('Please enter a valid email address', 'error');
+        return;
+    }
+    
+    try {
+        const response = await fetch('/token/email', {
+            method: 'PUT',
+            headers: {
+                'Authorization': `Bearer ${api.token}`,
+                'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({ cert_email: certEmail })
+        });
+        
+        if (!response.ok) {
+            const error = await response.json();
+            throw new Error(error.detail || 'Failed to update email');
+        }
+        
+        const result = await response.json();
+        showNotification(result.message || 'Email updated successfully', 'success');
+        
+        // Reload token info to show updated email
+        loadTokenInfo();
+        
+        // Clear the form
+        e.target.reset();
+    } catch (error) {
+        showNotification(`Error: ${error.message}`, 'error');
+    }
+}
 
 // Clean up intervals on page unload
 window.addEventListener('beforeunload', () => {

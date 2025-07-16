@@ -40,11 +40,11 @@ async def get_current_token(
 async def get_current_token_info(
     credentials: HTTPAuthorizationCredentials = Depends(security),
     storage = None  # Will be injected by dependency
-) -> Tuple[str, Optional[str]]:
-    """Get current token hash and name from storage.
+) -> Tuple[str, Optional[str], Optional[str]]:
+    """Get current token hash, name, and cert_email from storage.
     
     Returns:
-        Tuple of (token_hash, token_name)
+        Tuple of (token_hash, token_name, cert_email)
     """
     from .server import manager  # Import here to avoid circular import
     
@@ -56,12 +56,12 @@ async def get_current_token_info(
     if not token_data:
         raise HTTPException(401, "Invalid or revoked token")
     
-    return token_hash, token_data.get("name")
+    return token_hash, token_data.get("name"), token_data.get("cert_email")
 
 
 async def require_owner(
     cert_name: str,
-    token_info: Tuple[str, Optional[str]] = Depends(get_current_token_info)
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ) -> None:
     """Require current token to be certificate owner.
     
@@ -70,7 +70,7 @@ async def require_owner(
     """
     from .server import manager  # Import here to avoid circular import
     
-    token_hash, _ = token_info
+    token_hash, _, _ = token_info
     certificate = manager.storage.get_certificate(cert_name)
     
     if not certificate:
@@ -83,7 +83,7 @@ async def require_owner(
 
 async def get_optional_token_info(
     request: Request,
-) -> Optional[Tuple[str, Optional[str]]]:
+) -> Optional[Tuple[str, Optional[str], Optional[str]]]:
     """Get token info if provided, otherwise return None.
     
     This allows endpoints to work with or without authentication.
@@ -103,4 +103,4 @@ async def get_optional_token_info(
         # Invalid token - treat as no auth
         return None
     
-    return token_hash, token_data.get("name")
+    return token_hash, token_data.get("name"), token_data.get("cert_email")

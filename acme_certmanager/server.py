@@ -267,10 +267,10 @@ async def read_root(request: Request):
 @app.post("/certificates")
 async def create_certificate(
     request: CertificateRequest,
-    token_info: tuple = Depends(get_current_token_info)
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ):
     """Create new certificate via ACME."""
-    token_hash, token_name = token_info
+    token_hash, token_name, cert_email = token_info
     
     # Run certificate generation in background to avoid blocking
     result = await create_certificate_task(
@@ -283,14 +283,14 @@ async def create_certificate(
 
 @app.get("/certificates")
 async def list_certificates(
-    token_info: Optional[tuple] = Depends(get_optional_token_info)
+    token_info: Optional[Tuple[str, Optional[str], Optional[str]]] = Depends(get_optional_token_info)
 ):
     """List certificates - all if no auth, filtered if authenticated."""
     all_certs = manager.list_certificates()
     
     if token_info:
         # Authenticated - show only owned certificates
-        token_hash, _ = token_info
+        token_hash, _, _ = token_info
         return [cert for cert in all_certs if cert.owner_token_hash == token_hash]
     else:
         # Not authenticated - show all certificates
@@ -373,13 +373,71 @@ async def health_check():
     """Health check endpoint."""
     health = manager.check_health()
     
+    # Determine overall status
+    status = "healthy"
+    if health["redis"] != "healthy":
+        status = "degraded"
+    elif health.get("orphaned_resources", 0) > 0:
+        status = "degraded"
+    
     return HealthStatus(
-        status="healthy" if health["redis"] == "healthy" else "degraded",
+        status=status,
         scheduler=scheduler.is_running(),
         redis=health["redis"],
         certificates_loaded=health["certificates_loaded"],
-        https_enabled=True  # HTTPS is enabled
+        https_enabled=True,  # HTTPS is enabled
+        orphaned_resources=health.get("orphaned_resources", 0)
     )
+
+
+# Token management endpoints
+@app.put("/token/email")
+async def update_token_email(
+    request: Request,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Update the certificate email for the current token."""
+    token_hash, token_name, current_email = token_info
+    
+    # Parse request body
+    try:
+        body = await request.json()
+        new_email = body.get("cert_email")
+        
+        if not new_email:
+            raise HTTPException(400, "cert_email is required")
+        
+        # Basic email validation
+        if "@" not in new_email:
+            raise HTTPException(400, "Invalid email format")
+        
+    except Exception as e:
+        raise HTTPException(400, f"Invalid request body: {str(e)}")
+    
+    # Update token email
+    if manager.storage.update_api_token_email(token_hash, new_email):
+        logger.info(f"Updated cert_email for token {token_name} to {new_email}")
+        return {
+            "status": "success",
+            "message": f"Certificate email updated to {new_email}",
+            "cert_email": new_email
+        }
+    else:
+        raise HTTPException(500, "Failed to update certificate email")
+
+
+@app.get("/token/info")
+async def get_token_info(
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Get information about the current token."""
+    token_hash, token_name, cert_email = token_info
+    
+    return {
+        "name": token_name,
+        "cert_email": cert_email,
+        "hash_preview": token_hash[:16] + "..."
+    }
 
 
 # Proxy management endpoints
@@ -388,10 +446,10 @@ async def health_check():
 async def create_proxy_target(
     request: ProxyTargetRequest,
     background_tasks: BackgroundTasks,
-    token_info: Tuple[str, Optional[str]] = Depends(get_current_token_info)
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ):
     """Create new proxy target with automatic certificate generation."""
-    token_hash, token_name = token_info
+    token_hash, token_name, cert_email = token_info
     
     # Check if target already exists
     existing = manager.storage.get_proxy_target(request.hostname)
@@ -423,9 +481,14 @@ async def create_proxy_target(
         # Use provided ACME URL or default to staging for tests
         acme_url = request.acme_directory_url or os.getenv("ACME_STAGING_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
         
+        # Use token's cert_email if not provided in request
+        email = request.cert_email if request.cert_email else cert_email
+        if not email:
+            raise HTTPException(400, "Certificate email required - provide in request or configure in token")
+        
         cert_request = CertificateRequest(
             domain=request.hostname,
-            email=request.cert_email,
+            email=email,
             cert_name=cert_name,
             acme_directory_url=acme_url
         )
@@ -452,14 +515,14 @@ async def create_proxy_target(
 
 @app.get("/proxy/targets")
 async def list_proxy_targets(
-    token_info: Optional[Tuple] = Depends(get_optional_token_info)
+    token_info: Optional[Tuple[str, Optional[str], Optional[str]]] = Depends(get_optional_token_info)
 ):
     """List proxy targets - all if no auth, filtered if authenticated."""
     all_targets = manager.storage.list_proxy_targets()
     
     if token_info:
         # Authenticated - show only owned targets
-        token_hash, _ = token_info
+        token_hash, _, _ = token_info
         return [target for target in all_targets if target.owner_token_hash == token_hash]
     else:
         # Not authenticated - show all targets
@@ -477,10 +540,10 @@ async def get_proxy_target(hostname: str):
 
 async def require_proxy_owner(
     hostname: str,
-    token_info: Tuple[str, Optional[str]] = Depends(get_current_token_info)
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ) -> None:
     """Require current token to be proxy target owner."""
-    token_hash, _ = token_info
+    token_hash, _, _ = token_info
     target = manager.storage.get_proxy_target(hostname)
     
     if not target:

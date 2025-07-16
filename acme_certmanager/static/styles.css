@@ -72,6 +72,7 @@ label {
 input[type="text"],
 input[type="email"],
 input[type="password"],
+input[type="url"],
 select {
     width: 100%;
     padding: 10px;
@@ -84,6 +85,7 @@ select {
 input[type="text"]:focus,
 input[type="email"]:focus,
 input[type="password"]:focus,
+input[type="url"]:focus,
 select:focus {
     outline: none;
     border-color: #3498db;
@@ -158,6 +160,44 @@ select:focus {
 
 .tab-content.active {
     display: block;
+}
+
+/* Tab Header */
+.tab-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 20px;
+}
+
+.tab-header h2 {
+    margin: 0;
+}
+
+/* Form Container */
+.form-container {
+    background-color: #f8f9fa;
+    border: 1px solid #dee2e6;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+    margin-bottom: 20px;
+}
+
+.form-container h3 {
+    margin-top: 0;
+    margin-bottom: 20px;
+    color: #2c3e50;
+}
+
+.form-actions {
+    display: flex;
+    gap: 10px;
+    margin-top: 20px;
+}
+
+.cancel-btn {
+    margin-left: 5px;
 }
 
 /* Certificate List */
@@ -442,4 +482,53 @@ footer {
         margin: 20px;
         padding: 20px;
     }
+}
+/* Settings Section */
+.settings-section {
+    background: white;
+    border: 1px solid #ddd;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.settings-section h3 {
+    margin-top: 0;
+    color: #2c3e50;
+}
+
+.info-text {
+    color: #7f8c8d;
+    margin-bottom: 20px;
+}
+
+.current-settings {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+.current-settings strong {
+    color: #2c3e50;
+}
+
+#current-email-value {
+    color: #3498db;
+    font-family: monospace;
+}
+
+.token-info {
+    padding: 15px;
+    background-color: #f8f9fa;
+    border-radius: 4px;
+}
+
+.token-info p {
+    margin: 5px 0;
+}
+
+.token-info span {
+    color: #3498db;
+    font-family: monospace;
 }
