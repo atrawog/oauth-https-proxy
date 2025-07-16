@@ -17,7 +17,11 @@ def show_token_certificates(token_name: str = None):
     redis_url = os.getenv('REDIS_URL')
     storage = RedisStorage(redis_url)
     
-    # If token name provided)
+    # If token name provided
+    target_token_hash = None
+    if token_name:
+        token_key = f"token:{token_name}"
+        token_data = storage.redis_client.hgetall(token_key)
         
         if not token_data:
             print(f"Error: Token '{token_name}' not found")

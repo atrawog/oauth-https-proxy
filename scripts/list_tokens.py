@@ -20,7 +20,7 @@ def list_tokens():
     token_keys = []
     cursor = 0
     while True:
-        cursor)
+        cursor, keys = storage.redis_client.scan(cursor, match="token:*", count=100)
         token_keys.extend(keys)
         if cursor == 0:
             break

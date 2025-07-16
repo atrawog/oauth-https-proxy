@@ -27,6 +27,7 @@ class CertificateRequest(BaseModel):
 
 class Certificate(BaseModel):
     """Certificate data model."""
+    cert_name: str  # Certificate identifier
     domains: List[str]
     email: str
     acme_directory_url: str

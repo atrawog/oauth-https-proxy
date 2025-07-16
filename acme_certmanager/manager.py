@@ -49,7 +49,7 @@ class CertificateManager:
         """Get certificate by name."""
         return self.storage.get_certificate(cert_name)
     
-    def list_certificates(self) -> List[Dict[str, Certificate]]:
+    def list_certificates(self) -> List[Certificate]:
         """List all certificates."""
         return self.storage.list_certificates()
     

@@ -212,16 +212,27 @@ cert-create name domain email token-name staging="false":
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create.py "{{name}}" "{{domain}}" "{{email}}" "$token" "{{staging}}"
 
-# Show certificate details (token optional for public certs)
+# Show certificate details (token optional for public certs, can use token name)
 cert-show name token="" pem="":
     #!/usr/bin/env bash
     set -euo pipefail
-    if [ -n "{{pem}}" ] && [ -n "{{token}}" ]; then
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}" "{{token}}" --pem
+    # Get the actual token if a name was provided
+    actual_token="{{token}}"
+    if [ -n "{{token}}" ] && [[ ! "{{token}}" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token}}"
+        actual_token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$actual_token" ]; then
+            echo "Error: Could not find token '{{token}}'"
+            exit 1
+        fi
+    fi
+    
+    if [ -n "{{pem}}" ] && [ -n "$actual_token" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}" "$actual_token" --pem
     elif [ -n "{{pem}}" ]; then
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}" --pem
-    elif [ -n "{{token}}" ]; then
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}" "{{token}}"
+    elif [ -n "$actual_token" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}" "$actual_token"
     else
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}"
     fi
@@ -248,26 +259,46 @@ cert-list token-name="":
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_list.py "$token"
     fi
 
-# Delete a certificate
-cert-delete name token force="":
+# Delete a certificate (can use token name instead of full token)
+cert-delete name token-name force="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Deleting certificate: {{name}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
     if [ -n "{{force}}" ]; then
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_delete.py "{{name}}" "{{token}}" --force
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_delete.py "{{name}}" "$token" --force
     else
-        docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_delete.py "{{name}}" "{{token}}"
+        docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_delete.py "{{name}}" "$token"
     fi
 
-# Renew a certificate
-cert-renew name token force="":
+# Renew a certificate (can use token name instead of full token)
+cert-renew name token-name force="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Renewing certificate: {{name}}"
+    # Get the actual token if a name was provided
+    token="{{token-name}}"
+    if [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
     if [ -n "{{force}}" ]; then
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_renew.py "{{name}}" "{{token}}" --force
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_renew.py "{{name}}" "$token" --force
     else
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_renew.py "{{name}}" "{{token}}"
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_renew.py "{{name}}" "$token"
     fi
 
 # Check certificate generation status
@@ -303,3 +334,7 @@ demo-public-access:
 # Test all certificate commands comprehensively
 test-cert-commands:
     pixi run python scripts/test_all_cert_commands.py
+
+# Test all token and cert commands
+test-all-commands:
+    pixi run python scripts/test_all_commands.py

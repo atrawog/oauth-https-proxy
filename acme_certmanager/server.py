@@ -58,8 +58,7 @@ class HTTPSServer:
         """Load all certificates from storage."""
         certificates = self.manager.list_certificates()
         
-        for cert_dict in certificates:
-            for cert_name, certificate in cert_dict.items():
+        for certificate in certificates:
                 if certificate.fullchain_pem and certificate.private_key_pem:
                     try:
                         context = self.create_ssl_context(certificate)
@@ -70,7 +69,7 @@ class HTTPSServer:
                             
                         logger.info(f"Loaded certificate for domains: {certificate.domains}")
                     except Exception as e:
-                        logger.error(f"Failed to load certificate {cert_name}: {e}")
+                        logger.error(f"Failed to load certificate {certificate.cert_name}: {e}")
         
         # Create default self-signed certificate if no certificates loaded
         if not self.ssl_contexts:
@@ -275,7 +274,7 @@ async def list_certificates(
     if token_info:
         # Authenticated - show only owned certificates
         token_hash, _ = token_info
-        return [cert for cert in all_certs if cert.get('owner_token_hash') == token_hash]
+        return [cert for cert in all_certs if cert.owner_token_hash == token_hash]
     else:
         # Not authenticated - show all certificates
         return all_certs

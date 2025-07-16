@@ -49,7 +49,7 @@ class RedisStorage:
             logger.error(f"Failed to get certificate: {e}")
             return None
     
-    def list_certificates(self) -> List[Dict[str, Certificate]]:
+    def list_certificates(self) -> List[Certificate]:
         """List all certificates."""
         try:
             certificates = []
@@ -57,7 +57,7 @@ class RedisStorage:
                 cert_name = key.split(":", 1)[1]
                 cert = self.get_certificate(cert_name)
                 if cert:
-                    certificates.append({cert_name: cert})
+                    certificates.append(cert)
             return certificates
         except RedisError as e:
             logger.error(f"Failed to list certificates: {e}")

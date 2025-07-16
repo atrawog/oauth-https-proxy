@@ -155,6 +155,7 @@ class ACMEClient:
         
         # Create certificate object
         certificate = Certificate(
+            cert_name=cert_name,
             domains=domains,
             email=email,
             acme_directory_url=acme_directory_url,
