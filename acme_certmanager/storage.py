@@ -6,7 +6,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 import redis
 from redis.exceptions import RedisError
-from .models import Certificate, ChallengeToken
+from .models import Certificate, ChallengeToken, ProxyTarget
 
 logger = logging.getLogger(__name__)
 
@@ -247,3 +247,61 @@ class RedisStorage:
         except RedisError as e:
             logger.error(f"Failed to delete API token by name: {e}")
             return False
+    
+    # Proxy target operations
+    def store_proxy_target(self, hostname: str, target: ProxyTarget) -> bool:
+        """Store proxy target configuration."""
+        try:
+            key = f"proxy:{hostname}"
+            value = target.json()
+            return self.redis_client.set(key, value)
+        except RedisError as e:
+            logger.error(f"Failed to store proxy target: {e}")
+            return False
+    
+    def get_proxy_target(self, hostname: str) -> Optional[ProxyTarget]:
+        """Retrieve proxy target configuration."""
+        try:
+            key = f"proxy:{hostname}"
+            value = self.redis_client.get(key)
+            if value:
+                return ProxyTarget.parse_raw(value)
+            return None
+        except (RedisError, json.JSONDecodeError) as e:
+            logger.error(f"Failed to get proxy target: {e}")
+            return None
+    
+    def list_proxy_targets(self) -> List[ProxyTarget]:
+        """List all proxy targets."""
+        try:
+            targets = []
+            for key in self.redis_client.scan_iter(match="proxy:*"):
+                hostname = key.split(":", 1)[1]
+                target = self.get_proxy_target(hostname)
+                if target:
+                    targets.append(target)
+            return targets
+        except RedisError as e:
+            logger.error(f"Failed to list proxy targets: {e}")
+            return []
+    
+    def delete_proxy_target(self, hostname: str) -> bool:
+        """Delete proxy target configuration."""
+        try:
+            key = f"proxy:{hostname}"
+            return bool(self.redis_client.delete(key))
+        except RedisError as e:
+            logger.error(f"Failed to delete proxy target: {e}")
+            return False
+    
+    def get_targets_by_owner(self, token_hash: str) -> List[ProxyTarget]:
+        """Get proxy targets owned by a specific token."""
+        try:
+            owned_targets = []
+            for target in self.list_proxy_targets():
+                if target.owner_token_hash == token_hash:
+                    owned_targets.append(target)
+            return owned_targets
+        except RedisError as e:
+            logger.error(f"Failed to get targets by owner: {e}")
+            return []

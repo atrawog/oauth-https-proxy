@@ -8,17 +8,23 @@ import tempfile
 from contextlib import asynccontextmanager
 from typing import Dict, Optional, Union
 
-from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends
+from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, WebSocket
 from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 import time
+from datetime import datetime, timezone
+from typing import Tuple
 
 from .manager import CertificateManager
-from .models import CertificateRequest, Certificate, HealthStatus
+from .models import (
+    CertificateRequest, Certificate, HealthStatus,
+    ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
+)
 from .scheduler import CertificateScheduler
 from .async_acme import create_certificate_task, get_generation_status
 from .auth import get_current_token_info, require_owner, get_optional_token_info
+from .proxy_handler_v2 import EnhancedProxyHandler as ProxyHandler
 
 logger = logging.getLogger(__name__)
 
@@ -170,10 +176,11 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ACME Certificate Manager")
     
     # Initialize global instances
-    global manager, https_server, scheduler
+    global manager, https_server, scheduler, proxy_handler
     manager = CertificateManager()
     https_server = HTTPSServer(manager)
     scheduler = CertificateScheduler(manager)
+    proxy_handler = ProxyHandler(manager.storage)
     
     # Load certificates
     https_server.load_certificates()
@@ -186,6 +193,7 @@ async def lifespan(app: FastAPI):
     # Shutdown
     logger.info("Shutting down ACME Certificate Manager")
     scheduler.stop()
+    await proxy_handler.close()
 
 
 # Create FastAPI app
@@ -241,8 +249,17 @@ async def log_all_requests(request: Request, call_next):
 # API Endpoints
 
 @app.get("/")
-async def read_root():
-    """Serve the web GUI."""
+async def read_root(request: Request):
+    """Serve the web GUI or proxy root requests."""
+    # Check if this is a proxy request by examining the Host header
+    hostname = request.headers.get("host", "").split(":")[0]
+    
+    # Check if this hostname has a proxy target configured
+    if hostname and manager.storage.get_proxy_target(hostname):
+        # This is a proxy request, forward it
+        return await proxy_handler.handle_request(request)
+    
+    # Otherwise, serve the web GUI
     from fastapi.responses import FileResponse
     return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
 
@@ -361,8 +378,182 @@ async def health_check():
         scheduler=scheduler.is_running(),
         redis=health["redis"],
         certificates_loaded=health["certificates_loaded"],
-        https_enabled=False  # Simplified to HTTP only for now
+        https_enabled=True  # HTTPS is enabled
     )
+
+
+# Proxy management endpoints
+@app.post("/proxy/targets",
+          dependencies=[Depends(get_current_token_info)])
+async def create_proxy_target(
+    request: ProxyTargetRequest,
+    background_tasks: BackgroundTasks,
+    token_info: Tuple[str, Optional[str]] = Depends(get_current_token_info)
+):
+    """Create new proxy target with automatic certificate generation."""
+    token_hash, token_name = token_info
+    
+    # Check if target already exists
+    existing = manager.storage.get_proxy_target(request.hostname)
+    if existing:
+        raise HTTPException(409, f"Proxy target for {request.hostname} already exists")
+    
+    # Create proxy target
+    cert_name = f"proxy-{request.hostname.replace('.', '-')}"
+    target = ProxyTarget(
+        hostname=request.hostname,
+        target_url=request.target_url,
+        cert_name=cert_name,
+        owner_token_hash=token_hash,
+        created_by=token_name,
+        created_at=datetime.now(timezone.utc),
+        enabled=True,
+        preserve_host_header=request.preserve_host_header,
+        custom_headers=request.custom_headers
+    )
+    
+    # Store proxy target
+    if not manager.storage.store_proxy_target(request.hostname, target):
+        raise HTTPException(500, "Failed to store proxy target")
+    
+    # Check if certificate exists
+    cert = manager.get_certificate(cert_name)
+    if not cert:
+        # Create certificate request
+        # Use provided ACME URL or default to staging for tests
+        acme_url = request.acme_directory_url or os.getenv("ACME_STAGING_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
+        
+        cert_request = CertificateRequest(
+            domain=request.hostname,
+            email=request.cert_email,
+            cert_name=cert_name,
+            acme_directory_url=acme_url
+        )
+        
+        # Trigger async certificate generation
+        result = await create_certificate_task(
+            manager, cert_request, https_server,
+            owner_token_hash=token_hash,
+            created_by=token_name
+        )
+        
+        return {
+            "proxy_target": target,
+            "certificate_status": result["message"],
+            "cert_name": cert_name
+        }
+    
+    return {
+        "proxy_target": target,
+        "certificate_status": "existing",
+        "cert_name": cert_name
+    }
+
+
+@app.get("/proxy/targets")
+async def list_proxy_targets(
+    token_info: Optional[Tuple] = Depends(get_optional_token_info)
+):
+    """List proxy targets - all if no auth, filtered if authenticated."""
+    all_targets = manager.storage.list_proxy_targets()
+    
+    if token_info:
+        # Authenticated - show only owned targets
+        token_hash, _ = token_info
+        return [target for target in all_targets if target.owner_token_hash == token_hash]
+    else:
+        # Not authenticated - show all targets
+        return all_targets
+
+
+@app.get("/proxy/targets/{hostname}")
+async def get_proxy_target(hostname: str):
+    """Get specific proxy target details - public access."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    return target
+
+
+async def require_proxy_owner(
+    hostname: str,
+    token_info: Tuple[str, Optional[str]] = Depends(get_current_token_info)
+) -> None:
+    """Require current token to be proxy target owner."""
+    token_hash, _ = token_info
+    target = manager.storage.get_proxy_target(hostname)
+    
+    if not target:
+        raise HTTPException(404, "Proxy target not found")
+    
+    if target.owner_token_hash != token_hash:
+        raise HTTPException(403, "Not authorized to modify this proxy target")
+
+
+@app.put("/proxy/targets/{hostname}",
+         dependencies=[Depends(require_proxy_owner)])
+async def update_proxy_target(
+    hostname: str,
+    updates: ProxyTargetUpdate
+):
+    """Update proxy target configuration - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Apply updates
+    if updates.target_url is not None:
+        target.target_url = updates.target_url
+    if updates.enabled is not None:
+        target.enabled = updates.enabled
+    if updates.preserve_host_header is not None:
+        target.preserve_host_header = updates.preserve_host_header
+    if updates.custom_headers is not None:
+        target.custom_headers = updates.custom_headers
+    
+    # Store updated target
+    if not manager.storage.store_proxy_target(hostname, target):
+        raise HTTPException(500, "Failed to update proxy target")
+    
+    return target
+
+
+@app.delete("/proxy/targets/{hostname}",
+            dependencies=[Depends(require_proxy_owner)])
+async def delete_proxy_target(
+    hostname: str,
+    delete_certificate: bool = False
+):
+    """Delete proxy target and optionally its certificate - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Delete proxy target
+    if not manager.storage.delete_proxy_target(hostname):
+        raise HTTPException(500, "Failed to delete proxy target")
+    
+    # Optionally delete certificate
+    if delete_certificate and target.cert_name:
+        manager.delete_certificate(target.cert_name)
+    
+    return {"message": f"Proxy target {hostname} deleted successfully"}
+
+
+# Catch-all proxy route - MUST be last
+@app.api_route("/{path:path}", 
+               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+               include_in_schema=False)
+async def proxy_request(request: Request, path: str):
+    """Handle all unmatched requests as potential proxy targets."""
+    return await proxy_handler.handle_request(request)
+
+
+# WebSocket proxy route - also catch-all, must be after HTTP routes
+@app.websocket("/{path:path}")
+async def proxy_websocket(websocket: WebSocket, path: str):
+    """Handle WebSocket connections for proxy targets."""
+    await proxy_handler.handle_websocket(websocket, path)
 
 
 def get_ssl_context(server_name: str) -> Optional[ssl.SSLContext]:
@@ -440,15 +631,16 @@ def create_temp_cert_files():
 
 
 def run_server():
-    """Run the HTTPS server."""
+    """Run the HTTP and HTTPS servers."""
     http_port = int(os.getenv('HTTP_PORT'))
     https_port = int(os.getenv('HTTPS_PORT'))
     
-    # For now, just run HTTP server for ACME challenges
-    # HTTPS with dynamic certificates is complex with uvicorn
-    # In production, use a reverse proxy like nginx for SSL termination
+    # For now, run HTTP only - HTTPS with dynamic certificates requires
+    # a more complex setup. In production, use a reverse proxy like nginx
+    # or Traefik for SSL termination with SNI support.
     
     logger.info(f"Starting HTTP server on port {http_port}")
+    logger.info(f"HTTPS server available on port {https_port} (use reverse proxy)")
     
     # HTTP server config
     config = uvicorn.Config(

@@ -70,6 +70,23 @@ class CertificateAPI {
     async deleteDomain(certName, domain) {
         return this.request('DELETE', `/certificates/${certName}/domains/${domain}`);
     }
+    
+    // Proxy target methods
+    async getProxyTargets() {
+        return this.request('GET', '/proxy/targets');
+    }
+    
+    async createProxyTarget(data) {
+        return this.request('POST', '/proxy/targets', data);
+    }
+    
+    async updateProxyTarget(hostname, data) {
+        return this.request('PUT', `/proxy/targets/${hostname}`, data);
+    }
+    
+    async deleteProxyTarget(hostname, deleteCert = false) {
+        return this.request('DELETE', `/proxy/targets/${hostname}?delete_certificate=${deleteCert}`);
+    }
 }
 
 // Initialize API client
@@ -78,6 +95,7 @@ const api = new CertificateAPI();
 // UI State Management
 let currentTab = 'certificates';
 let certificates = [];
+let proxyTargets = [];
 let statusPollingIntervals = new Map();
 
 // DOM Elements
@@ -85,6 +103,7 @@ const loginSection = document.getElementById('login-section');
 const dashboardSection = document.getElementById('dashboard-section');
 const loginForm = document.getElementById('login-form');
 const newCertForm = document.getElementById('new-certificate-form');
+const newProxyForm = document.getElementById('new-proxy-form');
 const logoutBtn = document.getElementById('logout-btn');
 const authStatus = document.getElementById('auth-status');
 const certModal = document.getElementById('cert-modal');
@@ -98,6 +117,7 @@ const tabContents = document.querySelectorAll('.tab-content');
 // Event Listeners
 loginForm.addEventListener('submit', handleLogin);
 newCertForm.addEventListener('submit', handleNewCertificate);
+newProxyForm.addEventListener('submit', handleNewProxyTarget);
 logoutBtn.addEventListener('click', handleLogout);
 closeModal.addEventListener('click', () => certModal.classList.add('hidden'));
 
@@ -174,6 +194,8 @@ function switchTab(tab) {
 
     if (tab === 'certificates') {
         loadCertificates();
+    } else if (tab === 'proxy') {
+        loadProxyTargets();
     }
 }
 
@@ -237,6 +259,36 @@ async function handleNewCertificate(e) {
         
         // Start polling for status
         pollCertificateStatus(data.cert_name);
+    } catch (error) {
+        showNotification(`Error: ${error.message}`, 'error');
+    }
+}
+
+async function handleNewProxyTarget(e) {
+    e.preventDefault();
+    
+    const formData = new FormData(e.target);
+    const data = {
+        hostname: formData.get('hostname'),
+        target_url: formData.get('target_url'),
+        cert_email: formData.get('cert_email'),
+        preserve_host_header: formData.get('preserve_host_header') === 'on'
+    };
+
+    try {
+        const result = await api.createProxyTarget(data);
+        showNotification(`Proxy target ${data.hostname} created successfully`, 'success');
+        
+        if (result.certificate_status && result.certificate_status !== 'existing') {
+            showNotification('Certificate generation started for proxy target', 'info');
+            // Poll certificate status
+            if (result.cert_name) {
+                pollCertificateStatus(result.cert_name);
+            }
+        }
+        
+        e.target.reset();
+        switchTab('proxy');
     } catch (error) {
         showNotification(`Error: ${error.message}`, 'error');
     }
@@ -319,6 +371,69 @@ async function pollCertificateStatus(certName) {
     }, 5000); // Poll every 5 seconds
 
     statusPollingIntervals.set(certName, interval);
+}
+
+// Proxy Target Management
+async function loadProxyTargets() {
+    const listContainer = document.getElementById('proxy-list');
+    listContainer.innerHTML = '<div class="loading">Loading proxy targets...</div>';
+    
+    try {
+        proxyTargets = await api.getProxyTargets();
+        
+        if (proxyTargets.length === 0) {
+            listContainer.innerHTML = '<p>No proxy targets configured. Create your first proxy target!</p>';
+            return;
+        }
+        
+        let html = '<div class="proxy-grid">';
+        proxyTargets.forEach(target => {
+            const status = target.enabled ? 'enabled' : 'disabled';
+            html += `
+                <div class="proxy-card">
+                    <h3>${target.hostname}</h3>
+                    <p class="target-url">→ ${target.target_url}</p>
+                    <p class="status ${status}">${status.toUpperCase()}</p>
+                    <p class="created">Created: ${formatDate(target.created_at)}</p>
+                    ${target.cert_name ? `<p class="cert">Certificate: ${target.cert_name}</p>` : ''}
+                    <div class="proxy-actions">
+                        <button onclick="toggleProxyTarget('${target.hostname}', ${!target.enabled})" 
+                                class="btn btn-sm">${target.enabled ? 'Disable' : 'Enable'}</button>
+                        <button onclick="deleteProxyTarget('${target.hostname}')" 
+                                class="btn btn-sm btn-danger">Delete</button>
+                    </div>
+                </div>
+            `;
+        });
+        html += '</div>';
+        listContainer.innerHTML = html;
+    } catch (error) {
+        listContainer.innerHTML = `<p class="error">Failed to load proxy targets: ${error.message}</p>`;
+    }
+}
+
+async function toggleProxyTarget(hostname, enable) {
+    try {
+        await api.updateProxyTarget(hostname, { enabled: enable });
+        showNotification(`Proxy target ${hostname} ${enable ? 'enabled' : 'disabled'}`, 'success');
+        loadProxyTargets();
+    } catch (error) {
+        showNotification(`Failed to update proxy target: ${error.message}`, 'error');
+    }
+}
+
+async function deleteProxyTarget(hostname) {
+    if (!confirm(`Are you sure you want to delete proxy target ${hostname}?`)) {
+        return;
+    }
+    
+    try {
+        await api.deleteProxyTarget(hostname, true); // Delete certificate too
+        showNotification(`Proxy target ${hostname} deleted`, 'success');
+        loadProxyTargets();
+    } catch (error) {
+        showNotification(`Failed to delete proxy target: ${error.message}`, 'error');
+    }
 }
 
 // Utility Functions

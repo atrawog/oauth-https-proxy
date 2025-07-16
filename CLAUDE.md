@@ -277,6 +277,113 @@ Response:
 - `ACME_POLL_INTERVAL_SECONDS`: Poll interval (default: 2)
 - `RENEWAL_CHECK_INTERVAL`: Renewal check interval (default: 86400)
 - `RENEWAL_THRESHOLD_DAYS`: Days before expiry to renew (default: 30)
+- `TEST_PROXY_TARGET_URL`: Default proxy target for tests (default: https://example.com)
+
+## Proxy Manager
+
+Dynamic reverse proxy with automatic SSL certificate provisioning. Maps hostnames to upstream targets with per-request certificate generation, WebSocket support, and streaming capabilities.
+
+### Components
+
+#### Enhanced Proxy Handler
+- HTTP/S request forwarding with streaming
+- WebSocket connection proxying
+- Bidirectional message forwarding
+- Header filtering and X-Forwarded headers
+- Host header preservation options
+- Custom header injection
+
+#### Proxy Target Management
+- Redis-backed configuration storage
+- Ownership model via token authentication
+- Enable/disable without deletion
+- Automatic certificate provisioning
+- Per-target ACME directory URL
+
+### Data Schema
+
+#### Redis Keys
+- `proxy:{hostname}` - Proxy target JSON object
+
+#### Proxy Target Object
+```
+{
+  "hostname": "api.example.com",
+  "target_url": "http://backend:8080",
+  "cert_name": "proxy-api-example-com",
+  "owner_token_hash": "sha256:...",
+  "created_by": "prod-token",
+  "created_at": "2024-01-15T00:00:00Z",
+  "enabled": true,
+  "preserve_host_header": true,
+  "custom_headers": {"X-Custom": "value"}
+}
+```
+
+### API Endpoints
+
+#### `POST /proxy/targets`
+Request:
+```
+{
+  "hostname": "api.example.com",
+  "target_url": "http://backend:8080",
+  "cert_email": "admin@example.com",
+  "acme_directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
+  "preserve_host_header": true,
+  "custom_headers": {"X-Custom": "value"}
+}
+```
+Response:
+```
+{
+  "proxy_target": {...},
+  "certificate_status": "Certificate generation started for api.example.com"
+}
+```
+
+#### `GET /proxy/targets`
+Response: Array of proxy targets (filtered by token if authenticated)
+
+#### `GET /proxy/targets/{hostname}`
+Response: Proxy target object
+
+#### `PUT /proxy/targets/{hostname}`
+Request: Partial update fields
+
+#### `DELETE /proxy/targets/{hostname}?delete_certificate=true`
+Response: 200 OK
+
+### Proxy Operations
+
+#### Request Routing
+- Catch-all routes for unmatched paths
+- SNI-based routing for HTTPS
+- Host header inspection
+- Automatic forwarding to configured targets
+
+#### WebSocket Support
+- Upgrade request detection
+- Bidirectional connection establishment
+- Message type preservation (text/binary)
+- Connection error handling
+
+#### Streaming
+- Chunked transfer encoding
+- Server-Sent Events (SSE)
+- Large file transfers
+- No buffering for real-time data
+
+### Proxy Commands
+```bash
+# Proxy target management
+just proxy-cleanup [hostname]     # Clean up proxy targets
+just test-proxy-basic            # Test basic functionality
+just test-proxy-example          # Test with example.com
+just test-websocket-proxy        # Test WebSocket proxying
+just test-streaming-proxy        # Test streaming/SSE
+just test-proxy-all             # Run all proxy tests
+```
 
 ## Recent Updates
 

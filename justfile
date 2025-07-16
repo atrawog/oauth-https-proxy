@@ -342,3 +342,47 @@ test-all-commands:
 # Clean up all tokens and certificates
 cleanup-all:
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cleanup_all.py
+
+# Show status of all services
+status:
+    docker-compose ps
+
+# Show logs from services
+logs *args='':
+    docker-compose logs {{args}}
+
+# Test basic proxy functionality
+test-proxy-basic:
+    pixi run python scripts/test_proxy_basic.py
+
+# Test proxy request forwarding
+test-proxy-requests:
+    pixi run python scripts/test_proxy_requests.py
+
+# Test WebSocket proxy functionality
+test-websocket-proxy:
+    pixi run python scripts/test_websocket_proxy.py
+
+# Test streaming and SSE proxy functionality
+test-streaming-proxy:
+    pixi run python scripts/test_streaming_proxy.py
+
+# Run all proxy tests
+test-proxy-all:
+    pixi run python scripts/test_proxy_all.py
+
+# Clean up proxy targets
+proxy-cleanup hostname="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    if [ -z "{{hostname}}" ]; then
+        echo "Cleaning up all proxy targets..."
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cleanup.py
+    else
+        echo "Cleaning up proxy target: {{hostname}}"
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cleanup.py "{{hostname}}"
+    fi
+
+# Test proxy with example.com
+test-proxy-example:
+    pixi run python scripts/test_proxy_example.py
