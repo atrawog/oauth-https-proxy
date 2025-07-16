@@ -107,7 +107,7 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
 
 ### Core Libraries
 - `fastapi` - REST API framework
-- `uvicorn` - ASGI server with SSL/TLS support
+- `hypercorn` - ASGI server with SSL/TLS support (NO UVICORN!)
 - `acme` - ACME protocol implementation
 - `josepy` - JOSE protocol for ACME
 - `cryptography` - X.509 certificates and RSA keys
@@ -124,12 +124,16 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
 - Redis-exclusive storage
 - Async certificate generation (non-blocking)
 
-### HTTPS Server
-- HTTP operation (port 80) for ACME challenges
-- HTTPS operation (port 443) with dynamic certificates
-- SNI support for multi-domain certificates
-- Dynamic SSL context loading
-- Zero-downtime certificate updates
+### HTTPS Server Architecture
+
+**CRITICAL**: Python SSL module CANNOT dynamically switch contexts during SNI callback!
+
+**SOLUTION**: Unified Multi-Instance Dispatcher Architecture
+- Each domain runs its own dedicated Hypercorn instance
+- Separate instances for HTTP and HTTPS per domain
+- Main dispatchers on ports 80/443 route to instances
+- NO dynamic SSL context switching - each host has dedicated context
+- Zero-downtime certificate updates via instance restart
 
 ## Data Schema
 
@@ -315,6 +319,8 @@ Dynamic reverse proxy with automatic SSL certificate provisioning. Maps hostname
   "created_by": "prod-token",
   "created_at": "2024-01-15T00:00:00Z",
   "enabled": true,
+  "enable_http": true,      // PER-PROTOCOL CONTROL!
+  "enable_https": true,     // INDEPENDENT HTTP/HTTPS!
   "preserve_host_header": true,
   "custom_headers": {"X-Custom": "value"}
 }
@@ -329,11 +335,16 @@ Request:
   "hostname": "api.example.com",
   "target_url": "http://backend:8080",
   "acme_directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
+  "enable_http": true,      // DEFAULT: true
+  "enable_https": true,     // DEFAULT: true  
   "preserve_host_header": true,
   "custom_headers": {"X-Custom": "value"}
 }
 ```
-Note: Certificate email is inherited from token's cert_email setting.
+**CRITICAL**: 
+- `enable_https: false` = NO certificate generation!
+- `enable_http: false` = HTTP requests return 404!
+- Certificate email inherited from token's cert_email setting
 Response:
 ```
 {
@@ -404,7 +415,10 @@ Response:
 
 ### Proxy Commands
 ```bash
-# Proxy target management
+# Proxy target management - NOW WITH PROTOCOL CONTROL!
+just proxy-create <hostname> <target-url> <token> [staging] [preserve-host] [enable-http] [enable-https]
+just proxy-update <hostname> <token> --enable-http=false  # DISABLE HTTP!
+just proxy-update <hostname> <token> --enable-https=false # DISABLE HTTPS!
 just proxy-cleanup [hostname]     # Clean up proxy targets
 just test-proxy-basic            # Test basic functionality
 just test-proxy-example          # Test with example.com
@@ -472,3 +486,42 @@ just cert-renew <name> <token> [force]   # Renew certificate
 - Proxy targets use token's cert_email if not specified in request
 - Web GUI renamed to "MCP Proxy Manager"
 - Email fields removed from cert/proxy forms - managed via Settings tab
+
+## CRITICAL ARCHITECTURE: Unified Multi-Instance Dispatcher
+
+**PROBLEM**: Python's SSL module CANNOT return different SSL contexts in SNI callback!
+
+**FAILED APPROACHES**:
+- Dynamic SSL context switching (IMPOSSIBLE!)
+- Returning SSLContext from SNI callback (TypeError!)
+- Single Hypercorn with multiple certificates (NOT SUPPORTED!)
+
+**WORKING SOLUTION**: Each domain gets DEDICATED Hypercorn instance!
+
+### Architecture Components
+
+1. **Unified Dispatcher** (`unified_dispatcher.py`)
+   - Main HTTP dispatcher on port 80
+   - Main HTTPS dispatcher on port 443
+   - Routes by hostname to correct instance
+   - Parses SNI from TLS ClientHello
+   - Parses Host header from HTTP requests
+
+2. **Domain Instances** 
+   - Each domain runs OWN Hypercorn instance
+   - Separate ports: HTTP (9000+), HTTPS (10000+)
+   - Respects `enable_http`/`enable_https` flags
+   - Pre-loaded SSL context - NO SWITCHING!
+
+3. **Protocol Control**
+   - `enable_http: false` = NO HTTP instance created
+   - `enable_https: false` = NO HTTPS instance created
+   - Independent control per domain
+   - Certificate generation ONLY if HTTPS enabled
+
+### Implementation Flow
+```
+Client → Port 80/443 → Dispatcher → Extract hostname → Route to instance → Proxy response
+```
+
+**REMEMBER**: Each host MUST have dedicated SSL context! NO EXCEPTIONS!

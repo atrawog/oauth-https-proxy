@@ -85,6 +85,8 @@ class ProxyTarget(BaseModel):
     created_by: Optional[str] = None # Token name for display
     created_at: datetime
     enabled: bool = True
+    enable_http: bool = True        # Enable HTTP (port 80) forwarding
+    enable_https: bool = True       # Enable HTTPS (port 443) forwarding
     preserve_host_header: bool = True
     custom_headers: Optional[Dict[str, str]] = None
     
@@ -100,6 +102,8 @@ class ProxyTargetRequest(BaseModel):
     target_url: str
     cert_email: Optional[str] = None  # Optional - uses token's cert_email if not provided
     acme_directory_url: Optional[str] = None  # Allow specifying staging URL
+    enable_http: bool = True        # Enable HTTP (port 80) forwarding
+    enable_https: bool = True       # Enable HTTPS (port 443) forwarding
     preserve_host_header: bool = True
     custom_headers: Optional[Dict[str, str]] = None
     
@@ -124,6 +128,8 @@ class ProxyTargetUpdate(BaseModel):
     """Request model for updating proxy target."""
     target_url: Optional[str] = None
     enabled: Optional[bool] = None
+    enable_http: Optional[bool] = None
+    enable_https: Optional[bool] = None
     preserve_host_header: Optional[bool] = None
     custom_headers: Optional[Dict[str, str]] = None
     

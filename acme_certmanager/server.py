@@ -14,6 +14,7 @@ from fastapi.responses import PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
+from .unified_dispatcher import UnifiedMultiInstanceServer
 import time
 from datetime import datetime, timezone
 from typing import Tuple
@@ -469,6 +470,8 @@ async def create_proxy_target(
         created_by=token_name,
         created_at=datetime.now(timezone.utc),
         enabled=True,
+        enable_http=request.enable_http,
+        enable_https=request.enable_https,
         preserve_host_header=request.preserve_host_header,
         custom_headers=request.custom_headers
     )
@@ -477,42 +480,43 @@ async def create_proxy_target(
     if not manager.storage.store_proxy_target(request.hostname, target):
         raise HTTPException(500, "Failed to store proxy target")
     
-    # Check if certificate exists
-    cert = manager.get_certificate(cert_name)
-    if not cert:
-        # Create certificate request
-        # Use provided ACME URL or default to staging for tests
-        acme_url = request.acme_directory_url or os.getenv("ACME_STAGING_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
+    # Check if certificate exists and HTTPS is enabled
+    cert_status = "not_required"
+    if request.enable_https:
+        cert = manager.get_certificate(cert_name)
+        if not cert:
+            # Create certificate request
+            # Use provided ACME URL or default to staging for tests
+            acme_url = request.acme_directory_url or os.getenv("ACME_STAGING_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
+            
+            # Use token's cert_email if not provided in request
+            email = request.cert_email if request.cert_email else cert_email
+            if not email:
+                raise HTTPException(400, "Certificate email required - provide in request or configure in token")
+            
+            cert_request = CertificateRequest(
+                domain=request.hostname,
+                email=email,
+                cert_name=cert_name,
+                acme_directory_url=acme_url
+            )
+            
+            # Trigger async certificate generation
+            result = await create_certificate_task(
+                manager, cert_request, https_server,
+                owner_token_hash=token_hash,
+                created_by=token_name
+            )
+            cert_status = result["message"]
+        else:
+            cert_status = "existing"
+    else:
+        logger.info(f"HTTPS disabled for {request.hostname}, skipping certificate generation")
         
-        # Use token's cert_email if not provided in request
-        email = request.cert_email if request.cert_email else cert_email
-        if not email:
-            raise HTTPException(400, "Certificate email required - provide in request or configure in token")
-        
-        cert_request = CertificateRequest(
-            domain=request.hostname,
-            email=email,
-            cert_name=cert_name,
-            acme_directory_url=acme_url
-        )
-        
-        # Trigger async certificate generation
-        result = await create_certificate_task(
-            manager, cert_request, https_server,
-            owner_token_hash=token_hash,
-            created_by=token_name
-        )
-        
-        return {
-            "proxy_target": target,
-            "certificate_status": result["message"],
-            "cert_name": cert_name
-        }
-    
     return {
         "proxy_target": target,
-        "certificate_status": "existing",
-        "cert_name": cert_name
+        "certificate_status": cert_status,
+        "cert_name": cert_name if request.enable_https else None
     }
 
 
@@ -572,6 +576,10 @@ async def update_proxy_target(
         target.target_url = updates.target_url
     if updates.enabled is not None:
         target.enabled = updates.enabled
+    if updates.enable_http is not None:
+        target.enable_http = updates.enable_http
+    if updates.enable_https is not None:
+        target.enable_https = updates.enable_https
     if updates.preserve_host_header is not None:
         target.preserve_host_header = updates.preserve_host_header
     if updates.custom_headers is not None:
@@ -696,74 +704,15 @@ def create_temp_cert_files():
     return cert_file.name, key_file.name
 
 
-def create_ssl_context_with_sni(https_server_instance=None):
-    """Create SSL context with SNI callback for dynamic certificate selection."""
-    # Create base SSL context
-    ssl_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
-    
-    # SNI callback function
-    def sni_callback(ssl_obj, server_name, original_context):
-        if not server_name:
-            return None
-            
-        logger.debug(f"SNI callback for: {server_name}")
-        
-        # Use the global https_server if available, otherwise use the passed instance
-        server = https_server if https_server else https_server_instance
-        if not server:
-            logger.warning("No HTTPS server instance available for SNI callback")
-            return None
-        
-        # Check exact match
-        if server_name in server.ssl_contexts:
-            logger.info(f"Serving certificate for: {server_name}")
-            return server.ssl_contexts[server_name]
-        
-        # Check wildcard
-        parts = server_name.split('.')
-        if len(parts) > 2:
-            wildcard = f"*.{'.'.join(parts[1:])}"
-            if wildcard in server.ssl_contexts:
-                logger.info(f"Serving wildcard certificate for: {server_name}")
-                return server.ssl_contexts[wildcard]
-        
-        # Use default
-        if server.default_context:
-            logger.info(f"Serving default certificate for: {server_name}")
-            return server.default_context
-            
-        logger.warning(f"No certificate found for: {server_name}")
-        return None
-    
-    # Set the SNI callback
-    ssl_context.sni_callback = sni_callback
-    
-    # Use the global https_server if available, otherwise use the passed instance
-    server = https_server if https_server else https_server_instance
-    
-    # Load a default certificate (required for initial handshake)
-    if server and server.default_context:
-        # Use the default context but keep our SNI callback
-        ssl_context = server.default_context
-        ssl_context.sni_callback = sni_callback
-    else:
-        # Create self-signed as fallback
-        cert_file, key_file = create_temp_cert_files()
-        ssl_context.load_cert_chain(cert_file, key_file)
-        ssl_context.sni_callback = sni_callback
-        os.unlink(cert_file)
-        os.unlink(key_file)
-    
-    return ssl_context
 
 
 def run_server():
-    """Run the HTTP and HTTPS servers with Hypercorn."""
+    """Run unified server with multi-instance architecture."""
     http_port = int(os.getenv('HTTP_PORT'))
     https_port = int(os.getenv('HTTPS_PORT'))
     
-    logger.info(f"Starting HTTP server on port {http_port}")
-    logger.info(f"Starting HTTPS server on port {https_port} with dynamic SNI support")
+    logger.info(f"Starting unified dispatcher on HTTP port {http_port} and HTTPS port {https_port}")
+    logger.info("Each domain will have its own dedicated Hypercorn instance")
     
     # Initialize the global instances before running the server
     global manager, https_server, scheduler, proxy_handler
@@ -777,50 +726,22 @@ def run_server():
     if not proxy_handler:
         proxy_handler = ProxyHandler(manager.storage)
     
-    async def run_hypercorn():
-        # Create SSL context with SNI support
-        ssl_context = create_ssl_context_with_sni(https_server)
-        
-        # Configure Hypercorn
-        config = HypercornConfig()
-        config.bind = [
-            f"{os.getenv('SERVER_HOST')}:{http_port}",  # HTTP
-            f"{os.getenv('SERVER_HOST')}:{https_port}"  # HTTPS
-        ]
-        config.loglevel = os.getenv('LOG_LEVEL', 'INFO').upper()
-        
-        # Create temp cert files for Hypercorn config (it requires file paths)
-        # But the SNI callback will override with the correct cert
-        cert_file, key_file = create_temp_cert_files()
-        config.certfile = cert_file
-        config.keyfile = key_file
-        
-        # Override the SSL context creation in Hypercorn
-        original_create_ssl_context = config.create_ssl_context
-        
-        def custom_create_ssl_context():
-            # Return our context with SNI callback
-            return ssl_context
-        
-        config.create_ssl_context = custom_create_ssl_context
+    async def run_servers():
+        # Start scheduler
+        scheduler.start()
         
         try:
-            # Start the scheduler
-            scheduler.start()
-            
-            # Run the server
-            await serve(app, config)
+            # Run unified multi-instance server with dispatchers for both HTTP and HTTPS
+            unified_server = UnifiedMultiInstanceServer(
+                https_server_instance=https_server,
+                app=app,
+                host=os.getenv('SERVER_HOST')
+            )
+            await unified_server.run()
         finally:
-            # Stop the scheduler
             scheduler.stop()
-            
-            # Clean up temp files
-            if os.path.exists(cert_file):
-                os.unlink(cert_file)
-            if os.path.exists(key_file):
-                os.unlink(key_file)
     
-    asyncio.run(run_hypercorn())
+    asyncio.run(run_servers())
 
 
 if __name__ == "__main__":

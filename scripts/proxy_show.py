@@ -30,6 +30,8 @@ def show_proxy_target(hostname: str):
             print(f"Target URL: {proxy.get('target_url', 'Unknown')}")
             print(f"Certificate: {proxy.get('cert_name', 'N/A')}")
             print(f"Enabled: {'Yes' if proxy.get('enabled', True) else 'No'}")
+            print(f"HTTP Enabled: {'Yes' if proxy.get('enable_http', True) else 'No'}")
+            print(f"HTTPS Enabled: {'Yes' if proxy.get('enable_https', True) else 'No'}")
             print(f"Preserve Host Header: {'Yes' if proxy.get('preserve_host_header', True) else 'No'}")
             print(f"Owner: {proxy.get('created_by', 'Unknown')}")
             
@@ -46,10 +48,14 @@ def show_proxy_target(hostname: str):
                 for key, value in custom_headers.items():
                     print(f"  {key}: {value}")
             
-            # Show URL examples
+            # Show URL examples based on enabled protocols
             print("\nExample URLs:")
-            print(f"  https://{hostname}/ → {proxy.get('target_url', 'Unknown')}")
-            print(f"  https://{hostname}/api/v1 → {proxy.get('target_url', 'Unknown')}/api/v1")
+            if proxy.get('enable_http', True):
+                print(f"  http://{hostname}/ → {proxy.get('target_url', 'Unknown')}")
+                print(f"  http://{hostname}/api/v1 → {proxy.get('target_url', 'Unknown')}/api/v1")
+            if proxy.get('enable_https', True):
+                print(f"  https://{hostname}/ → {proxy.get('target_url', 'Unknown')}")
+                print(f"  https://{hostname}/api/v1 → {proxy.get('target_url', 'Unknown')}/api/v1")
             
             return True
         elif response.status_code == 404:

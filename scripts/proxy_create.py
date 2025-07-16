@@ -5,7 +5,8 @@ import sys
 import os
 import requests
 
-def create_proxy_target(hostname: str, target_url: str, token: str, staging: bool = False, preserve_host: bool = True):
+def create_proxy_target(hostname: str, target_url: str, token: str, staging: bool = False, 
+                        preserve_host: bool = True, enable_http: bool = True, enable_https: bool = True):
     """Create a new proxy target."""
     if not all([hostname, target_url, token]):
         print("Error: All parameters are required")
@@ -21,7 +22,9 @@ def create_proxy_target(hostname: str, target_url: str, token: str, staging: boo
     data = {
         "hostname": hostname,
         "target_url": target_url,
-        "preserve_host_header": preserve_host
+        "preserve_host_header": preserve_host,
+        "enable_http": enable_http,
+        "enable_https": enable_https
     }
     
     # Add staging ACME directory URL if requested
@@ -45,6 +48,8 @@ def create_proxy_target(hostname: str, target_url: str, token: str, staging: boo
             print(f"  Target URL: {proxy_target.get('target_url')}")
             print(f"  Certificate: {proxy_target.get('cert_name')}")
             print(f"  Enabled: {proxy_target.get('enabled', True)}")
+            print(f"  HTTP Enabled: {proxy_target.get('enable_http', True)}")
+            print(f"  HTTPS Enabled: {proxy_target.get('enable_https', True)}")
             print(f"  Preserve Host: {proxy_target.get('preserve_host_header', True)}")
             print(f"  Environment: {'Staging' if staging else 'Production'}")
             
@@ -65,7 +70,11 @@ def create_proxy_target(hostname: str, target_url: str, token: str, staging: boo
 
 if __name__ == "__main__":
     if len(sys.argv) < 4:
-        print("Usage: proxy_create.py <hostname> <target_url> <token> [staging] [preserve_host]")
+        print("Usage: proxy_create.py <hostname> <target_url> <token> [staging] [preserve_host] [enable_http] [enable_https]")
+        print("  staging: 'true' or 'false' (default: false)")
+        print("  preserve_host: 'true' or 'false' (default: true)")
+        print("  enable_http: 'true' or 'false' (default: true)")
+        print("  enable_https: 'true' or 'false' (default: true)")
         sys.exit(1)
     
     hostname = sys.argv[1]
@@ -73,6 +82,8 @@ if __name__ == "__main__":
     token = sys.argv[3]
     staging = len(sys.argv) > 4 and sys.argv[4].lower() in ['staging', 'true', '1']
     preserve_host = True if len(sys.argv) <= 5 else sys.argv[5].lower() in ['true', '1']
+    enable_http = True if len(sys.argv) <= 6 else sys.argv[6].lower() in ['true', '1']
+    enable_https = True if len(sys.argv) <= 7 else sys.argv[7].lower() in ['true', '1']
     
-    if not create_proxy_target(hostname, target_url, token, staging, preserve_host):
+    if not create_proxy_target(hostname, target_url, token, staging, preserve_host, enable_http, enable_https):
         sys.exit(1)

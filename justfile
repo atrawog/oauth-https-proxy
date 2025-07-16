@@ -392,10 +392,11 @@ proxy-cleanup hostname="":
     fi
 
 # Create a new proxy target (can use token name instead of full token)
-proxy-create hostname target-url token-name staging="false" preserve-host="true":
+proxy-create hostname target-url token-name staging="false" preserve-host="true" enable-http="true" enable-https="true":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Creating proxy target: {{hostname}} -> {{target-url}}"
+    echo "  HTTP: {{enable-http}}, HTTPS: {{enable-https}}"
     # Get the actual token if a name was provided
     token="{{token-name}}"
     if [[ ! "$token" =~ ^acm_ ]]; then
@@ -406,7 +407,7 @@ proxy-create hostname target-url token-name staging="false" preserve-host="true"
             exit 1
         fi
     fi
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py "{{hostname}}" "{{target-url}}" "$token" "{{staging}}" "{{preserve-host}}"
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py "{{hostname}}" "{{target-url}}" "$token" "{{staging}}" "{{preserve-host}}" "{{enable-http}}" "{{enable-https}}"
 
 # List all proxy targets (optionally filtered by token)
 proxy-list token-name="":

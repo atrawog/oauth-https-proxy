@@ -8,7 +8,8 @@ import json
 import argparse
 
 def update_proxy_target(hostname: str, token: str, target_url: str = None, 
-                       preserve_host: bool = None, custom_headers: str = None):
+                       preserve_host: bool = None, custom_headers: str = None,
+                       enable_http: bool = None, enable_https: bool = None):
     """Update a proxy target."""
     if not all([hostname, token]):
         print("Error: Hostname and token are required")
@@ -27,6 +28,10 @@ def update_proxy_target(hostname: str, token: str, target_url: str = None,
         data["target_url"] = target_url
     if preserve_host is not None:
         data["preserve_host_header"] = preserve_host
+    if enable_http is not None:
+        data["enable_http"] = enable_http
+    if enable_https is not None:
+        data["enable_https"] = enable_https
     if custom_headers is not None:
         try:
             data["custom_headers"] = json.loads(custom_headers)
@@ -52,6 +57,8 @@ def update_proxy_target(hostname: str, token: str, target_url: str = None,
             print(f"  Target URL: {proxy.get('target_url')}")
             print(f"  Certificate: {proxy.get('cert_name')}")
             print(f"  Enabled: {proxy.get('enabled', True)}")
+            print(f"  HTTP Enabled: {proxy.get('enable_http', True)}")
+            print(f"  HTTPS Enabled: {proxy.get('enable_https', True)}")
             print(f"  Preserve Host: {proxy.get('preserve_host_header', True)}")
             
             custom_hdrs = proxy.get('custom_headers')
@@ -83,20 +90,32 @@ if __name__ == "__main__":
     parser.add_argument('token', help='API token for authentication')
     parser.add_argument('--target-url', help='New target URL')
     parser.add_argument('--preserve-host', help='Preserve host header (true/false)')
+    parser.add_argument('--enable-http', help='Enable HTTP (true/false)')
+    parser.add_argument('--enable-https', help='Enable HTTPS (true/false)')
     parser.add_argument('--custom-headers', help='Custom headers as JSON string')
     
     args = parser.parse_args()
     
-    # Convert preserve-host to boolean if provided
+    # Convert booleans if provided
     preserve_host = None
     if args.preserve_host:
         preserve_host = args.preserve_host.lower() in ['true', '1', 'yes']
+    
+    enable_http = None
+    if args.enable_http:
+        enable_http = args.enable_http.lower() in ['true', '1', 'yes']
+        
+    enable_https = None
+    if args.enable_https:
+        enable_https = args.enable_https.lower() in ['true', '1', 'yes']
     
     if not update_proxy_target(
         args.hostname, 
         args.token,
         args.target_url,
         preserve_host,
-        args.custom_headers
+        args.custom_headers,
+        enable_http,
+        enable_https
     ):
         sys.exit(1)
