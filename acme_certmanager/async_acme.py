@@ -12,7 +12,7 @@ from .models import CertificateRequest, Certificate
 logger = logging.getLogger(__name__)
 
 # Global executor for running blocking operations
-max_workers = int(os.getenv('CERT_GEN_MAX_WORKERS'))
+max_workers = int(os.getenv('CERT_GEN_MAX_WORKERS', '5'))
 executor = ThreadPoolExecutor(max_workers=max_workers)
 
 # Track ongoing certificate generations

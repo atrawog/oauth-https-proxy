@@ -1,12 +1,16 @@
 """Authentication and authorization module."""
 
 import hashlib
+import os
 import secrets
 from typing import Optional, Tuple, Union
 from fastapi import HTTPException, Depends, Request
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 security = HTTPBearer()
+
+# Admin token from environment
+ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")
 
 
 def hash_token(token: str) -> str:
@@ -17,6 +21,11 @@ def hash_token(token: str) -> str:
 def generate_token() -> str:
     """Generate cryptographically secure API token."""
     return f"acm_{secrets.token_urlsafe(32)}"
+
+
+def is_admin_token(token: str) -> bool:
+    """Check if token is the admin token."""
+    return ADMIN_TOKEN and token == ADMIN_TOKEN
 
 
 async def get_current_token(
@@ -49,6 +58,11 @@ async def get_current_token_info(
     from .server import manager  # Import here to avoid circular import
     
     token = credentials.credentials
+    
+    # Special handling for admin token
+    if is_admin_token(token):
+        return hash_token(token), "ADMIN", "admin@system.local"
+    
     token_hash = hash_token(token)
     
     # Check if token exists in storage
@@ -70,7 +84,12 @@ async def require_owner(
     """
     from .server import manager  # Import here to avoid circular import
     
-    token_hash, _, _ = token_info
+    token_hash, token_name, _ = token_info
+    
+    # Admin token has full access
+    if token_name == "ADMIN":
+        return
+    
     certificate = manager.storage.get_certificate(cert_name)
     
     if not certificate:
@@ -93,6 +112,11 @@ async def get_optional_token_info(
         return None
     
     token = auth_header.split(" ", 1)[1]
+    
+    # Special handling for admin token
+    if is_admin_token(token):
+        return hash_token(token), "ADMIN", "admin@system.local"
+    
     token_hash = hash_token(token)
     
     from .server import manager  # Import here to avoid circular import
@@ -104,3 +128,55 @@ async def get_optional_token_info(
         return None
     
     return token_hash, token_data.get("name"), token_data.get("cert_email")
+
+
+async def require_proxy_owner(
+    hostname: str,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+) -> None:
+    """Require current token to be proxy target owner.
+    
+    Raises:
+        HTTPException: If not authorized or proxy target not found
+    """
+    from .server import manager  # Import here to avoid circular import
+    
+    token_hash, token_name, _ = token_info
+    
+    # Admin token has full access
+    if token_name == "ADMIN":
+        return
+    
+    target = manager.storage.get_proxy_target(hostname)
+    
+    if not target:
+        raise HTTPException(404, "Proxy target not found")
+    
+    if target.owner_token_hash != token_hash:
+        raise HTTPException(403, "Not authorized to modify this proxy target")
+
+
+async def require_route_owner(
+    route_id: str,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+) -> None:
+    """Require current token to be route owner.
+    
+    Raises:
+        HTTPException: If not authorized or route not found
+    """
+    from .server import manager  # Import here to avoid circular import
+    
+    token_hash, token_name, _ = token_info
+    
+    # Admin token has full access
+    if token_name == "ADMIN":
+        return
+    
+    route = manager.storage.get_route(route_id)
+    
+    if not route:
+        raise HTTPException(404, "Route not found")
+    
+    if route.owner_token_hash != token_hash:
+        raise HTTPException(403, "Not authorized to modify this route")

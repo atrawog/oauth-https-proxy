@@ -27,7 +27,10 @@ from .models import (
 from .routes import Route, RouteCreateRequest, RouteUpdateRequest, RouteTargetType
 from .scheduler import CertificateScheduler
 from .async_acme import create_certificate_task, get_generation_status
-from .auth import get_current_token_info, require_owner, get_optional_token_info
+from .auth import (
+    get_current_token_info, require_owner, get_optional_token_info,
+    require_proxy_owner, require_route_owner
+)
 from .proxy_handler_v2 import EnhancedProxyHandler as ProxyHandler
 
 logger = logging.getLogger(__name__)
@@ -285,31 +288,35 @@ async def create_certificate(
     return result
 
 
-@app.get("/certificates")
+@app.get("/certificates",
+         dependencies=[Depends(get_current_token_info)])
 async def list_certificates(
-    token_info: Optional[Tuple[str, Optional[str], Optional[str]]] = Depends(get_optional_token_info)
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ):
-    """List certificates - all if no auth, filtered if authenticated."""
+    """List certificates - filtered by ownership or all for admin."""
     all_certs = manager.list_certificates()
     
-    if token_info:
-        # Authenticated - show only owned certificates
-        token_hash, _, _ = token_info
-        return [cert for cert in all_certs if cert.owner_token_hash == token_hash]
-    else:
-        # Not authenticated - show all certificates
+    token_hash, token_name, _ = token_info
+    
+    # Admin sees all certificates
+    if token_name == "ADMIN":
         return all_certs
+    
+    # Regular users see only their own certificates
+    return [cert for cert in all_certs if cert.owner_token_hash == token_hash]
 
 
-@app.get("/certificates/{cert_name}/status")
+@app.get("/certificates/{cert_name}/status",
+         dependencies=[Depends(get_current_token_info)])
 async def get_certificate_status(cert_name: str):
     """Get status of certificate generation."""
     return get_generation_status(cert_name)
 
 
-@app.get("/certificates/{cert_name}", response_model=Certificate)
+@app.get("/certificates/{cert_name}", response_model=Certificate,
+         dependencies=[Depends(get_current_token_info)])
 async def get_certificate(cert_name: str):
-    """Get certificate by name - public access."""
+    """Get certificate by name."""
     certificate = manager.get_certificate(cert_name)
     if not certificate:
         raise HTTPException(status_code=404, detail="Certificate not found")
@@ -532,44 +539,33 @@ async def create_proxy_target(
     }
 
 
-@app.get("/proxy/targets")
+@app.get("/proxy/targets",
+         dependencies=[Depends(get_current_token_info)])
 async def list_proxy_targets(
-    token_info: Optional[Tuple[str, Optional[str], Optional[str]]] = Depends(get_optional_token_info)
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ):
-    """List proxy targets - all if no auth, filtered if authenticated."""
+    """List proxy targets - filtered by ownership or all for admin."""
     all_targets = manager.storage.list_proxy_targets()
     
-    if token_info:
-        # Authenticated - show only owned targets
-        token_hash, _, _ = token_info
-        return [target for target in all_targets if target.owner_token_hash == token_hash]
-    else:
-        # Not authenticated - show all targets
+    token_hash, token_name, _ = token_info
+    
+    # Admin sees all proxy targets
+    if token_name == "ADMIN":
         return all_targets
+    
+    # Regular users see only their own targets
+    return [target for target in all_targets if target.owner_token_hash == token_hash]
 
 
-@app.get("/proxy/targets/{hostname}")
+@app.get("/proxy/targets/{hostname}",
+         dependencies=[Depends(get_current_token_info)])
 async def get_proxy_target(hostname: str):
-    """Get specific proxy target details - public access."""
+    """Get specific proxy target details."""
     target = manager.storage.get_proxy_target(hostname)
     if not target:
         raise HTTPException(404, f"Proxy target {hostname} not found")
     return target
 
-
-async def require_proxy_owner(
-    hostname: str,
-    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
-) -> None:
-    """Require current token to be proxy target owner."""
-    token_hash, _, _ = token_info
-    target = manager.storage.get_proxy_target(hostname)
-    
-    if not target:
-        raise HTTPException(404, "Proxy target not found")
-    
-    if target.owner_token_hash != token_hash:
-        raise HTTPException(403, "Not authorized to modify this proxy target")
 
 
 @app.put("/proxy/targets/{hostname}",
@@ -667,14 +663,16 @@ async def create_route(
     return route
 
 
-@app.get("/routes")
+@app.get("/routes",
+         dependencies=[Depends(get_current_token_info)])
 async def list_routes():
     """List all routing rules sorted by priority."""
     routes = manager.storage.list_routes()
     return routes
 
 
-@app.get("/routes/{route_id}")
+@app.get("/routes/{route_id}",
+         dependencies=[Depends(get_current_token_info)])
 async def get_route(route_id: str):
     """Get specific route details."""
     route = manager.storage.get_route(route_id)
@@ -684,23 +682,16 @@ async def get_route(route_id: str):
 
 
 @app.put("/routes/{route_id}",
-         dependencies=[Depends(get_current_token_info)])
+         dependencies=[Depends(require_route_owner)])
 async def update_route(
     route_id: str,
-    request: RouteUpdateRequest,
-    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    request: RouteUpdateRequest
 ):
     """Update an existing route."""
-    token_hash, _, _ = token_info
-    
     # Get existing route
     route = manager.storage.get_route(route_id)
     if not route:
         raise HTTPException(404, f"Route {route_id} not found")
-    
-    # Check ownership
-    if route.owner_token_hash and route.owner_token_hash != token_hash:
-        raise HTTPException(403, f"You don't have permission to modify route {route_id}")
     
     # Update fields
     update_data = request.dict(exclude_unset=True)
@@ -728,21 +719,14 @@ async def update_route(
 
 
 @app.delete("/routes/{route_id}",
-            dependencies=[Depends(get_current_token_info)])
+            dependencies=[Depends(require_route_owner)])
 async def delete_route(
-    route_id: str,
-    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    route_id: str
 ):
     """Delete a route."""
-    token_hash, _, _ = token_info
-    
     route = manager.storage.get_route(route_id)
     if not route:
         raise HTTPException(404, f"Route {route_id} not found")
-    
-    # Check ownership
-    if route.owner_token_hash and route.owner_token_hash != token_hash:
-        raise HTTPException(403, f"You don't have permission to delete route {route_id}")
     
     if not manager.storage.delete_route(route_id):
         raise HTTPException(500, "Failed to delete route")
