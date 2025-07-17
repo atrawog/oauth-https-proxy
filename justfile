@@ -150,13 +150,21 @@ test-timing:
 test-external:
     pixi run python scripts/test_external_access.py
 
-# Generate a new API token
+# Generate a new API token (defaults to ADMIN_EMAIL)
 token-generate name cert-email="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Generating API token: {{name}}"
-    if [ -n "{{cert-email}}" ]; then
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}" "{{cert-email}}"
+    
+    # Use ADMIN_EMAIL as default if no email provided
+    email="{{cert-email}}"
+    if [ -z "$email" ] && [ -n "${ADMIN_EMAIL:-}" ]; then
+        email="${ADMIN_EMAIL}"
+        echo "Using default email: $email"
+    fi
+    
+    if [ -n "$email" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}" "$email"
     else
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{name}}"
     fi
@@ -269,14 +277,33 @@ token-show name:
     set -euo pipefail
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{name}}"
 
-# Create a new certificate (can use token name instead of full token)
-cert-create name domain email token-name staging="false":
+# Create a new certificate (defaults to ADMIN_TOKEN and ADMIN_EMAIL)
+cert-create name domain email="" token-name="" staging="false":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Creating certificate: {{name}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_EMAIL as default if no email provided
+    cert_email="{{email}}"
+    if [ -z "$cert_email" ]; then
+        cert_email="${ADMIN_EMAIL:-}"
+        if [ -z "$cert_email" ]; then
+            echo "Error: No email provided and ADMIN_EMAIL not set"
+            exit 1
+        fi
+        echo "Using default email: $cert_email"
+    fi
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -284,7 +311,7 @@ cert-create name domain email token-name staging="false":
             exit 1
         fi
     fi
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create.py "{{name}}" "{{domain}}" "{{email}}" "$token" "{{staging}}"
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create.py "{{name}}" "{{domain}}" "$cert_email" "$token" "{{staging}}"
 
 # Show certificate details (token optional for public certs, can use token name)
 cert-show name token="" pem="":
@@ -311,13 +338,19 @@ cert-show name token="" pem="":
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_show.py "{{name}}"
     fi
 
-# List all certificates (optionally filtered by token)
+# List all certificates (defaults to ADMIN_TOKEN to see all)
 cert-list token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{token-name}}" ]; then
-        echo "Listing all certificates..."
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_list.py
+        # Use ADMIN_TOKEN by default to list all certificates
+        if [ -n "${ADMIN_TOKEN:-}" ]; then
+            echo "Listing all certificates (using admin token)..."
+            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_list.py "${ADMIN_TOKEN}"
+        else
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
     else
         echo "Listing certificates for token..."
         # Get the actual token if a name was provided
@@ -333,14 +366,22 @@ cert-list token-name="":
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_list.py "$token"
     fi
 
-# Delete a certificate (can use token name instead of full token)
-cert-delete name token-name force="":
+# Delete a certificate (defaults to ADMIN_TOKEN)
+cert-delete name token-name="" force="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Deleting certificate: {{name}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -354,14 +395,22 @@ cert-delete name token-name force="":
         docker exec -it mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_delete.py "{{name}}" "$token"
     fi
 
-# Renew a certificate (can use token name instead of full token)
-cert-renew name token-name force="":
+# Renew a certificate (defaults to ADMIN_TOKEN)
+cert-renew name token-name="" force="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Renewing certificate: {{name}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -389,9 +438,21 @@ cert-status name token="" wait="":
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}"
     fi
 
-# Test authorization system
-test-auth token:
-    pixi run python scripts/test_auth.py "{{token}}"
+# Test authorization system (defaults to ADMIN_TOKEN)
+test-auth token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    # Use ADMIN_TOKEN as default if no token provided
+    auth_token="{{token}}"
+    if [ -z "$auth_token" ]; then
+        auth_token="${ADMIN_TOKEN:-}"
+        if [ -z "$auth_token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    fi
+    pixi run python scripts/test_auth.py "$auth_token"
 
 # Test web GUI (optionally with token)
 test-webgui token="":
@@ -412,6 +473,10 @@ test-cert-commands:
 # Test all token and cert commands
 test-all-commands:
     pixi run python scripts/test_all_commands.py
+
+# Test all commands with authentication defaults
+test-commands-auth:
+    pixi run python scripts/test_commands_auth.py
 
 # Clean up all tokens and certificates
 cleanup-all:
@@ -457,15 +522,23 @@ proxy-cleanup hostname="":
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cleanup.py "{{hostname}}"
     fi
 
-# Create a new proxy target (can use token name instead of full token)
-proxy-create hostname target-url token-name staging="false" preserve-host="true" enable-http="true" enable-https="true":
+# Create a new proxy target (defaults to ADMIN_TOKEN)
+proxy-create hostname target-url token-name="" staging="false" preserve-host="true" enable-http="true" enable-https="true":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Creating proxy target: {{hostname}} -> {{target-url}}"
     echo "  HTTP: {{enable-http}}, HTTPS: {{enable-https}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -475,13 +548,19 @@ proxy-create hostname target-url token-name staging="false" preserve-host="true"
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py "{{hostname}}" "{{target-url}}" "$token" "{{staging}}" "{{preserve-host}}" "{{enable-http}}" "{{enable-https}}"
 
-# List all proxy targets (optionally filtered by token)
+# List all proxy targets (defaults to ADMIN_TOKEN to see all)
 proxy-list token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     if [ -z "{{token-name}}" ]; then
-        echo "Listing all proxy targets..."
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py
+        # Use ADMIN_TOKEN by default to list all proxy targets
+        if [ -n "${ADMIN_TOKEN:-}" ]; then
+            echo "Listing all proxy targets (using admin token)..."
+            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py "${ADMIN_TOKEN}"
+        else
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
     else
         echo "Listing proxy targets for token..."
         # Get the actual token if a name was provided
@@ -504,14 +583,22 @@ proxy-show hostname:
     echo "Showing proxy target: {{hostname}}"
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_show.py "{{hostname}}"
 
-# Update proxy target (can use token name instead of full token)
-proxy-update hostname token-name target-url="" preserve-host="" custom-headers="":
+# Update proxy target (defaults to ADMIN_TOKEN)
+proxy-update hostname token-name="" target-url="" preserve-host="" custom-headers="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Updating proxy target: {{hostname}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -535,14 +622,22 @@ proxy-update hostname token-name target-url="" preserve-host="" custom-headers="
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_update.py "{{hostname}}" "$token" "${args[@]}"
     fi
 
-# Delete a proxy target (can use token name instead of full token)
-proxy-delete hostname token-name delete-cert="false" force="":
+# Delete a proxy target (defaults to ADMIN_TOKEN)
+proxy-delete hostname token-name="" delete-cert="false" force="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Deleting proxy target: {{hostname}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -571,14 +666,22 @@ proxy-delete hostname token-name delete-cert="false" force="":
         fi
     fi
 
-# Enable a proxy target (can use token name instead of full token)
-proxy-enable hostname token-name:
+# Enable a proxy target (defaults to ADMIN_TOKEN)
+proxy-enable hostname token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Enabling proxy target: {{hostname}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -588,14 +691,22 @@ proxy-enable hostname token-name:
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_enable.py "{{hostname}}" "$token"
 
-# Disable a proxy target (can use token name instead of full token)
-proxy-disable hostname token-name:
+# Disable a proxy target (defaults to ADMIN_TOKEN)
+proxy-disable hostname token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Disabling proxy target: {{hostname}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -632,12 +743,18 @@ test-cert-email:
 # Route Management
 # ============================================================================
 
-# List all routes
+# List all routes (uses ADMIN_TOKEN for authentication)
 route-list:
     #!/usr/bin/env bash
     set -euo pipefail
-    echo "Listing all routes..."
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_list.py
+    # Routes require authentication now
+    if [ -n "${ADMIN_TOKEN:-}" ]; then
+        echo "Listing all routes (using admin token)..."
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_list.py "${ADMIN_TOKEN}"
+    else
+        echo "Error: ADMIN_TOKEN not set"
+        exit 1
+    fi
 
 # Show route details
 route-show route-id:
@@ -646,14 +763,22 @@ route-show route-id:
     echo "Showing route: {{route-id}}"
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_show.py "{{route-id}}"
 
-# Create a new route (can use token name instead of full token)
-route-create path target-type target-value token-name priority="50" methods="" is-regex="false" description="":
+# Create a new route (defaults to ADMIN_TOKEN)
+route-create path target-type target-value token-name="" priority="50" methods="" is-regex="false" description="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Creating route: {{path}} -> {{target-type}}:{{target-value}} (priority: {{priority}})"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -663,14 +788,22 @@ route-create path target-type target-value token-name priority="50" methods="" i
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py "{{path}}" "{{target-type}}" "{{target-value}}" "$token" "{{priority}}" "{{methods}}" "{{is-regex}}" "{{description}}"
 
-# Update a route (can use token name instead of full token)
-route-update route-id token-name path="" target-type="" target-value="" priority="" methods="" is-regex="" description="" enabled="":
+# Update a route (defaults to ADMIN_TOKEN)
+route-update route-id token-name="" path="" target-type="" target-value="" priority="" methods="" is-regex="" description="" enabled="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Updating route: {{route-id}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -689,14 +822,22 @@ route-update route-id token-name path="" target-type="" target-value="" priority
     [ -n "{{enabled}}" ] && args="$args --enabled '{{enabled}}'"
     eval docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_update.py "{{route-id}}" "$token" $args
 
-# Delete a route (can use token name instead of full token)
-route-delete route-id token-name:
+# Delete a route (defaults to ADMIN_TOKEN)
+route-delete route-id token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Deleting route: {{route-id}}"
-    # Get the actual token if a name was provided
+    
+    # Use ADMIN_TOKEN as default if no token provided
     token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
         echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ]; then
@@ -706,14 +847,14 @@ route-delete route-id token-name:
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_delete.py "{{route-id}}" "$token"
 
-# Enable a route (can use token name instead of full token)
-route-enable route-id token-name:
+# Enable a route (defaults to ADMIN_TOKEN)
+route-enable route-id token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     just route-update "{{route-id}}" "{{token-name}}" enabled="true"
 
-# Disable a route (can use token name instead of full token)
-route-disable route-id token-name:
+# Disable a route (defaults to ADMIN_TOKEN)
+route-disable route-id token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     just route-update "{{route-id}}" "{{token-name}}" enabled="false"
@@ -722,8 +863,8 @@ route-disable route-id token-name:
 test-routes:
     pixi run python scripts/test_routes.py
 
-# Create example routes
-route-examples token-name:
+# Create example routes (defaults to ADMIN_TOKEN)
+route-examples token-name="":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Creating example routes..."
