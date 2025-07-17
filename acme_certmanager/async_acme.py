@@ -83,6 +83,13 @@ async def create_certificate_task(
             
             logger.info(f"Certificate generation completed for {cert_name}")
             
+            # Update instance to enable HTTPS if proxy exists
+            from .unified_dispatcher import unified_server_instance
+            if unified_server_instance:
+                # Certificate may be for multiple domains, update each one
+                for domain in certificate.domains:
+                    await unified_server_instance.update_instance_certificate(domain)
+            
             # Update status to completed
             generation_results[cert_name] = {
                 "status": "completed",

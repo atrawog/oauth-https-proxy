@@ -20,6 +20,9 @@ from .routes import Route, RouteTargetType
 
 logger = logging.getLogger(__name__)
 
+# Global instance for dynamic management
+unified_server_instance = None
+
 
 class DomainInstance:
     """Represents a Hypercorn instance serving a specific set of domains."""
@@ -470,7 +473,7 @@ class UnifiedDispatcher:
             logger.error(f"Error forwarding connection: {e}")
     
     async def start(self):
-        """Start both HTTP and HTTPS dispatchers."""
+        """Start both HTTP and HTTPS dispatchers without blocking."""
         # Start HTTP dispatcher on port 80
         http_port = int(os.getenv('HTTP_PORT', '80'))
         self.http_server = await asyncio.start_server(
@@ -489,11 +492,18 @@ class UnifiedDispatcher:
         )
         logger.info(f"HTTPS Dispatcher listening on {self.host}:{https_port}")
         
-        # Run both servers
-        await asyncio.gather(
-            self.http_server.serve_forever(),
-            self.https_server.serve_forever()
-        )
+        # Create tasks for the servers but don't await them
+        # This allows the dispatcher to start without blocking
+        self.server_tasks = [
+            asyncio.create_task(self.http_server.serve_forever()),
+            asyncio.create_task(self.https_server.serve_forever())
+        ]
+        logger.info("Dispatcher servers started in background")
+    
+    async def wait_forever(self):
+        """Wait for servers to complete (they run forever)."""
+        if hasattr(self, 'server_tasks'):
+            await asyncio.gather(*self.server_tasks)
     
     async def stop(self):
         """Stop both dispatchers."""
@@ -520,8 +530,133 @@ class UnifiedMultiInstanceServer:
         self.next_http_port = 9000   # Starting port for HTTP instances
         self.next_https_port = 10000 # Starting port for HTTPS instances
         
+    async def create_instance_for_proxy(self, hostname: str):
+        """Dynamically create and start an instance for a proxy target."""
+        # Check if instance already exists
+        if hostname in self.dispatcher.hostname_to_https_port:
+            logger.info(f"Instance already exists for {hostname}")
+            return
+        
+        # Get proxy configuration
+        proxy_target = self.https_server.manager.storage.get_proxy_target(hostname)
+        if not proxy_target:
+            logger.error(f"No proxy target found for {hostname}")
+            return
+        
+        # Get certificate if HTTPS is enabled
+        cert = None
+        if proxy_target.enable_https:
+            cert_name = proxy_target.cert_name
+            cert = self.https_server.manager.get_certificate(cert_name)
+            if not cert:
+                logger.warning(f"Certificate not yet available for {hostname}, creating HTTP-only instance")
+        
+        # Create instance
+        instance = DomainInstance(
+            app=self.app,
+            domains=[hostname],
+            http_port=self.next_http_port,
+            https_port=self.next_https_port,
+            cert=cert,
+            proxy_configs={hostname: proxy_target}
+        )
+        
+        # Start the instance
+        await instance.start()
+        self.instances.append(instance)
+        
+        # Register with dispatcher
+        self.dispatcher.register_instance(
+            [hostname], 
+            self.next_http_port, 
+            self.next_https_port,
+            enable_http=proxy_target.enable_http,
+            enable_https=proxy_target.enable_https and cert is not None
+        )
+        
+        self.next_http_port += 1
+        self.next_https_port += 1
+        
+        logger.info(f"Created instance for {hostname} (HTTP:{proxy_target.enable_http}, HTTPS:{proxy_target.enable_https and cert is not None})")
+    
+    async def remove_instance_for_proxy(self, hostname: str):
+        """Remove instance for a proxy target."""
+        # Find instance serving this hostname
+        instance_to_remove = None
+        for instance in self.instances:
+            if hostname in instance.domains:
+                instance_to_remove = instance
+                break
+        
+        if not instance_to_remove:
+            logger.warning(f"No instance found for {hostname}")
+            return
+        
+        # Stop the instance
+        await instance_to_remove.stop()
+        self.instances.remove(instance_to_remove)
+        
+        # Unregister from dispatcher
+        if hostname in self.dispatcher.hostname_to_http_port:
+            del self.dispatcher.hostname_to_http_port[hostname]
+        if hostname in self.dispatcher.hostname_to_https_port:
+            del self.dispatcher.hostname_to_https_port[hostname]
+        
+        logger.info(f"Removed instance for {hostname}")
+    
+    async def update_instance_certificate(self, hostname: str):
+        """Update instance when certificate becomes available."""
+        # Get proxy configuration
+        proxy_target = self.https_server.manager.storage.get_proxy_target(hostname)
+        if not proxy_target or not proxy_target.enable_https:
+            return
+        
+        # Check if HTTPS is already enabled
+        if hostname in self.dispatcher.hostname_to_https_port:
+            logger.info(f"HTTPS already enabled for {hostname}")
+            return
+        
+        # Get certificate
+        cert = self.https_server.manager.get_certificate(proxy_target.cert_name)
+        if not cert:
+            logger.warning(f"Certificate still not available for {hostname}")
+            return
+        
+        # Find the instance
+        instance = None
+        for inst in self.instances:
+            if hostname in inst.domains:
+                instance = inst
+                break
+        
+        if not instance:
+            logger.error(f"No instance found for {hostname}")
+            return
+        
+        # Update instance with certificate
+        instance.cert = cert
+        
+        # Restart HTTPS if not already running
+        if not instance.https_process:
+            await instance.start_https()
+            
+            # Update dispatcher registration
+            self.dispatcher.register_instance(
+                [hostname], 
+                instance.http_port, 
+                instance.https_port,
+                enable_http=proxy_target.enable_http,
+                enable_https=True
+            )
+            
+            logger.info(f"HTTPS enabled for {hostname} after certificate became available")
+    
     async def run(self):
         """Run the unified multi-instance server architecture."""
+        # Set global instance for dynamic management
+        global unified_server_instance
+        unified_server_instance = self
+        
         if not self.https_server:
             logger.warning("No HTTPS server instance available")
             return
@@ -644,9 +779,16 @@ class UnifiedMultiInstanceServer:
         
         logger.info(f"Started {len(self.instances)} domain instances")
         
-        # Start the dispatcher
+        # Start the dispatcher (non-blocking now!)
+        await self.dispatcher.start()
+        
+        # The dispatcher is now running in background
+        # unified_server_instance is available for dynamic management
+        logger.info("UnifiedMultiInstanceServer fully initialized and ready for dynamic instance management")
+        
+        # Wait forever (this is where we block)
         try:
-            await self.dispatcher.start()
+            await self.dispatcher.wait_forever()
         finally:
             # Clean up instances
             for instance in self.instances:

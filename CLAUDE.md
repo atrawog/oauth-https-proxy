@@ -126,14 +126,15 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
 
 ### HTTPS Server Architecture
 
-**CRITICAL**: Python SSL module CANNOT dynamically switch contexts during SNI callback!
+**CRITICAL**: The UnifiedDispatcher must be the PRIMARY server, not FastAPI!
 
-**SOLUTION**: Unified Multi-Instance Dispatcher Architecture
-- Each domain runs its own dedicated Hypercorn instance
-- Separate instances for HTTP and HTTPS per domain
-- Main dispatchers on ports 80/443 route to instances
-- NO dynamic SSL context switching - each host has dedicated context
-- Zero-downtime certificate updates via instance restart
+**SOLUTION**: Dispatcher-Centric Architecture
+- UnifiedDispatcher owns ports 80/443 and routes ALL traffic
+- FastAPI runs as just another instance on internal port (9000)
+- Each domain gets its own dedicated Hypercorn instance
+- NO port conflicts - single point of control
+- Dynamic instance creation/deletion without race conditions
+- FastAPI is NOT special - it's just another HTTP server to route!
 
 ## Data Schema
 
@@ -533,43 +534,50 @@ just cert-renew <name> <token> [force]   # Renew certificate
 
 ## CRITICAL ARCHITECTURE: Unified Multi-Instance Dispatcher
 
-**PROBLEM**: Python's SSL module CANNOT return different SSL contexts in SNI callback!
+**FUNDAMENTAL PRINCIPLE**: UnifiedDispatcher is THE server - FastAPI is just another instance!
 
-**FAILED APPROACHES**:
-- Dynamic SSL context switching (IMPOSSIBLE!)
-- Returning SSLContext from SNI callback (TypeError!)
-- Single Hypercorn with multiple certificates (NOT SUPPORTED!)
+**CORE PROBLEM SOLVED**: No more port conflicts or race conditions!
 
-**WORKING SOLUTION**: Each domain gets DEDICATED Hypercorn instance!
+### Correct Architecture Flow
 
-### Architecture Components
-
-1. **Unified Dispatcher** (`unified_dispatcher.py`)
-   - Main HTTP dispatcher on port 80
-   - Main HTTPS dispatcher on port 443
-   - **Path-based routing via Redis-stored rules (checked FIRST)**
-   - Routes by hostname to correct instance
-   - Parses SNI from TLS ClientHello
-   - Parses Host header from HTTP requests
+1. **UnifiedDispatcher** (`unified_dispatcher.py`)
+   - Starts FIRST and owns ports 80/443
+   - Creates ALL instances including FastAPI
+   - Routes ALL traffic based on hostname/path
+   - Manages dynamic instance lifecycle
 
 2. **Domain Instances** 
-   - Each domain runs OWN Hypercorn instance
-   - Separate ports: HTTP (9000+), HTTPS (10000+)
-   - Respects `enable_http`/`enable_https` flags
-   - Pre-loaded SSL context - NO SWITCHING!
-   - **NEW: Dynamic domains use routing rules - no instance required!**
+   - FastAPI runs on localhost:9000 (just another instance!)
+   - Each domain gets dedicated Hypercorn instance
+   - Internal ports: HTTP (9000+), HTTPS (10000+)
+   - Pre-loaded SSL contexts per instance
+   - Dynamic creation/deletion without restarts
 
-3. **Protocol Control**
-   - `enable_http: false` = NO HTTP instance created
-   - `enable_https: false` = NO HTTPS instance created
-   - Independent control per domain
-   - Certificate generation ONLY if HTTPS enabled
+3. **Startup Sequence**
+   ```
+   1. UnifiedDispatcher starts → Owns ports 80/443
+   2. Creates FastAPI instance → localhost:9000
+   3. Creates domain instances → As configured
+   4. Routes all traffic → No conflicts!
+   ```
+
+### Why This Architecture Works
+
+- **Single Control Point**: Dispatcher owns all routing decisions
+- **No Race Conditions**: Dispatcher exists before any API calls
+- **Dynamic Management**: Add/remove instances without restart
+- **Clean Separation**: Each instance isolated with its own context
+- **FastAPI Integration**: API/GUI work through standard routing
 
 ### Implementation Flow
 ```
-Client → Port 80/443 → Dispatcher → Check routes → Match path? → Route by rule
-                                 ↓
-                          No path match → Extract hostname → Route to instance → Proxy response
+Client → Port 80/443 → UnifiedDispatcher
+                              ↓
+                    Route by hostname/path
+                              ↓
+         ├→ localhost → FastAPI instance (9000)
+         ├→ fetcher.example.com → Fetcher instance (9001)
+         └→ other.example.com → Other instance (9002)
 ```
 
-**KEY IMPROVEMENT**: ACME challenges ALWAYS work via routing rules - no instance needed!
+**KEY INSIGHT**: FastAPI doesn't need to know about SSL, routing, or instances - it just serves API endpoints on its internal port!

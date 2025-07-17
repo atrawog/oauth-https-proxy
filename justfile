@@ -1076,3 +1076,133 @@ gui-remove hostname force="":
     echo "just gui-setup {{hostname}}"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Setup fetcher-mcp with proper domain
+fetcher-setup hostname staging="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Fetcher MCP Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Validate hostname is FQDN
+    if ! echo "{{hostname}}" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'; then
+        echo "✗ Error: Invalid hostname format: {{hostname}}"
+        echo ""
+        echo "A valid hostname must be a fully qualified domain name (FQDN)."
+        echo "Examples:"
+        echo "  ✓ fetcher.example.com"
+        echo "  ✓ mcp.yourdomain.com"
+        echo "  ✓ scraper.company.io"
+        echo ""
+        exit 1
+    fi
+    
+    # Check admin token
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first to create an admin token."
+        exit 1
+    fi
+    
+    # Check if fetcher-mcp is running
+    if ! docker-compose ps fetcher-mcp 2>/dev/null | grep -q "Up"; then
+        echo "⚠ Warning: fetcher-mcp container is not running"
+        echo ""
+        echo "Starting fetcher-mcp..."
+        docker-compose up -d fetcher-mcp
+        echo "Waiting for fetcher-mcp to be ready..."
+        sleep 10
+    fi
+    
+    # Create proxy
+    echo "▶ Creating proxy: {{hostname}} → fetcher-mcp:3000"
+    output=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py \
+        "{{hostname}}" \
+        "http://fetcher-mcp:3000" \
+        "${ADMIN_TOKEN}" \
+        "" "{{staging}}" 2>&1)
+    
+    echo "$output"
+    
+    echo ""
+    echo "✅ Fetcher MCP configured!"
+    echo ""
+    echo "Access via:"
+    echo "  🔗 HTTP:  http://{{hostname}}/"
+    echo "  🔒 HTTPS: https://{{hostname}}/"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Remove fetcher proxy
+fetcher-remove hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Remove Fetcher Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Check if proxy exists
+    if ! docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_show.py "{{hostname}}" 2>/dev/null | grep -q "fetcher-mcp:3000"; then
+        echo "⚠ No fetcher proxy configuration found for: {{hostname}}"
+        exit 1
+    fi
+    
+    # Get admin token
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first"
+        exit 1
+    fi
+    
+    # Delete proxy
+    echo "▶ Removing proxy configuration..."
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py \
+        "{{hostname}}" "${ADMIN_TOKEN}" --delete-certificate
+    
+    echo ""
+    echo "✅ Fetcher proxy removed: {{hostname}}"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Check fetcher status
+fetcher-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Fetcher MCP Status"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    echo "▶ Container Status:"
+    docker-compose ps fetcher-mcp 2>/dev/null || echo "  fetcher-mcp container not found"
+    
+    echo ""
+    echo "▶ Proxy Configurations:"
+    proxies=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py 2>/dev/null | grep "fetcher-mcp:3000" || echo "")
+    
+    if [ -n "$proxies" ]; then
+        echo "$proxies" | while IFS= read -r line; do
+            hostname=$(echo "$line" | awk '{print $1}')
+            echo "  • $hostname → fetcher-mcp:3000"
+        done
+    else
+        echo "  No fetcher proxies configured"
+        echo ""
+        echo "  To set up fetcher access, run:"
+        echo "  just fetcher-setup <hostname>"
+    fi
+    
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# View fetcher logs
+fetcher-logs:
+    docker-compose logs -f fetcher-mcp

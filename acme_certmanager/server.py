@@ -512,6 +512,18 @@ async def create_proxy_target(
             cert_status = "existing"
     else:
         logger.info(f"HTTPS disabled for {request.hostname}, skipping certificate generation")
+    
+    # Create instance for the proxy
+    from .unified_dispatcher import unified_server_instance
+    logger.info(f"Attempting to create instance for {request.hostname}, unified_server_instance: {unified_server_instance}")
+    if unified_server_instance:
+        try:
+            await unified_server_instance.create_instance_for_proxy(request.hostname)
+            logger.info(f"Instance creation initiated for {request.hostname}")
+        except Exception as e:
+            logger.error(f"Failed to create instance for {request.hostname}: {e}")
+    else:
+        logger.warning("Unified server not yet initialized, instance will be created on restart")
         
     return {
         "proxy_target": target,
@@ -606,6 +618,11 @@ async def delete_proxy_target(
     # Delete proxy target
     if not manager.storage.delete_proxy_target(hostname):
         raise HTTPException(500, "Failed to delete proxy target")
+    
+    # Remove instance for the proxy
+    from .unified_dispatcher import unified_server_instance
+    if unified_server_instance:
+        await unified_server_instance.remove_instance_for_proxy(hostname)
     
     # Optionally delete certificate
     if delete_certificate and target.cert_name:
