@@ -536,38 +536,53 @@ just cert-renew <name> <token> [force]   # Renew certificate
 
 **FUNDAMENTAL PRINCIPLE**: UnifiedDispatcher is THE server - FastAPI is just another instance!
 
-**CORE PROBLEM SOLVED**: No more port conflicts or race conditions!
+**CORE PROBLEM SOLVED**: No more port conflicts, race conditions, or lifespan side effects!
+
+### Dual App Architecture
+
+1. **API App (FastAPI)** - ONLY for localhost
+   - Full FastAPI with lifespan management
+   - API endpoints, Web GUI, certificate management
+   - Global resources like scheduler
+   - Runs on localhost:9000
+
+2. **Proxy App (Minimal ASGI)** - For ALL proxy domains
+   - Lightweight Starlette app
+   - ONLY proxy forwarding, no API
+   - Per-instance httpx client (isolated)
+   - NO lifespan side effects
+   - Clean shutdown without affecting others
 
 ### Correct Architecture Flow
 
 1. **UnifiedDispatcher** (`unified_dispatcher.py`)
    - Starts FIRST and owns ports 80/443
-   - Creates ALL instances including FastAPI
+   - Creates appropriate app type per instance
    - Routes ALL traffic based on hostname/path
    - Manages dynamic instance lifecycle
 
-2. **Domain Instances** 
-   - FastAPI runs on localhost:9000 (just another instance!)
-   - Each domain gets dedicated Hypercorn instance
+2. **Domain Instances** (`DomainInstance` class)
+   - `is_api_instance=True` → FastAPI app (localhost only)
+   - `is_api_instance=False` → Proxy app (all other domains)
+   - Each gets dedicated Hypercorn instance
    - Internal ports: HTTP (9000+), HTTPS (10000+)
    - Pre-loaded SSL contexts per instance
-   - Dynamic creation/deletion without restarts
 
 3. **Startup Sequence**
    ```
    1. UnifiedDispatcher starts → Owns ports 80/443
-   2. Creates FastAPI instance → localhost:9000
-   3. Creates domain instances → As configured
-   4. Routes all traffic → No conflicts!
+   2. Creates localhost API instance → FastAPI on 9000
+   3. Creates proxy instances → Proxy app on 9001+
+   4. Routes all traffic → No conflicts or side effects!
    ```
 
 ### Why This Architecture Works
 
-- **Single Control Point**: Dispatcher owns all routing decisions
-- **No Race Conditions**: Dispatcher exists before any API calls
-- **Dynamic Management**: Add/remove instances without restart
-- **Clean Separation**: Each instance isolated with its own context
-- **FastAPI Integration**: API/GUI work through standard routing
+- **Instance Isolation**: Each proxy has its own app and httpx client
+- **No Shared State**: Deleting proxy doesn't affect others
+- **Clean Logs**: No misleading "Shutting down ACME" messages
+- **No Client Errors**: Each instance manages its own resources
+- **Dynamic Management**: Add/remove instances without side effects
 
 ### Implementation Flow
 ```
@@ -575,9 +590,41 @@ Client → Port 80/443 → UnifiedDispatcher
                               ↓
                     Route by hostname/path
                               ↓
-         ├→ localhost → FastAPI instance (9000)
-         ├→ fetcher.example.com → Fetcher instance (9001)
-         └→ other.example.com → Other instance (9002)
+         ├→ localhost → FastAPI App (API/GUI)
+         ├→ fetcher.example.com → Proxy App (forwarding only)
+         └→ other.example.com → Proxy App (forwarding only)
 ```
 
-**KEY INSIGHT**: FastAPI doesn't need to know about SSL, routing, or instances - it just serves API endpoints on its internal port!
+**KEY INSIGHTS**: 
+- Only localhost needs FastAPI's complexity
+- Proxy instances just forward requests - no API needed
+- Each proxy manages its own httpx client lifecycle
+- Deleting a proxy cleanly shuts down ONLY that instance
+
+## Troubleshooting
+
+### Common Issues and Solutions
+
+#### "Shutting down ACME Certificate Manager" when deleting proxy
+**Root Cause**: All instances were sharing the same FastAPI app with lifespan
+**Solution**: Implemented dual app architecture - proxy instances use minimal ASGI app
+
+#### "Cannot send a request, as the client has been closed" errors
+**Root Cause**: Global proxy_handler httpx client closed during lifespan shutdown
+**Solution**: Each proxy instance now has its own isolated httpx client
+
+#### Proxy deletion affects other proxies
+**Root Cause**: Shared state between instances via global FastAPI app
+**Solution**: Complete instance isolation with per-instance resources
+
+### Architecture Validation
+
+To verify the architecture is working correctly:
+
+1. Create a proxy: `just proxy-create test.example.com https://target.com admin`
+2. Delete the proxy: `just proxy-delete test.example.com admin "" force=1`
+3. Check logs for:
+   - ✅ "Proxy-only instance shutting down"
+   - ✅ "Stopped proxy instance for domains"
+   - ❌ NO "Shutting down ACME Certificate Manager"
+   - ❌ NO "client has been closed" errors

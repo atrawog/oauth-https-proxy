@@ -17,6 +17,7 @@ from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
 
 from .routes import Route, RouteTargetType
+from .proxy_app import create_proxy_app
 
 logger = logging.getLogger(__name__)
 
@@ -28,17 +29,24 @@ class DomainInstance:
     """Represents a Hypercorn instance serving a specific set of domains."""
     
     def __init__(self, app, domains: List[str], http_port: int, https_port: int, 
-                 cert=None, proxy_configs: Dict = None):
+                 cert=None, proxy_configs: Dict = None, is_api_instance: bool = False,
+                 storage=None):
         self.app = app
         self.domains = domains
         self.http_port = http_port
         self.https_port = https_port
         self.cert = cert
         self.proxy_configs = proxy_configs or {}
+        self.is_api_instance = is_api_instance
+        self.storage = storage
         self.http_process = None
         self.https_process = None
         self.cert_file = None
         self.key_file = None
+        
+        # For proxy-only instances, create a dedicated app
+        if not is_api_instance and storage:
+            self.app = create_proxy_app(storage)
         
     async def start(self):
         """Start HTTP and/or HTTPS instances based on proxy configuration."""
@@ -138,6 +146,12 @@ class DomainInstance:
                 pass
                 
         self.cleanup()
+        
+        # Log appropriately based on instance type
+        if self.is_api_instance:
+            logger.info(f"Stopped API instance for domains: {self.domains}")
+        else:
+            logger.info(f"Stopped proxy instance for domains: {self.domains}")
     
     def cleanup(self):
         """Clean up temporary files."""
@@ -551,14 +565,16 @@ class UnifiedMultiInstanceServer:
             if not cert:
                 logger.warning(f"Certificate not yet available for {hostname}, creating HTTP-only instance")
         
-        # Create instance
+        # Create instance - this is a proxy-only instance
         instance = DomainInstance(
             app=self.app,
             domains=[hostname],
             http_port=self.next_http_port,
             https_port=self.next_https_port,
             cert=cert,
-            proxy_configs={hostname: proxy_target}
+            proxy_configs={hostname: proxy_target},
+            is_api_instance=False,
+            storage=self.https_server.manager.storage
         )
         
         # Start the instance
@@ -694,7 +710,9 @@ class UnifiedMultiInstanceServer:
             http_port=self.next_http_port,
             https_port=self.next_https_port,
             cert=None,  # Will use self-signed
-            proxy_configs={}  # No proxy config for localhost
+            proxy_configs={},  # No proxy config for localhost
+            is_api_instance=True,  # This is the API server!
+            storage=self.https_server.manager.storage
         )
         
         self.instances.append(localhost_instance)
@@ -734,14 +752,16 @@ class UnifiedMultiInstanceServer:
             # Get proxy configs for these domains
             proxy_configs = {d: domain_to_proxy[d] for d in domains if d in domain_to_proxy}
             
-            # Create instance
+            # Create instance - these are proxy domains
             instance = DomainInstance(
                 app=self.app,
                 domains=domains,
                 http_port=self.next_http_port,
                 https_port=self.next_https_port,
                 cert=cert,
-                proxy_configs=proxy_configs
+                proxy_configs=proxy_configs,
+                is_api_instance=False,  # These are proxy instances
+                storage=self.https_server.manager.storage
             )
             
             self.instances.append(instance)
