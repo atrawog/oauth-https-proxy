@@ -464,6 +464,94 @@ select:focus {
     margin-top: 20px;
 }
 
+/* Route Styles */
+.routes-list {
+    margin-top: 20px;
+}
+
+.route-item {
+    background: white;
+    border: 1px solid #e0e0e0;
+    border-radius: 8px;
+    padding: 20px;
+    margin-bottom: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    transition: all 0.3s ease;
+}
+
+.route-item:hover {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+}
+
+.route-item.disabled {
+    opacity: 0.6;
+    background: #f5f5f5;
+}
+
+.route-info h3 {
+    margin: 0 0 10px 0;
+    color: #2c3e50;
+    font-family: 'Courier New', monospace;
+}
+
+.route-details {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.route-details .badge {
+    background: #e8f4f8;
+    color: #2980b9;
+    padding: 4px 12px;
+    border-radius: 15px;
+    font-size: 12px;
+    font-weight: 500;
+}
+
+.route-details .badge.regex {
+    background: #fef5e7;
+    color: #f39c12;
+}
+
+.route-details .badge.disabled {
+    background: #f0f0f0;
+    color: #7f8c8d;
+}
+
+.route-details .priority {
+    color: #8e44ad;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.route-details .methods {
+    color: #27ae60;
+    font-size: 13px;
+    font-weight: 500;
+}
+
+.route-info .description {
+    color: #7f8c8d;
+    font-size: 14px;
+    margin: 5px 0 0 0;
+}
+
+.route-actions {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+}
+
+.default-route {
+    color: #95a5a6;
+    font-size: 13px;
+    font-style: italic;
+}
+
 /* Footer */
 footer {
     text-align: center;

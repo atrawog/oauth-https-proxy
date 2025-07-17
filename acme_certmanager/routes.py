@@ -27,6 +27,7 @@ class Route(BaseModel):
     description: str = Field("", description="Human-readable description")
     enabled: bool = Field(True, description="Whether this route is active")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+    owner_token_hash: Optional[str] = Field(None, description="Hash of token that owns this route")
     created_by: Optional[str] = Field(None, description="Token name that created this route")
     
     @validator('methods')

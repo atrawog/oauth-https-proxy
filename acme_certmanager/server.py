@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Optional, Union
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, WebSocket
-from fastapi.responses import PlainTextResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
@@ -264,9 +264,8 @@ async def read_root(request: Request):
         # This is a proxy request, forward it
         return await proxy_handler.handle_request(request)
     
-    # Otherwise, serve the web GUI
-    from fastapi.responses import FileResponse
-    return FileResponse(os.path.join(os.path.dirname(__file__), "static", "index.html"))
+    # Otherwise redirect to the web GUI
+    return RedirectResponse(url="/static/index.html", status_code=302)
 
 
 @app.post("/certificates")
@@ -640,6 +639,7 @@ async def create_route(
         is_regex=request.is_regex,
         description=request.description,
         enabled=request.enabled,
+        owner_token_hash=token_hash,
         created_by=token_name
     )
     
@@ -670,13 +670,20 @@ async def get_route(route_id: str):
          dependencies=[Depends(get_current_token_info)])
 async def update_route(
     route_id: str,
-    request: RouteUpdateRequest
+    request: RouteUpdateRequest,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
 ):
     """Update an existing route."""
+    token_hash, _, _ = token_info
+    
     # Get existing route
     route = manager.storage.get_route(route_id)
     if not route:
         raise HTTPException(404, f"Route {route_id} not found")
+    
+    # Check ownership
+    if route.owner_token_hash and route.owner_token_hash != token_hash:
+        raise HTTPException(403, f"You don't have permission to modify route {route_id}")
     
     # Update fields
     update_data = request.dict(exclude_unset=True)
@@ -705,15 +712,20 @@ async def update_route(
 
 @app.delete("/routes/{route_id}",
             dependencies=[Depends(get_current_token_info)])
-async def delete_route(route_id: str):
+async def delete_route(
+    route_id: str,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
     """Delete a route."""
+    token_hash, _, _ = token_info
+    
     route = manager.storage.get_route(route_id)
     if not route:
         raise HTTPException(404, f"Route {route_id} not found")
     
-    # Don't allow deletion of default routes
-    if route_id in ["acme-challenge", "api", "health"]:
-        raise HTTPException(403, "Cannot delete default routes")
+    # Check ownership
+    if route.owner_token_hash and route.owner_token_hash != token_hash:
+        raise HTTPException(403, f"You don't have permission to delete route {route_id}")
     
     if not manager.storage.delete_route(route_id):
         raise HTTPException(500, "Failed to delete route")

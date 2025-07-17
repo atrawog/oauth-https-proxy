@@ -522,14 +522,28 @@ class RedisStorage:
             return False
     
     def initialize_default_routes(self) -> None:
-        """Initialize default routes if they don't exist."""
+        """Initialize default routes and ensure they have proper ownership."""
         try:
+            # Get admin token for ownership
+            admin_token = self.get_api_token_by_name("admin")
+            admin_token_hash = admin_token.get("hash") if admin_token else None
+            
             for route_config in DEFAULT_ROUTES:
                 route_id = route_config["route_id"]
                 existing = self.get_route(route_id)
+                
                 if not existing:
+                    # Create new route with admin ownership
+                    route_config["owner_token_hash"] = admin_token_hash
+                    route_config["created_by"] = "admin" if admin_token else None
                     route = Route(**route_config)
                     self.store_route(route)
                     logger.info(f"Initialized default route: {route_id}")
+                elif admin_token and not existing.owner_token_hash:
+                    # Update existing route to have admin ownership if it doesn't have an owner
+                    existing.owner_token_hash = admin_token_hash
+                    existing.created_by = "admin"
+                    self.store_route(existing)
+                    logger.info(f"Updated default route {route_id} with admin ownership")
         except Exception as e:
             logger.error(f"Failed to initialize default routes: {e}")

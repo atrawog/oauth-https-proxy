@@ -190,6 +190,72 @@ token-show-certs token="":
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token_certs.py "{{token}}"
 
+# Generate admin token and save to .env
+token-generate-admin cert-email="admin@example.com" force="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Generating Admin Token"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Check if admin token already exists in .env
+    if grep -q "^ADMIN_TOKEN=" .env 2>/dev/null && [ "{{force}}" != "true" ]; then
+        echo "⚠️  Admin token already exists in .env"
+        echo ""
+        echo "To regenerate, run: just token-generate-admin {{cert-email}} true"
+        exit 0
+    fi
+    
+    # Check if admin token exists in Redis and delete it if force is true
+    if docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "admin" 2>/dev/null | grep -q "^Token: "; then
+        if [ "{{force}}" = "true" ]; then
+            echo "Removing existing admin token from system..."
+            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_admin_token.py
+        else
+            echo "⚠️  Admin token already exists in system"
+            echo ""
+            echo "To regenerate, run: just token-generate-admin {{cert-email}} true"
+            exit 0
+        fi
+    fi
+    
+    # Generate new admin token
+    echo "Generating new admin token..."
+    output=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "admin" "{{cert-email}}")
+    
+    # Extract token from output
+    token=$(echo "$output" | grep "^Token: " | cut -d' ' -f2)
+    
+    if [ -z "$token" ]; then
+        echo "Error: Failed to generate admin token"
+        echo "Debug output:"
+        echo "$output"
+        exit 1
+    fi
+    
+    # Update or add ADMIN_TOKEN in .env
+    if grep -q "^ADMIN_TOKEN=" .env 2>/dev/null; then
+        # Replace existing token
+        sed -i.bak "s/^ADMIN_TOKEN=.*/ADMIN_TOKEN=$token/" .env
+        echo "✓ Updated ADMIN_TOKEN in .env"
+    else
+        # Add new token
+        echo "" >> .env
+        echo "# Admin token for internal use" >> .env
+        echo "ADMIN_TOKEN=$token" >> .env
+        echo "✓ Added ADMIN_TOKEN to .env"
+    fi
+    
+    echo ""
+    echo "Admin token generated successfully!"
+    echo "Token Name: admin"
+    echo "Email: {{cert-email}}"
+    echo ""
+    echo "This token is now available as ADMIN_TOKEN in .env"
+    echo "and will be used for internal operations."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
 # Show detailed info about a specific token
 token-info name:
     #!/usr/bin/env bash
@@ -758,7 +824,7 @@ demo-merged-tabs:
     pixi run python scripts/demo_merged_tabs.py
 
 # Setup GUI access with HTTPS and custom domain
-gui-setup hostname cert-email="" token-name="gui-admin" staging="false":
+gui-setup hostname cert-email="" staging="false":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -790,38 +856,32 @@ gui-setup hostname cert-email="" token-name="gui-admin" staging="false":
     echo "Setting up HTTPS access for: {{hostname}}"
     echo ""
     
-    # Step 1: Check if token exists, create if needed
-    echo "▶ Step 1: Checking API token '{{token-name}}'..."
+    # Step 1: Check for admin token
+    echo "▶ Step 1: Checking admin token..."
     
-    # Check if token exists by trying to show it
-    if docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" 2>/dev/null | grep -q "^Token: "; then
-        echo "  ✓ Token '{{token-name}}' exists"
-        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
-        existing_email=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Certificate Email: " | cut -d' ' -f3- || echo "")
+    # Check if ADMIN_TOKEN environment variable is set (loaded from .env by just)
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "  ✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first to create an admin token."
+        exit 1
+    fi
+    
+    # Use the admin token from environment
+    token="${ADMIN_TOKEN}"
+    
+    # Verify token is valid by checking if admin token exists
+    if docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "admin" 2>/dev/null | grep -q "^Token: "; then
+        echo "  ✓ Admin token verified"
+        existing_email=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "admin" | grep "^Certificate Email: " | cut -d' ' -f3- || echo "")
         if [ -n "$existing_email" ] && [ "$existing_email" != "None" ]; then
-            echo "  ✓ Using existing certificate email: $existing_email"
-        elif [ -n "{{cert-email}}" ]; then
-            echo "  ⚠ Warning: Token exists but cert-email parameter will be ignored"
-            echo "  ℹ Use 'just token-update-email {{token-name}} <new-email>' to change email"
+            echo "  ✓ Using admin token email: $existing_email"
         fi
     else
-        echo "  ⚠ Token '{{token-name}}' not found"
-        
-        # Check if cert-email is provided
-        if [ -z "{{cert-email}}" ]; then
-            echo "  ✗ Error: cert-email is required when creating a new token"
-            echo ""
-            echo "Usage: just gui-setup <hostname> <cert-email>"
-            echo "Example: just gui-setup gui.example.com admin@example.com"
-            exit 1
-        fi
-        
-        echo "  → Creating new token with email: {{cert-email}}"
-        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "{{token-name}}" "{{cert-email}}"
-        echo "  ✓ Token created successfully"
-        
-        # Get the newly created token
-        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        echo "  ✗ Error: Admin token not found in system"
+        echo ""
+        echo "Please run 'just token-generate-admin' to create the admin token."
+        exit 1
     fi
     
     echo ""
@@ -831,7 +891,7 @@ gui-setup hostname cert-email="" token-name="gui-admin" staging="false":
     
     if docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_show.py "{{hostname}}" 2>/dev/null | grep -q "Hostname:"; then
         echo "  ⚠ Proxy target for {{hostname}} already exists"
-        echo "  ℹ To reconfigure, first run: just proxy-delete {{hostname}} {{token-name}}"
+        echo "  ℹ To reconfigure, first run: just proxy-delete {{hostname}} admin"
         exit 1
     fi
     
@@ -897,8 +957,8 @@ gui-setup hostname cert-email="" token-name="gui-admin" staging="false":
     echo ""
     echo "  🔒 https://{{hostname}}"
     echo ""
-    echo "Login with token: {{token-name}}"
-    echo "(Use 'just token-show {{token-name}}' to see full token)"
+    echo "Login with admin token from .env"
+    echo "(Use 'just token-show admin' to see full token)"
     echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
@@ -963,7 +1023,7 @@ gui-status:
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Remove GUI HTTPS setup
-gui-remove hostname token-name="gui-admin" force="":
+gui-remove hostname force="":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -993,25 +1053,17 @@ gui-remove hostname token-name="gui-admin" force="":
         fi
     fi
     
-    # Get token
-    token="{{token-name}}"
-    if [[ ! "$token" =~ ^acm_ ]]; then
-        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || echo "")
-        if [ -z "$token" ]; then
-            echo "⚠ Warning: Token '{{token-name}}' not found"
-            echo "The proxy might be owned by a different token"
-            echo ""
-            read -p "Continue anyway? (y/N) " -n 1 -r
-            echo
-            if [[ ! $REPLY =~ ^[Yy]$ ]]; then
-                exit 0
-            fi
-            # Try to find the actual owner
-            echo "Attempting admin cleanup..."
-            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cleanup.py "{{hostname}}"
-            exit 0
-        fi
+    # Get admin token from environment
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "⚠ Warning: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first to create an admin token."
+        echo "Attempting cleanup without token..."
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cleanup.py "{{hostname}}"
+        exit 0
     fi
+    
+    token="${ADMIN_TOKEN}"
     
     # Delete proxy target and certificate
     echo "▶ Removing proxy configuration..."

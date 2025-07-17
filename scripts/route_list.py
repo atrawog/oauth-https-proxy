@@ -31,6 +31,11 @@ def list_routes():
             status = "✓" if route['enabled'] else "✗"
             regex = "RE" if route['is_regex'] else ""
             
+            # Get owner/creator info
+            owner = route.get('created_by', 'N/A')
+            if not owner or owner == 'None':
+                owner = 'system'
+            
             table_data.append([
                 route['priority'],
                 route['route_id'],
@@ -39,10 +44,11 @@ def list_routes():
                 methods,
                 regex,
                 status,
-                route['description'][:30] + "..." if len(route['description']) > 30 else route['description']
+                owner,
+                route['description'][:25] + "..." if len(route['description']) > 25 else route['description']
             ])
         
-        headers = ["Priority", "ID", "Path", "Target", "Methods", "Regex", "Enabled", "Description"]
+        headers = ["Priority", "ID", "Path", "Target", "Methods", "Regex", "Enabled", "Owner", "Description"]
         print(tabulate(table_data, headers=headers, tablefmt="grid"))
         print(f"\nTotal routes: {len(routes)}")
         

@@ -308,6 +308,8 @@ Dynamic reverse proxy with automatic SSL certificate provisioning. Maps hostname
 
 #### Redis Keys
 - `proxy:{hostname}` - Proxy target JSON object
+- `route:{route_id}` - Route configuration object
+- `route:priority:{priority:03d}:{route_id}` - Priority index for sorting
 
 #### Proxy Target Object
 ```
@@ -396,6 +398,12 @@ Response:
 ### Proxy Operations
 
 #### Request Routing
+- **Path-based routing with Redis-stored rules**
+- Priority-ordered route matching (highest first)
+- Route types: port, instance, or hostname targeting
+- HTTP method filtering support
+- Regex pattern matching capability
+- Default routes ensure ACME challenges work for ALL domains
 - Catch-all routes for unmatched paths
 - SNI-based routing for HTTPS
 - Host header inspection
@@ -412,6 +420,42 @@ Response:
 - Server-Sent Events (SSE)
 - Large file transfers
 - No buffering for real-time data
+
+### Route Management
+
+HTTP request routing is managed via Redis with priority-based matching:
+
+#### Route Schema
+```
+{
+  "route_id": "acme-challenge",
+  "path_pattern": "/.well-known/acme-challenge/",
+  "target_type": "instance",  // port|instance|hostname
+  "target_value": "localhost",
+  "priority": 100,            // Higher = checked first
+  "methods": ["GET"],        // Optional, null = all
+  "is_regex": false,
+  "enabled": true,
+  "description": "ACME validation"
+}
+```
+
+#### Default Routes (auto-initialized)
+- `/.well-known/acme-challenge/` → localhost (priority 100) - **Enables ACME for ALL domains**
+- `/api/` → api instance (priority 90)
+- `/health` → localhost (priority 80)
+
+#### Route Commands
+```bash
+# Route management
+just route-list                  # Show all routes
+just route-show <route-id>       # Show route details
+just route-create <path> <target-type> <target-value> <token> [priority] [methods] [is-regex] [description]
+just route-update <route-id> <token> [options]
+just route-delete <route-id> <token>
+just route-enable <route-id> <token>
+just route-disable <route-id> <token>
+```
 
 ### Proxy Commands
 ```bash
@@ -503,6 +547,7 @@ just cert-renew <name> <token> [force]   # Renew certificate
 1. **Unified Dispatcher** (`unified_dispatcher.py`)
    - Main HTTP dispatcher on port 80
    - Main HTTPS dispatcher on port 443
+   - **Path-based routing via Redis-stored rules (checked FIRST)**
    - Routes by hostname to correct instance
    - Parses SNI from TLS ClientHello
    - Parses Host header from HTTP requests
@@ -512,6 +557,7 @@ just cert-renew <name> <token> [force]   # Renew certificate
    - Separate ports: HTTP (9000+), HTTPS (10000+)
    - Respects `enable_http`/`enable_https` flags
    - Pre-loaded SSL context - NO SWITCHING!
+   - **NEW: Dynamic domains use routing rules - no instance required!**
 
 3. **Protocol Control**
    - `enable_http: false` = NO HTTP instance created
@@ -521,7 +567,9 @@ just cert-renew <name> <token> [force]   # Renew certificate
 
 ### Implementation Flow
 ```
-Client → Port 80/443 → Dispatcher → Extract hostname → Route to instance → Proxy response
+Client → Port 80/443 → Dispatcher → Check routes → Match path? → Route by rule
+                                 ↓
+                          No path match → Extract hostname → Route to instance → Proxy response
 ```
 
-**REMEMBER**: Each host MUST have dedicated SSL context! NO EXCEPTIONS!
+**KEY IMPROVEMENT**: ACME challenges ALWAYS work via routing rules - no instance needed!

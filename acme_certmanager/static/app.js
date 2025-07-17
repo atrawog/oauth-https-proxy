@@ -87,6 +87,23 @@ class CertificateAPI {
     async deleteProxyTarget(hostname, deleteCert = false) {
         return this.request('DELETE', `/proxy/targets/${hostname}?delete_certificate=${deleteCert}`);
     }
+    
+    // Route methods
+    async getRoutes() {
+        return this.request('GET', '/routes');
+    }
+    
+    async createRoute(data) {
+        return this.request('POST', '/routes', data);
+    }
+    
+    async updateRoute(routeId, data) {
+        return this.request('PUT', `/routes/${routeId}`, data);
+    }
+    
+    async deleteRoute(routeId) {
+        return this.request('DELETE', `/routes/${routeId}`);
+    }
 }
 
 // Initialize API client
@@ -96,6 +113,7 @@ const api = new CertificateAPI();
 let currentTab = 'certificates';
 let certificates = [];
 let proxyTargets = [];
+let routes = [];
 let statusPollingIntervals = new Map();
 
 // DOM Elements
@@ -122,6 +140,7 @@ newProxyForm.addEventListener('submit', handleNewProxyTarget);
 // Add button listeners
 document.getElementById('add-certificate-btn')?.addEventListener('click', toggleCertificateForm);
 document.getElementById('add-proxy-btn')?.addEventListener('click', toggleProxyForm);
+document.getElementById('add-route-btn')?.addEventListener('click', toggleRouteForm);
 
 // Settings form listener
 const emailSettingsForm = document.getElementById('email-settings-form');
@@ -205,11 +224,14 @@ function switchTab(tab) {
     // Hide forms when switching tabs
     hideCertificateForm();
     hideProxyForm();
+    hideRouteForm();
 
     if (tab === 'certificates') {
         loadCertificates();
     } else if (tab === 'proxies') {
         loadProxyTargets();
+    } else if (tab === 'routes') {
+        loadRoutes();
     } else if (tab === 'settings') {
         loadTokenInfo();
     }
@@ -271,8 +293,40 @@ function hideProxyForm() {
         addButton.textContent = 'Add Proxy';
         addButton.classList.remove('btn-secondary');
         addButton.classList.add('btn-primary');
+        newProxyForm.reset();
     }
 }
+
+// Route form toggle functions
+function toggleRouteForm() {
+    const formContainer = document.getElementById('new-route-form-container');
+    const addButton = document.getElementById('add-route-btn');
+    
+    if (formContainer.classList.contains('hidden')) {
+        formContainer.classList.remove('hidden');
+        addButton.textContent = 'Cancel';
+        addButton.classList.add('btn-secondary');
+        addButton.classList.remove('btn-primary');
+    } else {
+        hideRouteForm();
+    }
+}
+
+function hideRouteForm() {
+    const formContainer = document.getElementById('new-route-form-container');
+    const addButton = document.getElementById('add-route-btn');
+    
+    if (formContainer && addButton) {
+        formContainer.classList.add('hidden');
+        addButton.textContent = 'Add Route';
+        addButton.classList.remove('btn-secondary');
+        addButton.classList.add('btn-primary');
+        newRouteForm?.reset();
+    }
+}
+
+// Make hideRouteForm globally available
+window.hideRouteForm = hideRouteForm;
 
 // Certificate Management
 async function loadCertificates() {
@@ -541,6 +595,12 @@ function showNotification(message, type = 'info') {
 
 // Initialize on page load
 document.addEventListener('DOMContentLoaded', () => {
+    // Add route form listener
+    const newRouteForm = document.getElementById('new-route-form');
+    if (newRouteForm) {
+        newRouteForm.addEventListener('submit', handleNewRoute);
+    }
+    
     if (api.token) {
         // Test if token is still valid
         api.getCertificates()
@@ -550,6 +610,115 @@ document.addEventListener('DOMContentLoaded', () => {
         showLogin();
     }
 });
+
+// Route Management
+async function loadRoutes() {
+    const listContainer = document.getElementById('routes-list');
+    listContainer.innerHTML = '<div class="loading">Loading routes...</div>';
+    
+    try {
+        routes = await api.getRoutes();
+        displayRoutes(routes);
+    } catch (error) {
+        listContainer.innerHTML = `<div class="error">Error loading routes: ${error.message}</div>`;
+    }
+}
+
+function displayRoutes(routes) {
+    const listContainer = document.getElementById('routes-list');
+    
+    if (routes.length === 0) {
+        listContainer.innerHTML = '<div class="empty-state">No routes configured</div>';
+        return;
+    }
+    
+    const routesHtml = routes.map(route => `
+        <div class="route-item ${!route.enabled ? 'disabled' : ''}">
+            <div class="route-info">
+                <h3>${escapeHtml(route.path_pattern)}</h3>
+                <div class="route-details">
+                    <span class="badge">${route.target_type}: ${escapeHtml(route.target_value)}</span>
+                    <span class="priority">Priority: ${route.priority}</span>
+                    ${route.methods && route.methods.length > 0 ? 
+                        `<span class="methods">${route.methods.join(', ')}</span>` : 
+                        '<span class="methods">ALL</span>'
+                    }
+                    ${route.is_regex ? '<span class="badge regex">Regex</span>' : ''}
+                    ${!route.enabled ? '<span class="badge disabled">Disabled</span>' : ''}
+                </div>
+                ${route.description ? `<p class="description">${escapeHtml(route.description)}</p>` : ''}
+            </div>
+            <div class="route-actions">
+                ${`
+                    <button class="btn btn-sm" onclick="toggleRoute('${route.route_id}', ${!route.enabled})">
+                        ${route.enabled ? 'Disable' : 'Enable'}
+                    </button>
+                    <button class="btn btn-sm btn-danger" onclick="deleteRoute('${route.route_id}')">
+                        Delete
+                    </button>
+                `}
+            </div>
+        </div>
+    `).join('');
+    
+    listContainer.innerHTML = routesHtml;
+}
+
+async function handleNewRoute(e) {
+    e.preventDefault();
+    const formData = new FormData(e.target);
+    
+    const routeData = {
+        path_pattern: formData.get('path_pattern'),
+        target_type: formData.get('target_type'),
+        target_value: formData.get('target_value'),
+        priority: parseInt(formData.get('priority')) || 50,
+        methods: formData.get('methods') ? 
+            formData.get('methods').split(',').map(m => m.trim().toUpperCase()).filter(m => m) : 
+            null,
+        is_regex: formData.get('is_regex') === 'on',
+        description: formData.get('description'),
+        enabled: formData.get('enabled') === 'on'
+    };
+    
+    // Convert target_value to number if type is port
+    if (routeData.target_type === 'port') {
+        routeData.target_value = parseInt(routeData.target_value);
+    }
+    
+    try {
+        await api.createRoute(routeData);
+        showNotification('Route created successfully', 'success');
+        hideRouteForm();
+        loadRoutes();
+    } catch (error) {
+        showNotification(`Error creating route: ${error.message}`, 'error');
+    }
+}
+
+async function toggleRoute(routeId, enable) {
+    try {
+        await api.updateRoute(routeId, { enabled: enable });
+        showNotification(`Route ${enable ? 'enabled' : 'disabled'} successfully`, 'success');
+        loadRoutes();
+    } catch (error) {
+        showNotification(`Error updating route: ${error.message}`, 'error');
+    }
+}
+
+async function deleteRoute(routeId) {
+    if (!confirm('Are you sure you want to delete this route?')) {
+        return;
+    }
+    
+    try {
+        await api.deleteRoute(routeId);
+        showNotification('Route deleted successfully', 'success');
+        loadRoutes();
+    } catch (error) {
+        showNotification(`Error deleting route: ${error.message}`, 'error');
+    }
+}
 
 // Settings Management
 async function loadTokenInfo() {    
@@ -620,6 +789,16 @@ async function handleEmailUpdate(e) {
     } catch (error) {
         showNotification(`Error: ${error.message}`, 'error');
     }
+}
+
+// Helper function to escape HTML
+function escapeHtml(unsafe) {
+    return unsafe
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
 }
 
 // Clean up intervals on page unload

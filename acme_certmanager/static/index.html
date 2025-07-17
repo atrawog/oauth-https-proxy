@@ -32,6 +32,7 @@
                 <div class="tabs">
                     <button class="tab-button active" data-tab="certificates">Certificates</button>
                     <button class="tab-button" data-tab="proxies">Proxies</button>
+                    <button class="tab-button" data-tab="routes">Routes</button>
                     <button class="tab-button" data-tab="settings">Settings</button>
                 </div>
 
@@ -136,6 +137,83 @@
                             <div class="form-actions">
                                 <button type="submit" class="btn btn-primary">Create Proxy Target</button>
                                 <button type="button" class="btn btn-secondary cancel-btn" onclick="toggleProxyForm()">Cancel</button>
+                            </div>
+                        </form>
+                    </div>
+                </div>
+
+                <!-- Routes Tab -->
+                <div id="routes-tab" class="tab-content hidden">
+                    <div class="tab-header">
+                        <h2>Routes</h2>
+                        <button id="add-route-btn" class="btn btn-primary">Add Route</button>
+                    </div>
+                    
+                    <!-- Route List -->
+                    <div id="routes-list" class="routes-list">
+                        <div class="loading">Loading routes...</div>
+                    </div>
+                    
+                    <!-- New Route Form (hidden by default) -->
+                    <div id="new-route-form-container" class="form-container hidden">
+                        <h3>Add New Route</h3>
+                        <form id="new-route-form" class="form">
+                            <div class="form-group">
+                                <label for="route-path">Path Pattern*:</label>
+                                <input type="text" id="route-path" name="path_pattern" required 
+                                       placeholder="/api/v1/">
+                                <small>URL path prefix or regex pattern to match</small>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="route-target-type">Target Type*:</label>
+                                    <select id="route-target-type" name="target_type" required>
+                                        <option value="instance">Instance</option>
+                                        <option value="port">Port</option>
+                                        <option value="hostname">Hostname</option>
+                                    </select>
+                                </div>
+                                <div class="form-group">
+                                    <label for="route-target-value">Target Value*:</label>
+                                    <input type="text" id="route-target-value" name="target_value" required 
+                                           placeholder="localhost or 9000">
+                                    <small>Instance name, port number, or hostname</small>
+                                </div>
+                            </div>
+                            <div class="form-row">
+                                <div class="form-group">
+                                    <label for="route-priority">Priority:</label>
+                                    <input type="number" id="route-priority" name="priority" 
+                                           min="0" max="999" value="50">
+                                    <small>Higher values are checked first</small>
+                                </div>
+                                <div class="form-group">
+                                    <label for="route-methods">HTTP Methods:</label>
+                                    <input type="text" id="route-methods" name="methods" 
+                                           placeholder="GET,POST">
+                                    <small>Comma-separated, leave empty for all</small>
+                                </div>
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="route-is-regex" name="is_regex">
+                                    Path is a regular expression
+                                </label>
+                            </div>
+                            <div class="form-group">
+                                <label for="route-description">Description:</label>
+                                <input type="text" id="route-description" name="description" 
+                                       placeholder="Optional description">
+                            </div>
+                            <div class="form-group">
+                                <label>
+                                    <input type="checkbox" id="route-enabled" name="enabled" checked>
+                                    Route is enabled
+                                </label>
+                            </div>
+                            <div class="form-actions">
+                                <button type="submit" class="btn btn-primary">Create Route</button>
+                                <button type="button" class="btn btn-secondary" onclick="hideRouteForm()">Cancel</button>
                             </div>
                         </form>
                     </div>
