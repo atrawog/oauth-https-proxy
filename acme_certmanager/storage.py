@@ -486,8 +486,15 @@ class RedisStorage:
         """List all routes sorted by priority (highest first)."""
         try:
             routes = []
-            # Get all route IDs from priority index
-            priority_keys = self.redis_client.keys("route:priority:*")
+            # Get all route IDs from priority index using SCAN
+            priority_keys = []
+            cursor = 0
+            while True:
+                cursor, keys = self.redis_client.scan(cursor, match="route:priority:*", count=100)
+                priority_keys.extend(keys)
+                if cursor == 0:
+                    break
+            
             # Sort by priority (descending)
             priority_keys.sort(reverse=True)
             
@@ -500,8 +507,15 @@ class RedisStorage:
                     if route:
                         routes.append(route)
             
-            # Also get any routes not in priority index
-            all_route_keys = self.redis_client.keys("route:*")
+            # Also get any routes not in priority index using SCAN
+            cursor = 0
+            all_route_keys = []
+            while True:
+                cursor, keys = self.redis_client.scan(cursor, match="route:*", count=100)
+                all_route_keys.extend(keys)
+                if cursor == 0:
+                    break
+            
             for key in all_route_keys:
                 if not key.startswith("route:priority:"):
                     route_id = key.split(":", 1)[1]
