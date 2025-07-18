@@ -26,7 +26,8 @@ services:
       - REDIS_URL=redis://redis:6379/0
       - HTTP_PORT=80
       - HTTPS_PORT=443
-      - LOG_LEVEL=INFO
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+      - PYTHONPATH=/app
     env_file:
       - .env
     depends_on:
@@ -34,6 +35,10 @@ services:
         condition: service_healthy
     volumes:
       - ./logs:/app/logs
+      # Mount source code for development - allows hot-reloading
+      - ./acme_certmanager:/app/acme_certmanager
+      - ./scripts:/app/scripts
+      - ./tests:/app/tests
     networks:
       - acme_network
     healthcheck:
@@ -65,6 +70,28 @@ services:
       resources:
         limits:
           memory: 2G
+
+  # Test runner service - only runs when explicitly called
+  test-runner:
+    build: .
+    profiles: ["test"]  # Only runs when --profile test is specified
+    command: pixi run pytest tests/ -v --tb=short
+    environment:
+      - TEST_BASE_URL=http://acme-certmanager:80
+      - REDIS_URL=redis://redis:6379/0
+      - PYTHONPATH=/app
+      - LOG_LEVEL=DEBUG
+    depends_on:
+      acme-certmanager:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - acme_network
+    volumes:
+      - ./tests:/app/tests
+      - ./acme_certmanager:/app/acme_certmanager
+      - ./scripts:/app/scripts
 
 volumes:
   redis_data:

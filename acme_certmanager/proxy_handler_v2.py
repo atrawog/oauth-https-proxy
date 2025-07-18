@@ -67,17 +67,20 @@ class EnhancedProxyHandler:
         # Forward the request with streaming
         try:
             # Create streaming request
+            # Prepare request body
+            content = None
+            if request.method in ["POST", "PUT", "PATCH"]:
+                # Stream the request body
+                content = request.stream()
+            
+            # Build and send request with streaming response
             req = self.client.build_request(
                 method=request.method,
                 url=target_url,
                 headers=headers,
-                cookies=request.cookies
+                cookies=request.cookies,
+                content=content
             )
-            
-            # Stream request body if present
-            if request.method in ["POST", "PUT", "PATCH"]:
-                # Stream the request body
-                req.content = request.stream()
             
             # Send request and get streaming response
             upstream_response = await self.client.send(req, stream=True)

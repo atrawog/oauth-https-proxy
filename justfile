@@ -52,7 +52,7 @@ test-docker:
 
 # Run tests inside Docker
 test-integration:
-    docker-compose -f docker-compose.yml -f docker-compose.test.yml run --rm test-runner
+    docker-compose --profile test run --rm test-runner
 
 # Run complete test suite with Docker
 test-all:
@@ -253,6 +253,17 @@ token-generate-admin cert-email="admin@example.com" force="false":
         echo "# Admin token for internal use" >> .env
         echo "ADMIN_TOKEN=$token" >> .env
         echo "✓ Added ADMIN_TOKEN to .env"
+    fi
+    
+    # Update or add ADMIN_EMAIL in .env
+    if grep -q "^ADMIN_EMAIL=" .env 2>/dev/null; then
+        # Replace existing email
+        sed -i.bak "s/^ADMIN_EMAIL=.*/ADMIN_EMAIL={{cert-email}}/" .env
+        echo "✓ Updated ADMIN_EMAIL in .env"
+    else
+        # Add new email
+        echo "ADMIN_EMAIL={{cert-email}}" >> .env
+        echo "✓ Added ADMIN_EMAIL to .env"
     fi
     
     echo ""
