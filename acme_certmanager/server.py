@@ -68,21 +68,43 @@ class HTTPSServer:
         return context
     
     def load_certificates(self):
-        """Load all certificates from storage."""
+        """Load all certificates from storage with proxy-aware prioritization."""
         certificates = self.manager.list_certificates()
         
+        # First pass: Load all certificates into a temporary structure
+        cert_contexts = {}  # cert_name -> (context, domains)
         for certificate in certificates:
-                if certificate.fullchain_pem and certificate.private_key_pem:
-                    try:
-                        context = self.create_ssl_context(certificate)
-                        
-                        # Store context for each domain
-                        for domain in certificate.domains:
-                            self.ssl_contexts[domain] = context
-                            
-                        logger.info(f"Loaded certificate for domains: {certificate.domains}")
-                    except Exception as e:
-                        logger.error(f"Failed to load certificate {certificate.cert_name}: {e}")
+            if certificate.fullchain_pem and certificate.private_key_pem:
+                try:
+                    context = self.create_ssl_context(certificate)
+                    cert_contexts[certificate.cert_name] = (context, certificate.domains)
+                    logger.info(f"Loaded certificate {certificate.cert_name} for domains: {certificate.domains}")
+                except Exception as e:
+                    logger.error(f"Failed to load certificate {certificate.cert_name}: {e}")
+        
+        # Second pass: Check proxy configurations to determine which certificates to use
+        proxy_targets = self.manager.storage.list_proxy_targets()
+        domain_to_cert = {}  # domain -> cert_name mapping based on proxy config
+        
+        for proxy in proxy_targets:
+            if proxy.cert_name and proxy.cert_name in cert_contexts:
+                domain_to_cert[proxy.hostname] = proxy.cert_name
+        
+        # Third pass: Apply certificates with proxy preferences taking priority
+        for cert_name, (context, domains) in cert_contexts.items():
+            for domain in domains:
+                # If this domain has a proxy preference, only use that certificate
+                if domain in domain_to_cert:
+                    if domain_to_cert[domain] == cert_name:
+                        self.ssl_contexts[domain] = context
+                        logger.info(f"Applied certificate {cert_name} to {domain} (proxy configured)")
+                else:
+                    # No proxy preference, apply if not already set
+                    if domain not in self.ssl_contexts:
+                        self.ssl_contexts[domain] = context
+                        logger.info(f"Applied certificate {cert_name} to {domain} (no proxy preference)")
+        
+        logger.info(f"SSL contexts loaded for domains: {list(self.ssl_contexts.keys())}")
         
         # Create default self-signed certificate if no certificates loaded
         if not self.ssl_contexts:
@@ -151,14 +173,31 @@ class HTTPSServer:
             logger.error(f"Failed to create self-signed certificate: {e}")
     
     def update_ssl_context(self, certificate: Certificate):
-        """Update SSL context for certificate domains."""
+        """Update SSL context for certificate domains with proxy awareness."""
         try:
             context = self.create_ssl_context(certificate)
             
+            # Check proxy configurations
+            proxy_targets = self.manager.storage.list_proxy_targets()
+            domain_to_cert = {}
+            
+            for proxy in proxy_targets:
+                if proxy.cert_name:
+                    domain_to_cert[proxy.hostname] = proxy.cert_name
+            
+            # Update contexts respecting proxy preferences
             for domain in certificate.domains:
-                self.ssl_contexts[domain] = context
-                
-            logger.info(f"Updated SSL context for domains: {certificate.domains}")
+                # Only update if this domain uses this certificate via proxy config
+                # or if no proxy config exists for this domain
+                if domain in domain_to_cert:
+                    if domain_to_cert[domain] == certificate.cert_name:
+                        self.ssl_contexts[domain] = context
+                        logger.info(f"Updated SSL context for {domain} (proxy configured)")
+                else:
+                    # No proxy config, update if this cert contains the domain
+                    self.ssl_contexts[domain] = context
+                    logger.info(f"Updated SSL context for {domain} (no proxy preference)")
+                    
         except Exception as e:
             logger.error(f"Failed to update SSL context: {e}")
     

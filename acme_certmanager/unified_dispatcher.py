@@ -677,27 +677,32 @@ class UnifiedMultiInstanceServer:
             logger.warning("No HTTPS server instance available")
             return
         
-        # Group domains by certificate
-        cert_to_domains: Dict[str, List[str]] = {}
-        domain_to_cert = {}
-        
-        # Also get proxy configurations
+        # Get proxy configurations first
         proxy_targets = self.https_server.manager.storage.list_proxy_targets()
         domain_to_proxy = {pt.hostname: pt for pt in proxy_targets if pt.enabled}
         
-        # Collect all domains and their certificates
-        for cert in self.https_server.manager.storage.list_certificates():
-            if cert and cert.fullchain_pem and cert.private_key_pem:
-                for domain in cert.domains:
-                    domain_to_cert[domain] = cert
-                    if cert.cert_name not in cert_to_domains:
-                        cert_to_domains[cert.cert_name] = []
-                    cert_to_domains[cert.cert_name].append(domain)
+        # Group domains by the certificate they're configured to use (from proxy config)
+        cert_to_domains: Dict[str, List[str]] = {}
+        domain_to_cert = {}
         
-        # Also include domains that have proxy configs but no certificates yet
+        # Load all available certificates for lookup
+        all_certs = {cert.cert_name: cert for cert in self.https_server.manager.storage.list_certificates()
+                     if cert and cert.fullchain_pem and cert.private_key_pem}
+        
+        # Group domains based on proxy configuration
         for hostname, proxy_target in domain_to_proxy.items():
-            if hostname not in domain_to_cert:
-                # Domain has proxy config but no certificate
+            cert_name = proxy_target.cert_name
+            
+            if cert_name and cert_name in all_certs:
+                # Domain has a certificate assigned
+                cert = all_certs[cert_name]
+                domain_to_cert[hostname] = cert
+                
+                if cert_name not in cert_to_domains:
+                    cert_to_domains[cert_name] = []
+                cert_to_domains[cert_name].append(hostname)
+            else:
+                # Domain has no certificate or certificate doesn't exist
                 if 'no-cert' not in cert_to_domains:
                     cert_to_domains['no-cert'] = []
                 cert_to_domains['no-cert'].append(hostname)
@@ -746,8 +751,8 @@ class UnifiedMultiInstanceServer:
         for cert_name, domains in cert_to_domains.items():
             # Get certificate if available
             cert = None
-            if cert_name != 'no-cert' and domains:
-                cert = domain_to_cert.get(domains[0])
+            if cert_name != 'no-cert':
+                cert = all_certs.get(cert_name)
             
             # Get proxy configs for these domains
             proxy_configs = {d: domain_to_proxy[d] for d in domains if d in domain_to_proxy}
