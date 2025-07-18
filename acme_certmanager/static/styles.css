@@ -121,6 +121,15 @@ select:focus {
     background-color: #7f8c8d;
 }
 
+.btn-success {
+    background-color: #27ae60;
+    color: white;
+}
+
+.btn-success:hover {
+    background-color: #229954;
+}
+
 .btn-small {
     padding: 5px 10px;
     font-size: 14px;
@@ -249,6 +258,23 @@ select:focus {
 .status-expired {
     background-color: #f8d7da;
     color: #721c24;
+}
+
+.cert-staging {
+    background-color: #ffc107;
+    color: #000;
+    padding: 4px 12px;
+    border-radius: 20px;
+    font-size: 12px;
+    font-weight: 600;
+    text-transform: uppercase;
+    margin-left: 8px;
+}
+
+.staging-warning {
+    color: #ff6b35;
+    font-size: 14px;
+    font-style: italic;
 }
 
 .cert-info p {

@@ -627,11 +627,6 @@ class UnifiedMultiInstanceServer:
         if not proxy_target or not proxy_target.enable_https:
             return
         
-        # Check if HTTPS is already enabled
-        if hostname in self.dispatcher.hostname_to_https_port:
-            logger.info(f"HTTPS already enabled for {hostname}")
-            return
-        
         # Get certificate
         cert = self.https_server.manager.get_certificate(proxy_target.cert_name)
         if not cert:
@@ -649,23 +644,28 @@ class UnifiedMultiInstanceServer:
             logger.error(f"No instance found for {hostname}")
             return
         
+        # Check if HTTPS process is actually running
+        if instance.https_process and not instance.https_process.done():
+            logger.info(f"HTTPS already running for {hostname}")
+            return
+        
         # Update instance with certificate
         instance.cert = cert
         
-        # Restart HTTPS if not already running
-        if not instance.https_process:
-            await instance.start_https()
-            
-            # Update dispatcher registration
-            self.dispatcher.register_instance(
-                [hostname], 
-                instance.http_port, 
-                instance.https_port,
-                enable_http=proxy_target.enable_http,
-                enable_https=True
-            )
-            
-            logger.info(f"HTTPS enabled for {hostname} after certificate became available")
+        # Start HTTPS instance
+        logger.info(f"Starting HTTPS instance for {hostname} with newly available certificate")
+        await instance.start_https()
+        
+        # Update dispatcher registration to enable HTTPS
+        self.dispatcher.register_instance(
+            [hostname], 
+            instance.http_port, 
+            instance.https_port,
+            enable_http=proxy_target.enable_http,
+            enable_https=True
+        )
+        
+        logger.info(f"HTTPS enabled for {hostname} after certificate became available")
     
     async def run(self):
         """Run the unified multi-instance server architecture."""

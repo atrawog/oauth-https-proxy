@@ -62,6 +62,18 @@ def list_proxy_targets(token: str = None):
             if disabled:
                 print(f"\n⚠ Note: {len(disabled)} proxy target(s) are disabled")
             
+            # Check for HTTPS-enabled proxies without certificates
+            https_no_cert = [p for p in proxy_targets 
+                           if p.get('enable_https', True) and not p.get('cert_name')]
+            if https_no_cert:
+                print(f"\n⚠ WARNING: {len(https_no_cert)} proxy target(s) have HTTPS enabled but no certificate!")
+                print("  The following proxies need certificates:")
+                for proxy in https_no_cert:
+                    print(f"    • {proxy['hostname']}")
+                print("\n  To generate certificates:")
+                print("    just proxy-cert-generate <hostname>        # Generate new certificate")
+                print("    just proxy-cert-attach <hostname> <cert>   # Attach existing certificate")
+            
             return True
         else:
             error = response.json() if response.headers.get('content-type') == 'application/json' else {}

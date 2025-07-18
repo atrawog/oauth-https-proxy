@@ -1,3 +1,9 @@
 [submodule "mcp-streamablehttp-client"]
 	path = mcp-streamablehttp-client
 	url = https://github.com/atrawog/mcp-streamablehttp-client
+[submodule "mcp-echo-streamablehttp-server-stateful"]
+	path = mcp-echo-streamablehttp-server-stateful
+	url = https://github.com/atrawog/mcp-echo-streamablehttp-server-stateful.git
+[submodule "mcp-echo-streamablehttp-server-stateless"]
+	path = mcp-echo-streamablehttp-server-stateless
+	url = https://github.com/atrawog/mcp-echo-streamablehttp-server-stateless.git

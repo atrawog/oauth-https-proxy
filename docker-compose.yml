@@ -61,7 +61,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:3000/"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -70,6 +70,50 @@ services:
       resources:
         limits:
           memory: 2G
+
+  echo-stateful:
+    build: ./mcp-echo-streamablehttp-server-stateful
+    restart: unless-stopped
+    environment:
+      - MCP_ECHO_HOST=0.0.0.0
+      - MCP_ECHO_PORT=3000
+      - MCP_SESSION_TIMEOUT=3600
+      - MCP_ECHO_DEBUG=true
+    networks:
+      - acme_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      # Mount source code for development
+      - ./mcp-echo-streamablehttp-server-stateful/src:/app/src
+
+  echo-stateless:
+    build: ./mcp-echo-streamablehttp-server-stateless
+    restart: unless-stopped
+    environment:
+      - MCP_ECHO_HOST=0.0.0.0
+      - MCP_ECHO_PORT=3000
+    networks:
+      - acme_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    volumes:
+      # Mount source code for development
+      - ./mcp-echo-streamablehttp-server-stateless/src:/app/src
 
   # Test runner service - only runs when explicitly called
   test-runner:

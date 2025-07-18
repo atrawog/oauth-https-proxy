@@ -10,7 +10,7 @@ from contextlib import asynccontextmanager
 from typing import Dict, Optional, Union
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, WebSocket
-from fastapi.responses import PlainTextResponse, RedirectResponse
+from fastapi.responses import PlainTextResponse, RedirectResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
@@ -342,6 +342,60 @@ async def renew_certificate(cert_name: str, background_tasks: BackgroundTasks):
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.post("/certificates/{cert_name}/convert-to-production",
+          dependencies=[Depends(require_owner)])
+async def convert_to_production(cert_name: str, background_tasks: BackgroundTasks):
+    """Convert certificate from staging to production (owner only)."""
+    try:
+        # Get existing certificate
+        cert = manager.get_certificate(cert_name)
+        if not cert:
+            raise HTTPException(404, f"Certificate {cert_name} not found")
+        
+        # Check if already production
+        if cert.acme_directory_url == os.getenv('ACME_DIRECTORY_URL'):
+            raise HTTPException(400, "Certificate is already using production ACME")
+        
+        # Check if staging
+        if cert.acme_directory_url != os.getenv('ACME_STAGING_URL'):
+            raise HTTPException(400, "Certificate is not using staging ACME")
+        
+        logger.info(f"Converting certificate {cert_name} from staging to production")
+        
+        # Create request for production certificate
+        request = CertificateRequest(
+            domain=cert.domains[0],  # Primary domain
+            email=cert.email,
+            cert_name=cert_name,
+            acme_directory_url=os.getenv('ACME_DIRECTORY_URL')
+        )
+        
+        # Get ownership info from existing cert
+        owner_token_hash = cert.owner_token_hash
+        created_by = cert.created_by
+        
+        # Delete old staging certificate
+        if not manager.delete_certificate(cert_name):
+            raise HTTPException(500, "Failed to delete staging certificate")
+        
+        # Generate new production certificate asynchronously
+        result = await create_certificate_task(
+            manager,  # Correct order - manager first
+            request, 
+            https_server,
+            owner_token_hash=owner_token_hash,
+            created_by=created_by
+        )
+        
+        return result  # Return the actual result from create_certificate_task
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.error(f"Failed to convert certificate to production: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.delete("/certificates/{cert_name}/domains/{domain}",
             dependencies=[Depends(require_owner)])
 async def remove_domain(cert_name: str, domain: str, background_tasks: BackgroundTasks):
@@ -582,6 +636,8 @@ async def update_proxy_target(
     # Apply updates
     if updates.target_url is not None:
         target.target_url = updates.target_url
+    if updates.cert_name is not None:
+        target.cert_name = updates.cert_name
     if updates.enabled is not None:
         target.enabled = updates.enabled
     if updates.enable_http is not None:

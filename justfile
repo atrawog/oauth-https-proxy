@@ -322,7 +322,12 @@ cert-create name domain email="" token-name="" staging="false":
             exit 1
         fi
     fi
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create.py "{{name}}" "{{domain}}" "$cert_email" "$token" "{{staging}}"
+    # Handle staging parameter
+    if [ "{{staging}}" = "true" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create.py "{{name}}" "{{domain}}" "$cert_email" "$token" "true"
+    else
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create.py "{{name}}" "{{domain}}" "$cert_email" "$token"
+    fi
 
 # Show certificate details (token optional for public certs, can use token name)
 cert-show name token="" pem="":
@@ -448,6 +453,31 @@ cert-status name token="" wait="":
     else
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}"
     fi
+
+# Convert certificate from staging to production
+cert-to-production name token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+    elif [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    
+    # Use the improved conversion script that preserves proxy associations
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_to_production.py "{{name}}" "$token"
 
 # Test authorization system (defaults to ADMIN_TOKEN)
 test-auth token="":
@@ -726,6 +756,58 @@ proxy-disable hostname token-name="":
         fi
     fi
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_disable.py "{{hostname}}" "$token"
+
+# Generate a new certificate for an existing proxy
+proxy-cert-generate hostname token-name="" staging="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Generating certificate for proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    else
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/token_show.py "{{token-name}}" --show-token)
+        if [ -z "$token" ] || [ "$token" = "None" ]; then
+            echo "Error: Token '{{token-name}}' not found"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cert_generate.py "{{hostname}}" "$token" "{{staging}}"
+
+# Attach an existing certificate to a proxy
+proxy-cert-attach hostname cert-name token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Attaching certificate '{{cert-name}}' to proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    else
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/token_show.py "{{token-name}}" --show-token)
+        if [ -z "$token" ] || [ "$token" = "None" ]; then
+            echo "Error: Token '{{token-name}}' not found"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cert_attach.py "{{hostname}}" "{{cert-name}}" "$token"
 
 # Test all proxy management commands
 test-proxy-commands:
@@ -1358,3 +1440,257 @@ fetcher-status:
 # View fetcher logs
 fetcher-logs:
     docker-compose logs -f fetcher-mcp
+
+# ============================================================================
+# Echo Server Management
+# ============================================================================
+
+# Setup echo-stateful with proper domain
+echo-stateful-setup hostname staging="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Echo Stateful Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Validate hostname is FQDN
+    if ! echo "{{hostname}}" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'; then
+        echo "✗ Error: Invalid hostname format: {{hostname}}"
+        echo ""
+        echo "A valid hostname must be a fully qualified domain name (FQDN)."
+        echo "Examples:"
+        echo "  ✓ echo-stateful.example.com"
+        echo "  ✓ mcp-stateful.yourdomain.com"
+        echo ""
+        exit 1
+    fi
+    
+    # Check admin token
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first to create an admin token."
+        exit 1
+    fi
+    
+    # Check if echo-stateful is running
+    if ! docker-compose ps echo-stateful 2>/dev/null | grep -q "Up"; then
+        echo "⚠ Warning: echo-stateful container is not running"
+        echo ""
+        echo "Starting echo-stateful..."
+        docker-compose up -d echo-stateful
+        echo "Waiting for echo-stateful to be ready..."
+        sleep 10
+    fi
+    
+    # Create proxy
+    echo "▶ Creating proxy: {{hostname}} → echo-stateful:3000"
+    output=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py \
+        "{{hostname}}" \
+        "http://echo-stateful:3000" \
+        "${ADMIN_TOKEN}" \
+        "" "{{staging}}" 2>&1)
+    
+    echo "$output"
+    
+    echo ""
+    echo "✅ Echo Stateful configured!"
+    echo ""
+    echo "Access via:"
+    echo "  🔗 HTTP:  http://{{hostname}}/"
+    echo "  🔒 HTTPS: https://{{hostname}}/"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Setup echo-stateless with proper domain
+echo-stateless-setup hostname staging="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Echo Stateless Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Validate hostname is FQDN
+    if ! echo "{{hostname}}" | grep -qE '^[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]{0,61}[a-zA-Z0-9])?)+$'; then
+        echo "✗ Error: Invalid hostname format: {{hostname}}"
+        echo ""
+        echo "A valid hostname must be a fully qualified domain name (FQDN)."
+        echo "Examples:"
+        echo "  ✓ echo-stateless.example.com"
+        echo "  ✓ mcp-stateless.yourdomain.com"
+        echo ""
+        exit 1
+    fi
+    
+    # Check admin token
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first to create an admin token."
+        exit 1
+    fi
+    
+    # Check if echo-stateless is running
+    if ! docker-compose ps echo-stateless 2>/dev/null | grep -q "Up"; then
+        echo "⚠ Warning: echo-stateless container is not running"
+        echo ""
+        echo "Starting echo-stateless..."
+        docker-compose up -d echo-stateless
+        echo "Waiting for echo-stateless to be ready..."
+        sleep 10
+    fi
+    
+    # Create proxy
+    echo "▶ Creating proxy: {{hostname}} → echo-stateless:3000"
+    output=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create.py \
+        "{{hostname}}" \
+        "http://echo-stateless:3000" \
+        "${ADMIN_TOKEN}" \
+        "" "{{staging}}" 2>&1)
+    
+    echo "$output"
+    
+    echo ""
+    echo "✅ Echo Stateless configured!"
+    echo ""
+    echo "Access via:"
+    echo "  🔗 HTTP:  http://{{hostname}}/"
+    echo "  🔒 HTTPS: https://{{hostname}}/"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Remove echo-stateful proxy
+echo-stateful-remove hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Remove Echo Stateful Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Check if proxy exists
+    if ! docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_show.py "{{hostname}}" 2>/dev/null | grep -q "echo-stateful:3000"; then
+        echo "⚠ No echo-stateful proxy configuration found for: {{hostname}}"
+        exit 1
+    fi
+    
+    # Get admin token
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first"
+        exit 1
+    fi
+    
+    # Delete proxy
+    echo "▶ Removing proxy configuration..."
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py \
+        "{{hostname}}" "${ADMIN_TOKEN}" --delete-certificate
+    
+    echo ""
+    echo "✅ Echo stateful proxy removed: {{hostname}}"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Remove echo-stateless proxy
+echo-stateless-remove hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Remove Echo Stateless Setup"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    # Check if proxy exists
+    if ! docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_show.py "{{hostname}}" 2>/dev/null | grep -q "echo-stateless:3000"; then
+        echo "⚠ No echo-stateless proxy configuration found for: {{hostname}}"
+        exit 1
+    fi
+    
+    # Get admin token
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "✗ Error: ADMIN_TOKEN not found"
+        echo ""
+        echo "Please run 'just token-generate-admin' first"
+        exit 1
+    fi
+    
+    # Delete proxy
+    echo "▶ Removing proxy configuration..."
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_delete.py \
+        "{{hostname}}" "${ADMIN_TOKEN}" --delete-certificate
+    
+    echo ""
+    echo "✅ Echo stateless proxy removed: {{hostname}}"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Check echo server status
+echo-status:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - Echo Servers Status"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    echo "▶ Container Status:"
+    echo ""
+    echo "Echo Stateful:"
+    docker-compose ps echo-stateful 2>/dev/null || echo "  echo-stateful container not found"
+    echo ""
+    echo "Echo Stateless:"
+    docker-compose ps echo-stateless 2>/dev/null || echo "  echo-stateless container not found"
+    
+    echo ""
+    echo "▶ Proxy Configurations:"
+    
+    # Check for echo-stateful proxies
+    echo ""
+    echo "Echo Stateful Proxies:"
+    stateful_proxies=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py 2>/dev/null | grep "echo-stateful:3000" || echo "")
+    
+    if [ -n "$stateful_proxies" ]; then
+        echo "$stateful_proxies" | while IFS= read -r line; do
+            hostname=$(echo "$line" | awk '{print $1}')
+            echo "  • $hostname → echo-stateful:3000"
+        done
+    else
+        echo "  No echo-stateful proxies configured"
+    fi
+    
+    # Check for echo-stateless proxies
+    echo ""
+    echo "Echo Stateless Proxies:"
+    stateless_proxies=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_list.py 2>/dev/null | grep "echo-stateless:3000" || echo "")
+    
+    if [ -n "$stateless_proxies" ]; then
+        echo "$stateless_proxies" | while IFS= read -r line; do
+            hostname=$(echo "$line" | awk '{print $1}')
+            echo "  • $hostname → echo-stateless:3000"
+        done
+    else
+        echo "  No echo-stateless proxies configured"
+    fi
+    
+    echo ""
+    echo "To set up echo server access, run:"
+    echo "  just echo-stateful-setup <hostname>"
+    echo "  just echo-stateless-setup <hostname>"
+    echo ""
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# View echo-stateful logs
+echo-stateful-logs:
+    docker-compose logs -f echo-stateful
+
+# View echo-stateless logs
+echo-stateless-logs:
+    docker-compose logs -f echo-stateless

@@ -127,6 +127,7 @@ class ProxyTargetRequest(BaseModel):
 class ProxyTargetUpdate(BaseModel):
     """Request model for updating proxy target."""
     target_url: Optional[str] = None
+    cert_name: Optional[str] = None
     enabled: Optional[bool] = None
     enable_http: Optional[bool] = None
     enable_https: Optional[bool] = None

@@ -67,6 +67,10 @@ class CertificateAPI {
         return this.request('POST', `/certificates/${certName}/renew`);
     }
 
+    async convertCertificateToProduction(certName) {
+        return this.request('POST', `/certificates/${certName}/convert-to-production`);
+    }
+
     async deleteDomain(certName, domain) {
         return this.request('DELETE', `/certificates/${certName}/domains/${domain}`);
     }
@@ -341,22 +345,30 @@ async function loadCertificates() {
             return;
         }
 
-        listContainer.innerHTML = certificates.map(cert => `
+        listContainer.innerHTML = certificates.map(cert => {
+            // Check if certificate is using staging
+            const isStaging = cert.acme_directory_url && cert.acme_directory_url.includes('staging');
+            
+            return `
             <div class="certificate-card" data-cert-name="${cert.cert_name}">
                 <div class="cert-header">
                     <h3>${cert.cert_name}</h3>
                     <span class="cert-status status-${cert.status}">${cert.status}</span>
+                    ${isStaging ? '<span class="cert-staging">STAGING</span>' : ''}
                 </div>
                 <div class="cert-info">
                     <p><strong>Domains:</strong> ${cert.domains.join(', ')}</p>
                     <p><strong>Expires:</strong> ${formatDate(cert.expires_at)}</p>
+                    ${isStaging ? '<p class="staging-warning">⚠️ This is a staging certificate (not trusted by browsers)</p>' : ''}
                 </div>
                 <div class="cert-actions">
                     <button class="btn btn-small" onclick="viewCertificate('${cert.cert_name}')">View Details</button>
                     <button class="btn btn-small btn-primary" onclick="renewCertificate('${cert.cert_name}')">Renew</button>
+                    ${isStaging ? `<button class="btn btn-small btn-success" onclick="convertToProduction('${cert.cert_name}')">Convert to Production</button>` : ''}
                 </div>
             </div>
-        `).join('');
+            `;
+        }).join('');
 
         // Check for any certificates being generated
         certificates.forEach(cert => {
@@ -464,6 +476,23 @@ async function renewCertificate(certName) {
     try {
         await api.renewCertificate(certName);
         showNotification('Certificate renewal started', 'success');
+        loadCertificates();
+        
+        // Start polling for status
+        pollCertificateStatus(certName);
+    } catch (error) {
+        showNotification(`Error: ${error.message}`, 'error');
+    }
+}
+
+async function convertToProduction(certName) {
+    if (!confirm(`Are you sure you want to convert the certificate "${certName}" from staging to production?\n\nThis will generate a new trusted certificate.`)) {
+        return;
+    }
+
+    try {
+        await api.convertCertificateToProduction(certName);
+        showNotification('Certificate conversion to production started', 'success');
         loadCertificates();
         
         // Start polling for status

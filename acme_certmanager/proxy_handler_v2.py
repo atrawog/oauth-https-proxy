@@ -48,6 +48,19 @@ class EnhancedProxyHandler:
         if not target.enabled:
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
         
+        # Handle OPTIONS (preflight) requests
+        if request.method == "OPTIONS":
+            return Response(
+                status_code=200,
+                headers={
+                    "Access-Control-Allow-Origin": "*",
+                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                    "Access-Control-Allow-Headers": "*",
+                    "Access-Control-Allow-Credentials": "true",
+                    "Access-Control-Max-Age": "86400"
+                }
+            )
+        
         # Check if this is a WebSocket upgrade request
         if (request.headers.get("connection", "").lower() == "upgrade" and 
             request.headers.get("upgrade", "").lower() == "websocket"):
@@ -87,6 +100,15 @@ class EnhancedProxyHandler:
             
             # Filter response headers
             response_headers = self._filter_response_headers(dict(upstream_response.headers))
+            
+            # Add CORS headers for all proxy responses
+            response_headers.update({
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "86400"
+            })
             
             # Return streaming response
             return StreamingResponse(

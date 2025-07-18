@@ -65,11 +65,28 @@ class RedisStorage:
             return []
     
     def delete_certificate(self, cert_name: str) -> bool:
-        """Delete certificate from Redis."""
+        """Delete certificate from Redis and clean up associated proxy targets."""
         try:
+            # First, find all proxy targets that reference this certificate
+            proxy_targets_cleaned = 0
+            for key in self.redis_client.scan_iter(match="proxy:*"):
+                proxy_json = self.redis_client.get(key)
+                if proxy_json:
+                    proxy_data = json.loads(proxy_json)
+                    if proxy_data.get('cert_name') == cert_name:
+                        # Clear the cert_name from this proxy target
+                        proxy_data['cert_name'] = None
+                        self.redis_client.set(key, json.dumps(proxy_data))
+                        proxy_targets_cleaned += 1
+                        logger.info(f"Cleaned up cert_name from proxy target: {key.split(':', 1)[1]}")
+            
+            if proxy_targets_cleaned > 0:
+                logger.info(f"Cleaned up {proxy_targets_cleaned} proxy targets that referenced certificate {cert_name}")
+            
+            # Now delete the certificate
             key = f"cert:{cert_name}"
             return bool(self.redis_client.delete(key))
-        except RedisError as e:
+        except (RedisError, json.JSONDecodeError) as e:
             logger.error(f"Failed to delete certificate: {e}")
             return False
     
