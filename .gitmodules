@@ -7,3 +7,6 @@
 [submodule "mcp-echo-streamablehttp-server-stateless"]
 	path = mcp-echo-streamablehttp-server-stateless
 	url = https://github.com/atrawog/mcp-echo-streamablehttp-server-stateless.git
+[submodule "mcp-oauth-dynamicclient"]
+	path = mcp-oauth-dynamicclient
+	url = https://github.com/atrawog/mcp-oauth-dynamicclient
