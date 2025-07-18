@@ -27,6 +27,57 @@ class CertificateRequest(BaseModel):
         return v.lower()
 
 
+class MultiDomainCertificateRequest(BaseModel):
+    """Request model for multi-domain certificate creation."""
+    cert_name: str
+    domains: List[str]
+    email: str
+    acme_directory_url: str
+    
+    @validator('cert_name')
+    def validate_cert_name(cls, v):
+        if not v or not v.strip():
+            raise ValueError('Certificate name cannot be empty')
+        # Only allow alphanumeric, dash, and underscore
+        if not all(c.isalnum() or c in '-_' for c in v):
+            raise ValueError('Certificate name can only contain letters, numbers, dash, and underscore')
+        return v.strip()
+    
+    @validator('domains')
+    def validate_domains(cls, v):
+        if not v or len(v) == 0:
+            raise ValueError("At least one domain required")
+        if len(v) > 100:  # Let's Encrypt limit
+            raise ValueError("Maximum 100 domains per certificate")
+        
+        # Clean and validate each domain
+        cleaned = []
+        for domain in v:
+            domain = domain.strip().lower()
+            if not domain:
+                continue
+            # Basic domain validation
+            if not all(c.isalnum() or c in '-.*' for c in domain.replace('.', '')):
+                raise ValueError(f'Invalid domain: {domain}')
+            cleaned.append(domain)
+        
+        if not cleaned:
+            raise ValueError("No valid domains provided")
+        
+        # Check for duplicates
+        if len(cleaned) != len(set(cleaned)):
+            raise ValueError("Duplicate domains not allowed")
+        
+        return cleaned
+    
+    @validator('email')
+    def validate_email(cls, v):
+        v = v.strip()
+        if not v or '@' not in v:
+            raise ValueError('Invalid email format')
+        return v.lower()
+
+
 class Certificate(BaseModel):
     """Certificate data model."""
     cert_name: str  # Certificate identifier

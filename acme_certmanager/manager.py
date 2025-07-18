@@ -45,6 +45,20 @@ class CertificateManager:
         
         return certificate
     
+    def create_multi_domain_certificate(self, request) -> Certificate:
+        """Create multi-domain certificate from request."""
+        logger.info(f"Creating multi-domain certificate {request.cert_name} for {', '.join(request.domains)}")
+        
+        # Generate certificate with multiple domains
+        certificate = self.acme_client.generate_certificate(
+            domains=request.domains,
+            email=request.email,
+            acme_directory_url=request.acme_directory_url,
+            cert_name=request.cert_name
+        )
+        
+        return certificate
+    
     def get_certificate(self, cert_name: str) -> Optional[Certificate]:
         """Get certificate by name."""
         return self.storage.get_certificate(cert_name)

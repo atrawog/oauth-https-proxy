@@ -21,12 +21,12 @@ from typing import Tuple
 
 from .manager import CertificateManager
 from .models import (
-    CertificateRequest, Certificate, HealthStatus,
+    CertificateRequest, MultiDomainCertificateRequest, Certificate, HealthStatus,
     ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 )
 from .routes import Route, RouteCreateRequest, RouteUpdateRequest, RouteTargetType
 from .scheduler import CertificateScheduler
-from .async_acme import create_certificate_task, get_generation_status
+from .async_acme import create_certificate_task, create_multi_domain_certificate_task, get_generation_status
 from .auth import (
     get_current_token_info, require_owner, get_optional_token_info,
     require_proxy_owner, require_route_owner
@@ -288,6 +288,29 @@ async def create_certificate(
     return result
 
 
+@app.post("/certificates/multi-domain")
+async def create_multi_domain_certificate(
+    request: MultiDomainCertificateRequest,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Create multi-domain certificate via ACME."""
+    token_hash, token_name, cert_email = token_info
+    
+    # Use token's cert_email if not provided in request
+    if not request.email and cert_email:
+        request.email = cert_email
+    elif not request.email:
+        raise HTTPException(400, "Email required for certificate generation")
+    
+    # Run certificate generation in background to avoid blocking
+    result = await create_multi_domain_certificate_task(
+        manager, request, https_server,
+        owner_token_hash=token_hash,
+        created_by=token_name
+    )
+    return result
+
+
 @app.get("/certificates",
          dependencies=[Depends(get_current_token_info)])
 async def list_certificates(
@@ -362,14 +385,6 @@ async def convert_to_production(cert_name: str, background_tasks: BackgroundTask
         
         logger.info(f"Converting certificate {cert_name} from staging to production")
         
-        # Create request for production certificate
-        request = CertificateRequest(
-            domain=cert.domains[0],  # Primary domain
-            email=cert.email,
-            cert_name=cert_name,
-            acme_directory_url=os.getenv('ACME_DIRECTORY_URL')
-        )
-        
         # Get ownership info from existing cert
         owner_token_hash = cert.owner_token_hash
         created_by = cert.created_by
@@ -378,14 +393,41 @@ async def convert_to_production(cert_name: str, background_tasks: BackgroundTask
         if not manager.delete_certificate(cert_name):
             raise HTTPException(500, "Failed to delete staging certificate")
         
-        # Generate new production certificate asynchronously
-        result = await create_certificate_task(
-            manager,  # Correct order - manager first
-            request, 
-            https_server,
-            owner_token_hash=owner_token_hash,
-            created_by=created_by
-        )
+        # Check if this is a multi-domain certificate
+        if len(cert.domains) > 1:
+            # Create multi-domain request for production certificate
+            request = MultiDomainCertificateRequest(
+                cert_name=cert_name,
+                domains=cert.domains,
+                email=cert.email,
+                acme_directory_url=os.getenv('ACME_DIRECTORY_URL')
+            )
+            
+            # Generate new production certificate asynchronously
+            result = await create_multi_domain_certificate_task(
+                manager,
+                request, 
+                https_server,
+                owner_token_hash=owner_token_hash,
+                created_by=created_by
+            )
+        else:
+            # Create single-domain request for production certificate
+            request = CertificateRequest(
+                domain=cert.domains[0],  # Primary domain
+                email=cert.email,
+                cert_name=cert_name,
+                acme_directory_url=os.getenv('ACME_DIRECTORY_URL')
+            )
+            
+            # Generate new production certificate asynchronously
+            result = await create_certificate_task(
+                manager,  # Correct order - manager first
+                request, 
+                https_server,
+                owner_token_hash=owner_token_hash,
+                created_by=created_by
+            )
         
         return result  # Return the actual result from create_certificate_task
         

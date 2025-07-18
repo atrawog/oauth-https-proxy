@@ -38,6 +38,23 @@ async def generate_certificate_async(
     return certificate
 
 
+async def generate_multi_domain_certificate_async(
+    manager: CertificateManager,
+    request
+) -> Certificate:
+    """Generate multi-domain certificate in a thread to avoid blocking."""
+    loop = asyncio.get_event_loop()
+    
+    # Run the blocking certificate generation in a thread
+    certificate = await loop.run_in_executor(
+        executor,
+        manager.create_multi_domain_certificate,
+        request
+    )
+    
+    return certificate
+
+
 async def create_certificate_task(
     manager: CertificateManager,
     request: CertificateRequest,
@@ -122,6 +139,94 @@ async def create_certificate_task(
         "status": "accepted",
         "message": f"Certificate generation started for {request.domain}",
         "cert_name": cert_name
+    }
+
+
+async def create_multi_domain_certificate_task(
+    manager: CertificateManager,
+    request,
+    https_server: Any,
+    owner_token_hash: str = None,
+    created_by: str = None
+) -> Dict[str, Any]:
+    """Create multi-domain certificate generation task."""
+    cert_name = request.cert_name
+    
+    # Check if generation is already in progress
+    if cert_name in ongoing_generations:
+        return {
+            "status": "in_progress",
+            "message": f"Certificate generation already in progress for {', '.join(request.domains)}",
+            "cert_name": cert_name
+        }
+    
+    # Create the async task
+    async def generate_and_update():
+        try:
+            logger.info(f"Starting async multi-domain certificate generation for {cert_name}")
+            
+            # Update status to in_progress
+            generation_results[cert_name] = {
+                "status": "in_progress",
+                "message": f"Generating certificate for {', '.join(request.domains)}",
+                "started_at": asyncio.get_event_loop().time()
+            }
+            
+            # Generate certificate
+            certificate = await generate_multi_domain_certificate_async(manager, request)
+            
+            # Add ownership info
+            certificate.owner_token_hash = owner_token_hash
+            certificate.created_by = created_by
+            
+            # Store certificate with ownership info
+            manager.storage.store_certificate(cert_name, certificate)
+            
+            # Update SSL context
+            https_server.update_ssl_context(certificate)
+            
+            logger.info(f"Multi-domain certificate generation completed for {cert_name}")
+            
+            # Update instance to enable HTTPS if proxy exists
+            from .unified_dispatcher import unified_server_instance
+            if unified_server_instance:
+                # Certificate may be for multiple domains, update each one
+                for domain in certificate.domains:
+                    await unified_server_instance.update_instance_certificate(domain)
+            
+            # Update status to completed
+            generation_results[cert_name] = {
+                "status": "completed",
+                "message": f"Certificate generated successfully for {', '.join(request.domains)}",
+                "completed_at": asyncio.get_event_loop().time()
+            }
+            
+            return certificate
+        except Exception as e:
+            logger.error(f"Multi-domain certificate generation failed for {cert_name}: {e}")
+            
+            # Update status to failed
+            generation_results[cert_name] = {
+                "status": "failed",
+                "message": f"Certificate generation failed: {str(e)}",
+                "error": str(e),
+                "failed_at": asyncio.get_event_loop().time()
+            }
+            
+            raise
+        finally:
+            # Remove from ongoing tasks
+            ongoing_generations.pop(cert_name, None)
+    
+    # Start the task
+    task = asyncio.create_task(generate_and_update())
+    ongoing_generations[cert_name] = task
+    
+    return {
+        "status": "accepted",
+        "message": f"Multi-domain certificate generation started for {', '.join(request.domains)}",
+        "cert_name": cert_name,
+        "domains": request.domains
     }
 
 

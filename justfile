@@ -454,6 +454,94 @@ cert-status name token="" wait="":
         docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_status.py "{{name}}"
     fi
 
+# Create multi-domain certificate
+cert-create-multi name domains email token-name="" staging="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Creating multi-domain certificate: {{name}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    else
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ] || [ "$token" = "None" ]; then
+            echo "Error: Token '{{token-name}}' not found"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create_multi.py \
+        "{{name}}" \
+        "{{domains}}" \
+        "{{email}}" \
+        "$token" \
+        "{{staging}}"
+
+# Create wildcard certificate
+cert-create-wildcard name base-domain email token-name="" staging="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Creating wildcard certificate: {{name}}"
+    echo "  Base domain: {{base-domain}}"
+    echo "  Will cover: *.{{base-domain}} and {{base-domain}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    else
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ] || [ "$token" = "None" ]; then
+            echo "Error: Token '{{token-name}}' not found"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_create_wildcard.py \
+        "{{name}}" \
+        "{{base-domain}}" \
+        "{{email}}" \
+        "$token" \
+        "{{staging}}"
+
+# Show which proxy targets can use a certificate
+cert-coverage name token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ] || [ "$token" = "None" ]; then
+            # Try without token for public read access
+            token=""
+        fi
+    fi
+    
+    if [ -z "$token" ]; then
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_coverage.py "{{name}}"
+    else
+        docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/cert_coverage.py "{{name}}" "$token"
+    fi
+
 # Convert certificate from staging to production
 cert-to-production name token-name="":
     #!/usr/bin/env bash
@@ -774,7 +862,7 @@ proxy-cert-generate hostname token-name="" staging="false":
         echo "Using admin token"
     else
         echo "Looking up token: {{token-name}}"
-        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/token_show.py "{{token-name}}" --show-token)
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ] || [ "$token" = "None" ]; then
             echo "Error: Token '{{token-name}}' not found"
             exit 1
@@ -782,6 +870,38 @@ proxy-cert-generate hostname token-name="" staging="false":
     fi
     
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_cert_generate.py "{{hostname}}" "$token" "{{staging}}"
+
+# Create a group of proxy targets sharing a single multi-domain certificate
+proxy-create-group group-name hostnames target-url token-name="" staging="false" preserve-host="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Creating proxy group: {{group-name}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    else
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ] || [ "$token" = "None" ]; then
+            echo "Error: Token '{{token-name}}' not found"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_create_group.py \
+        "{{group-name}}" \
+        "{{hostnames}}" \
+        "{{target-url}}" \
+        "$token" \
+        "{{staging}}" \
+        "{{preserve-host}}"
 
 # Attach an existing certificate to a proxy
 proxy-cert-attach hostname cert-name token-name="":
@@ -800,7 +920,7 @@ proxy-cert-attach hostname cert-name token-name="":
         echo "Using admin token"
     else
         echo "Looking up token: {{token-name}}"
-        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/token_show.py "{{token-name}}" --show-token)
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
         if [ -z "$token" ] || [ "$token" = "None" ]; then
             echo "Error: Token '{{token-name}}' not found"
             exit 1

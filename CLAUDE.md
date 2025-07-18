@@ -101,7 +101,7 @@ Violations result in:
 
 # ACME Certificate Manager with Integrated HTTPS Server
 
-Pure Python HTTPS server that automatically obtains and renews TLS certificates via ACME protocol. Stores all data in Redis, supports multiple domains per certificate, and hot-reloads certificates without downtime.
+Pure Python HTTPS server that automatically obtains and renews TLS certificates via ACME protocol. Stores all data in Redis, supports multiple domains per certificate, and hot-reloads certificates without downtime. Features multi-domain certificate support, automatic proxy cleanup, and certificate sharing between services.
 
 ## Dependencies
 
@@ -118,11 +118,13 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
 
 ### Certificate Manager
 - ACME v2 protocol implementation
-- HTTP-01 challenge validation
+- HTTP-01 challenge validation (DNS-01 pending for wildcards)
 - Account key management
-- Certificate lifecycle operations
+- Certificate lifecycle operations with automatic cleanup
 - Redis-exclusive storage
 - Async certificate generation (non-blocking)
+- Multi-domain certificate support (up to 100 domains)
+- Automatic proxy reference cleanup on certificate deletion
 
 ### HTTPS Server Architecture
 
@@ -146,7 +148,8 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
 ### Certificate Object
 ```
 {
-  "domains": ["example.com", "www.example.com"],
+  "cert_name": "services-cert",
+  "domains": ["example.com", "www.example.com", "api.example.com"],  // Multi-domain support
   "email": "admin@example.com",
   "acme_directory_url": "https://acme-v02.api.letsencrypt.org/directory",
   "status": "active",
@@ -154,7 +157,9 @@ Pure Python HTTPS server that automatically obtains and renews TLS certificates 
   "issued_at": "2024-01-15T00:00:00Z",
   "fingerprint": "sha256:...",
   "fullchain_pem": "-----BEGIN CERTIFICATE-----...",
-  "private_key_pem": "-----BEGIN PRIVATE KEY-----..."
+  "private_key_pem": "-----BEGIN PRIVATE KEY-----...",
+  "owner_token_hash": "sha256:...",
+  "created_by": "admin"
 }
 ```
 
@@ -176,6 +181,27 @@ Response (async):
   "status": "accepted",
   "message": "Certificate generation started for example.com",
   "cert_name": "production"
+}
+```
+
+### `POST /certificates/multi-domain`
+Create certificate for multiple domains
+Request:
+```
+{
+  "cert_name": "services-cert",
+  "domains": ["api.example.com", "app.example.com", "admin.example.com"],
+  "email": "admin@example.com",
+  "acme_directory_url": "https://acme-v02.api.letsencrypt.org/directory"
+}
+```
+Response (async):
+```
+{
+  "status": "accepted",
+  "message": "Multi-domain certificate generation started for api.example.com, app.example.com, admin.example.com",
+  "cert_name": "services-cert",
+  "domains": ["api.example.com", "app.example.com", "admin.example.com"]
 }
 ```
 
@@ -460,11 +486,22 @@ just route-disable <route-id> <token>
 
 ### Proxy Commands
 ```bash
-# Proxy target management - NOW WITH PROTOCOL CONTROL!
+# Proxy target management
 just proxy-create <hostname> <target-url> <token> [staging] [preserve-host] [enable-http] [enable-https]
+just proxy-create-group <group-name> <hostnames> <target-url> <token> [staging] [preserve-host]
 just proxy-update <hostname> <token> --enable-http=false  # DISABLE HTTP!
 just proxy-update <hostname> <token> --enable-https=false # DISABLE HTTPS!
-just proxy-cleanup [hostname]     # Clean up proxy targets
+just proxy-delete <hostname> <token> [delete-cert] [force]
+just proxy-enable <hostname> <token>
+just proxy-disable <hostname> <token>
+just proxy-list [token]                  # Shows warnings for HTTPS proxies without certs
+just proxy-cleanup [hostname]            # Clean up proxy targets
+
+# Certificate management for proxies
+just proxy-cert-generate <hostname> <token> [staging]    # Generate new cert for proxy
+just proxy-cert-attach <hostname> <cert-name> <token>    # Attach existing cert
+
+# Testing
 just test-proxy-basic            # Test basic functionality
 just test-proxy-example          # Test with example.com
 just test-websocket-proxy        # Test WebSocket proxying
@@ -473,6 +510,26 @@ just test-proxy-all             # Run all proxy tests
 ```
 
 ## Recent Updates
+
+### Multi-Domain Certificate Support
+- Single certificate can cover multiple domains (up to 100)
+- Create with `just cert-create-multi` or API endpoint `/certificates/multi-domain`
+- Wildcard certificate preparation (DNS-01 validation pending)
+- Certificate sharing between multiple proxy targets
+- Certificate coverage analysis with `just cert-coverage`
+- Automatic conversion from staging to production preserves all domains
+
+### Enhanced Certificate Management
+- **Automatic cleanup**: Deleting a certificate cleans up proxy targets that reference it
+- **Certificate utilization tracking**: See which domains are actively used
+- **Smart certificate conversion**: Multi-domain certs properly converted to production
+- **Domain validation**: Warnings when attaching incompatible certificates
+
+### Proxy Group Creation
+- Create multiple proxies sharing one certificate: `just proxy-create-group`
+- Automatic multi-domain certificate generation for groups
+- Batch proxy creation with shared configuration
+- Efficiency metrics showing certificate utilization
 
 ### Per-Token Certificate Email Configuration
 - Tokens now have optional cert_email field
@@ -507,18 +564,35 @@ just token-show-certs [name]             # Show certs by token
 
 ### Certificate Commands
 ```bash
-# Public access (no token required)
-just cert-list [token-name]          # List certificates
-just cert-show <name> [token] [pem]  # Show certificate details
-just cert-status <name> [token] [wait] # Check generation status
+# Single-domain certificates
+just cert-create <name> <domain> <email> <token-name> [staging]
+just cert-delete <name> <token> [force]
+just cert-renew <name> <token> [force]
 
-# Authenticated access (token required)
-just cert-create <name> <domain> <email> <token-name> [staging] # Create cert
-just cert-delete <name> <token> [force]  # Delete certificate
-just cert-renew <name> <token> [force]   # Renew certificate
+# Multi-domain certificates
+just cert-create-multi <name> <domains> <email> <token-name> [staging]
+just cert-create-wildcard <name> <base-domain> <email> <token-name> [staging]
+just cert-coverage <name> [token]        # Show which proxies can use a certificate
+
+# Certificate management
+just cert-list [token-name]              # List certificates
+just cert-show <name> [token] [pem]      # Show certificate details
+just cert-status <name> [token] [wait]   # Check generation status
+just cert-to-production <name> [token]   # Convert staging to production
 ```
 
-### Key Changes
+### Key Architecture Improvements
+- **Multi-Domain Certificates**: Single certificate can cover up to 100 domains
+- **Certificate Cleanup**: Deleting certificates automatically cleans up proxy references
+- **Proxy Group Creation**: Create multiple proxies sharing one certificate in a single command
+- **Certificate Coverage Analysis**: See which proxies can use each certificate
+- **Enhanced Proxy List**: Warnings for HTTPS-enabled proxies without certificates
+- **Smart Certificate Conversion**: Multi-domain certificates properly handled during staging-to-production
+- **Certificate Efficiency Tracking**: Monitor domain utilization percentages
+- **Automatic Proxy-Certificate Association**: Group creation handles cert generation and attachment
+- **ProxyTargetUpdate Model**: Now supports cert_name updates for certificate attachment
+
+### Key Implementation Changes
 - Certificates have `owner_token_hash` field
 - Tokens stored with full value (not just preview)
 - Token names can be used instead of full tokens in commands
@@ -628,3 +702,73 @@ To verify the architecture is working correctly:
    - ✅ "Stopped proxy instance for domains"
    - ❌ NO "Shutting down ACME Certificate Manager"
    - ❌ NO "client has been closed" errors
+
+## Common Workflows
+
+### Creating a Service Group with Shared Certificate
+```bash
+# Create multiple services sharing one certificate
+just proxy-create-group api-services \
+  "api.example.com,api-v2.example.com,api-staging.example.com" \
+  http://api-backend:3000 \
+  admin
+
+# Result: 3 proxies created with 1 shared certificate
+```
+
+### Consolidating Existing Services
+```bash
+# Check current certificate usage
+just cert-list
+just proxy-list
+
+# Create multi-domain certificate
+just cert-create-multi all-services \
+  "service1.example.com,service2.example.com,service3.example.com" \
+  admin@example.com admin
+
+# Attach to existing proxies
+just proxy-cert-attach service1.example.com all-services
+just proxy-cert-attach service2.example.com all-services
+just proxy-cert-attach service3.example.com all-services
+
+# Delete old single-domain certificates
+just cert-delete proxy-service1-example-com admin force
+just cert-delete proxy-service2-example-com admin force
+just cert-delete proxy-service3-example-com admin force
+```
+
+### Certificate Coverage Analysis
+```bash
+# See which proxies can use a certificate
+just cert-coverage multi-domain-cert
+
+# Output shows:
+# - Compatible proxies (exact and wildcard matches)
+# - Current certificate assignments
+# - Utilization percentage
+# - Suggestions for optimization
+```
+
+### Handling HTTPS Proxies Without Certificates
+```bash
+# List proxies - warnings shown for HTTPS without certs
+just proxy-list
+
+# Generate certificate for existing proxy
+just proxy-cert-generate api.example.com admin
+
+# Or attach existing multi-domain cert
+just proxy-cert-attach api.example.com services-cert
+```
+
+### Converting Certificates from Staging to Production
+```bash
+# Convert single or multi-domain certificate
+just cert-to-production services-cert
+
+# Automatically:
+# - Preserves all domains
+# - Re-attaches to all affected proxies
+# - Maintains ownership and settings
+```
