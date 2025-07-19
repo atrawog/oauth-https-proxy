@@ -1,6 +1,7 @@
 """HTTP/S Proxy handler with automatic certificate management."""
 
 import logging
+import os
 from typing import Dict, Optional
 import httpx
 from fastapi import Request, Response, HTTPException
@@ -17,11 +18,16 @@ class ProxyHandler:
     def __init__(self, storage: RedisStorage):
         """Initialize proxy handler with storage backend."""
         self.storage = storage
-        # Create client with no timeout for streaming
+        # Get timeout from environment with proper hierarchy
+        request_timeout = float(os.getenv('PROXY_REQUEST_TIMEOUT', '45'))
+        connect_timeout = float(os.getenv('PROXY_CONNECT_TIMEOUT', '5'))
+        
+        # Create client with configured timeout
         self.client = httpx.AsyncClient(
             follow_redirects=False,
-            timeout=httpx.Timeout(30.0, connect=5.0)
+            timeout=httpx.Timeout(request_timeout, connect=connect_timeout)
         )
+        logger.info(f"ProxyHandler initialized with timeouts: request={request_timeout}s, connect={connect_timeout}s")
     
     async def handle_request(self, request: Request) -> Response:
         """Handle incoming proxy request."""

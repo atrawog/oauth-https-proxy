@@ -11,12 +11,13 @@ def test_fetcher_mcp():
     session_id = str(uuid.uuid4())
     
     # Base URL
-    base_url = "http://fetcher.atradev.org/mcp"
+    base_url = "http://fetcher-mcp:3000/mcp"
     
     # Headers with session ID
     headers = {
         "Content-Type": "application/json",
-        "Mcp-Session-Id": session_id
+        "Accept": "application/json, text/event-stream",
+        "x-mcp-session-id": session_id
     }
     
     # Initialize request
@@ -50,10 +51,15 @@ def test_fetcher_mcp():
         print(f"   Response: {resp.text[:200]}...")
         
         if resp.status_code == 200:
-            # Parse response
-            data = resp.json()
-            print(f"   Protocol Version: {data.get('result', {}).get('protocolVersion')}")
-            print(f"   Server: {data.get('result', {}).get('serverInfo', {}).get('name')}")
+            # Parse SSE response
+            lines = resp.text.strip().split('\n')
+            for line in lines:
+                if line.startswith('data: '):
+                    json_data = line[6:]  # Remove "data: " prefix
+                    data = json.loads(json_data)
+                    print(f"   Protocol Version: {data.get('result', {}).get('protocolVersion')}")
+                    print(f"   Server: {data.get('result', {}).get('serverInfo', {}).get('name')}")
+                    break
             print()
             
             # List tools
@@ -69,13 +75,19 @@ def test_fetcher_mcp():
             print(f"   Status: {resp.status_code}")
             
             if resp.status_code == 200:
-                data = resp.json()
-                tools = data.get('result', {}).get('tools', [])
-                print(f"   Found {len(tools)} tools:")
-                for tool in tools[:5]:  # Show first 5
-                    print(f"   - {tool.get('name')}: {tool.get('description', '')[:50]}...")
-                if len(tools) > 5:
-                    print(f"   ... and {len(tools) - 5} more")
+                # Parse SSE response
+                lines = resp.text.strip().split('\n')
+                for line in lines:
+                    if line.startswith('data: '):
+                        json_data = line[6:]  # Remove "data: " prefix
+                        data = json.loads(json_data)
+                        tools = data.get('result', {}).get('tools', [])
+                        print(f"   Found {len(tools)} tools:")
+                        for tool in tools[:5]:  # Show first 5
+                            print(f"   - {tool.get('name')}: {tool.get('description', '')[:50]}...")
+                        if len(tools) > 5:
+                            print(f"   ... and {len(tools) - 5} more")
+                        break
             else:
                 print(f"   Error: {resp.text}")
                 

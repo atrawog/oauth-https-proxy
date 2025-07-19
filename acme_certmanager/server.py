@@ -22,7 +22,7 @@ from typing import Tuple
 from .manager import CertificateManager
 from .models import (
     CertificateRequest, MultiDomainCertificateRequest, Certificate, HealthStatus,
-    ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
+    ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig
 )
 from .routes import Route, RouteCreateRequest, RouteUpdateRequest, RouteTargetType
 from .scheduler import CertificateScheduler
@@ -762,6 +762,96 @@ async def delete_proxy_target(
         manager.delete_certificate(target.cert_name)
     
     return {"message": f"Proxy target {hostname} deleted successfully"}
+
+
+# Proxy auth configuration endpoints
+@app.post("/proxy/targets/{hostname}/auth",
+          dependencies=[Depends(require_proxy_owner)])
+async def configure_proxy_auth(
+    hostname: str,
+    config: ProxyAuthConfig,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Configure unified auth for a proxy target - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Validate auth proxy exists
+    if config.auth_proxy:
+        auth_target = manager.storage.get_proxy_target(config.auth_proxy)
+        if not auth_target:
+            raise HTTPException(400, f"Auth proxy {config.auth_proxy} not found")
+    
+    # Update auth configuration
+    target.auth_enabled = config.enabled
+    target.auth_proxy = config.auth_proxy
+    target.auth_mode = config.mode
+    target.auth_required_users = config.required_users
+    target.auth_required_emails = config.required_emails
+    target.auth_required_groups = config.required_groups
+    target.auth_pass_headers = config.pass_headers
+    target.auth_cookie_name = config.cookie_name
+    target.auth_header_prefix = config.header_prefix
+    
+    # Store updated target
+    if not manager.storage.store_proxy_target(target):
+        raise HTTPException(500, "Failed to update proxy target")
+    
+    logger.info(f"Auth configured for proxy {hostname}: enabled={config.enabled}, proxy={config.auth_proxy}, mode={config.mode}")
+    
+    return {"status": "Auth configured", "proxy_target": target}
+
+
+@app.delete("/proxy/targets/{hostname}/auth",
+            dependencies=[Depends(require_proxy_owner)])
+async def remove_proxy_auth(
+    hostname: str,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Disable auth protection for a proxy target - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Disable auth
+    target.auth_enabled = False
+    target.auth_proxy = None
+    target.auth_required_users = None
+    target.auth_required_emails = None
+    target.auth_required_groups = None
+    
+    # Store updated target
+    if not manager.storage.store_proxy_target(target):
+        raise HTTPException(500, "Failed to update proxy target")
+    
+    logger.info(f"Auth disabled for proxy {hostname}")
+    
+    return {"status": "Auth protection removed", "proxy_target": target}
+
+
+@app.get("/proxy/targets/{hostname}/auth")
+async def get_proxy_auth_config(
+    hostname: str,
+    token_info: Optional[Tuple[str, Optional[str], Optional[str]]] = Depends(get_optional_token_info)
+):
+    """Get auth configuration for a proxy target."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Return auth configuration
+    return {
+        "auth_enabled": target.auth_enabled,
+        "auth_proxy": target.auth_proxy,
+        "auth_mode": target.auth_mode,
+        "auth_required_users": target.auth_required_users,
+        "auth_required_emails": target.auth_required_emails,
+        "auth_required_groups": target.auth_required_groups,
+        "auth_pass_headers": target.auth_pass_headers,
+        "auth_cookie_name": target.auth_cookie_name,
+        "auth_header_prefix": target.auth_header_prefix
+    }
 
 
 # Route management endpoints

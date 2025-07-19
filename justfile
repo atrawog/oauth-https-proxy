@@ -953,6 +953,169 @@ test-cert-email:
     pixi run python scripts/test_cert_email.py
 
 # ============================================================================
+# Auth Management for Proxies
+# ============================================================================
+
+# Setup OAuth service and create auth proxy
+auth-setup domain="${BASE_DOMAIN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Setting up OAuth authentication service..."
+    
+    # Check if OAuth config exists
+    if [ -z "${GITHUB_CLIENT_ID:-}" ] || [ -z "${GITHUB_CLIENT_SECRET:-}" ]; then
+        echo "Error: GITHUB_CLIENT_ID and GITHUB_CLIENT_SECRET must be set in .env"
+        echo "Create a GitHub OAuth app at: https://github.com/settings/developers"
+        echo "Callback URL: https://auth.{{domain}}/callback"
+        exit 1
+    fi
+    
+    # Build and start OAuth service
+    echo "Starting OAuth service..."
+    docker-compose up -d oauth-server
+    
+    # Wait for health check
+    echo "Waiting for OAuth service to be healthy..."
+    sleep 5
+    
+    # Create auth proxy
+    echo "Creating auth proxy: auth.{{domain}} -> http://oauth-server:8000"
+    just proxy-create auth.{{domain}} http://oauth-server:8000 admin
+    
+    # Generate certificate for auth proxy
+    echo "Generating certificate for auth.{{domain}}..."
+    just proxy-cert-generate auth.{{domain}} admin
+    
+    echo "OAuth authentication service setup complete!"
+
+# Enable auth for a proxy (defaults to ADMIN_TOKEN)
+proxy-auth-enable hostname token-name="" auth-proxy="auth.${BASE_DOMAIN}" mode="forward":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Enabling auth for proxy: {{hostname}}"
+    echo "  Auth proxy: {{auth-proxy}}"
+    echo "  Mode: {{mode}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_auth_enable.py \
+        "{{hostname}}" "$token" --auth-proxy="{{auth-proxy}}" --mode="{{mode}}"
+
+# Configure auth requirements for a proxy
+proxy-auth-config hostname token-name="" users="" emails="" groups="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Configuring auth requirements for proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    
+    args=""
+    if [ -n "{{users}}" ]; then
+        args="$args --users={{users}}"
+        echo "  Required users: {{users}}"
+    fi
+    if [ -n "{{emails}}" ]; then
+        args="$args --emails={{emails}}"
+        echo "  Required emails: {{emails}}"
+    fi
+    if [ -n "{{groups}}" ]; then
+        args="$args --groups={{groups}}"
+        echo "  Required groups: {{groups}}"
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_auth_config.py \
+        "{{hostname}}" "$token" $args
+
+# Disable auth for a proxy
+proxy-auth-disable hostname token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Disabling auth for proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        echo "Using admin token"
+    elif [[ ! "$token" =~ ^acm_ ]]; then
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "{{token-name}}" | grep "^Token: " | cut -d' ' -f2)
+        if [ -z "$token" ]; then
+            echo "Error: Could not find token '{{token-name}}'"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_auth_disable.py \
+        "{{hostname}}" "$token"
+
+# Show auth configuration for a proxy
+proxy-auth-show hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Auth configuration for proxy: {{hostname}}"
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_auth_show.py "{{hostname}}"
+
+# Test auth flow for a proxy
+test-auth-flow hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Testing auth flow for: {{hostname}}"
+    pixi run python scripts/test_auth_flow.py "{{hostname}}"
+
+# Generate RSA key for OAuth JWT signing
+generate-oauth-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Generating RSA private key for OAuth JWT signing..."
+    
+    # Generate key
+    openssl genrsa -out oauth_private.pem 2048
+    
+    # Base64 encode for .env
+    echo ""
+    echo "Add this to your .env file:"
+    echo "OAUTH_JWT_PRIVATE_KEY_B64=$(base64 -w 0 oauth_private.pem)"
+    echo ""
+    echo "Keep oauth_private.pem secure and add it to .gitignore!"
+
+# ============================================================================
 # Route Management
 # ============================================================================
 

@@ -63,7 +63,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/"]
+      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -87,7 +87,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/"]
+      test: ["CMD", "curl", "-f", "-s", "-X", "POST", "-H", "Mcp-Session-Id: health-check", "-H", "Content-Type: application/json", "-d", "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"},\"id\":1}", "http://localhost:3000/mcp"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -108,7 +108,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/"]
+      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/mcp"]
       interval: 30s
       timeout: 10s
       retries: 3
@@ -116,6 +116,42 @@ services:
     volumes:
       # Mount source code for development
       - ./mcp-echo-streamablehttp-server-stateless/src:/app/src
+
+  # OAuth authentication service
+  oauth-server:
+    build: ./mcp-oauth-dynamicclient
+    restart: unless-stopped
+    environment:
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - JWT_ALGORITHM=${OAUTH_JWT_ALGORITHM:-RS256}
+      - JWT_PRIVATE_KEY_B64=${OAUTH_JWT_PRIVATE_KEY_B64}
+      - BASE_DOMAIN=${BASE_DOMAIN:-localhost}
+      - REDIS_URL=${REDIS_URL}
+      - REDIS_PASSWORD=${REDIS_PASSWORD}
+      - ACCESS_TOKEN_LIFETIME=${OAUTH_ACCESS_TOKEN_LIFETIME:-1800}
+      - REFRESH_TOKEN_LIFETIME=${OAUTH_REFRESH_TOKEN_LIFETIME:-31536000}
+      - SESSION_TIMEOUT=${OAUTH_SESSION_TIMEOUT:-300}
+      - CLIENT_LIFETIME=${OAUTH_CLIENT_LIFETIME:-7776000}
+      - ALLOWED_GITHUB_USERS=${OAUTH_ALLOWED_GITHUB_USERS:-*}
+      - MCP_PROTOCOL_VERSION=${OAUTH_MCP_PROTOCOL_VERSION:-2025-06-18}
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    networks:
+      - acme_network
+    depends_on:
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    labels:
+      - "instance.name=oauth-server"
+    volumes:
+      # Mount source code for development
+      - ./mcp-oauth-dynamicclient/src:/app/src
 
   # Test runner service - only runs when explicitly called
   test-runner:

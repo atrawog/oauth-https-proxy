@@ -310,7 +310,7 @@ Response:
 - `RENEWAL_THRESHOLD_DAYS`: Days before expiry to renew (default: 30)
 - `TEST_PROXY_TARGET_URL`: Default proxy target for tests (default: https://example.com)
 
-## Proxy Manager
+# Proxy Manager
 
 Dynamic reverse proxy with automatic SSL certificate provisioning. Maps hostnames to upstream targets with per-request certificate generation, WebSocket support, and streaming capabilities.
 
@@ -509,7 +509,7 @@ just test-streaming-proxy        # Test streaming/SSE
 just test-proxy-all             # Run all proxy tests
 ```
 
-## Recent Updates
+# Recent Updates
 
 ### Multi-Domain Certificate Support
 - Single certificate can cover multiple domains (up to 100)
@@ -772,3 +772,232 @@ just cert-to-production services-cert
 # - Re-attaches to all affected proxies
 # - Maintains ownership and settings
 ```
+
+# OAuth Authentication for Proxies
+
+Unified OAuth 2.1 authentication system that enables GitHub-based authentication for any proxy service. The OAuth service runs as a standard proxied service, allowing centralized authentication management across all proxies.
+
+## OAuth Architecture
+
+### Core Design Principle
+The OAuth service (`mcp-oauth-dynamicclient`) is deployed as just another proxied service, not a special component. This allows it to be managed, configured, and accessed like any other proxy target.
+
+### Components
+
+1. **OAuth Service** (`oauth-server`)
+   - Runs on internal port 8000
+   - Handles GitHub OAuth flow
+   - Issues and validates JWT tokens
+   - Provides ForwardAuth `/verify` endpoint
+   - Manages dynamic client registration (RFC 7591)
+
+2. **Auth Proxy** (`auth.example.com`)
+   - Standard proxy target pointing to oauth-server
+   - Handles all OAuth endpoints (/authorize, /token, /callback, etc.)
+   - Gets automatic HTTPS via standard certificate flow
+
+3. **ForwardAuth Middleware**
+   - Integrated into proxy handler
+   - Checks auth before forwarding requests
+   - Supports three modes: forward, redirect, passthrough
+   - Adds user headers to backend requests
+
+### Authentication Flow
+
+1. User visits protected proxy (e.g., `api.example.com`)
+2. Proxy handler checks if auth is enabled
+3. If no valid token/cookie, auth check via `auth.example.com/verify`
+4. Based on auth mode:
+   - **forward**: Returns 401 if not authenticated
+   - **redirect**: Redirects to GitHub OAuth login
+   - **passthrough**: Optional auth, always forwards
+5. Valid auth adds headers: `X-Auth-User-Id`, `X-Auth-User-Name`, etc.
+6. Backend receives request with user context
+
+## OAuth Configuration
+
+### Environment Variables
+```bash
+# GitHub OAuth App Configuration
+GITHUB_CLIENT_ID=your_github_oauth_app_id
+GITHUB_CLIENT_SECRET=your_github_oauth_app_secret
+
+# JWT Configuration
+OAUTH_JWT_ALGORITHM=RS256
+OAUTH_JWT_PRIVATE_KEY_B64=base64_encoded_rsa_private_key
+
+# OAuth Service Settings
+OAUTH_ACCESS_TOKEN_LIFETIME=1800         # 30 minutes
+OAUTH_REFRESH_TOKEN_LIFETIME=31536000    # 1 year
+OAUTH_SESSION_TIMEOUT=300                # 5 minutes
+OAUTH_CLIENT_LIFETIME=7776000            # 90 days
+OAUTH_ALLOWED_GITHUB_USERS=*             # Comma-separated or *
+```
+
+### Proxy Target Auth Fields
+```json
+{
+  "auth_enabled": true,
+  "auth_proxy": "auth.example.com",
+  "auth_mode": "forward",
+  "auth_required_users": ["alice", "bob"],
+  "auth_required_emails": ["*@example.com"],
+  "auth_required_groups": ["admins"],
+  "auth_pass_headers": true,
+  "auth_cookie_name": "unified_auth_token",
+  "auth_header_prefix": "X-Auth-"
+}
+```
+
+## OAuth Setup and Management
+
+### Initial Setup
+```bash
+# Generate RSA key for JWT signing
+just generate-oauth-key
+
+# Setup OAuth service and create auth proxy
+just auth-setup example.com
+```
+
+### Enable Auth for Proxies
+```bash
+# Enable with default settings (forward mode)
+just proxy-auth-enable api.example.com admin
+
+# Enable with redirect mode
+just proxy-auth-enable admin.example.com admin auth.example.com redirect
+
+# Configure user requirements
+just proxy-auth-config api.example.com admin users="alice,bob,charlie"
+
+# Configure email patterns
+just proxy-auth-config internal.example.com admin emails="*@example.com,*@company.com"
+
+# Show auth configuration
+just proxy-auth-show api.example.com
+
+# Test auth flow
+just test-auth-flow api.example.com
+```
+
+### API Endpoints
+
+#### Configure Auth
+`POST /proxy/targets/{hostname}/auth`
+```json
+{
+  "enabled": true,
+  "auth_proxy": "auth.example.com",
+  "mode": "forward",
+  "required_users": ["alice", "bob"],
+  "required_emails": ["*@example.com"],
+  "pass_headers": true
+}
+```
+
+#### Remove Auth
+`DELETE /proxy/targets/{hostname}/auth`
+
+#### Get Auth Config
+`GET /proxy/targets/{hostname}/auth`
+
+## Auth Modes Explained
+
+### Forward Mode (Default)
+- Returns 401 Unauthorized if not authenticated
+- Best for APIs and services expecting auth headers
+- No user interaction, relies on client handling 401
+
+### Redirect Mode
+- Redirects unauthenticated users to OAuth login
+- Best for web applications and admin panels
+- Seamless user experience with automatic return
+
+### Passthrough Mode
+- Auth is optional, request always forwarded
+- Adds auth headers if user is authenticated
+- Best for public services with optional personalization
+
+## Security Features
+
+1. **JWT Tokens**: RS256 signed, short-lived access tokens
+2. **Secure Cookies**: HttpOnly, Secure, SameSite=Lax
+3. **User Restrictions**: Limit by GitHub username, email, or groups
+4. **Token Validation**: Every request verified against auth service
+5. **Header Injection**: User context passed as headers, not modifiable by client
+
+## Common Patterns
+
+### API Service with Auth
+```bash
+# Create API proxy
+just proxy-create api.example.com http://api-backend:3000 admin
+
+# Enable auth (forward mode)
+just proxy-auth-enable api.example.com admin
+
+# Restrict to specific users
+just proxy-auth-config api.example.com admin users="alice,bob,dev-team"
+```
+
+### Admin Panel with Login
+```bash
+# Create admin proxy
+just proxy-create admin.example.com http://admin-ui:3000 admin
+
+# Enable auth with redirect
+just proxy-auth-enable admin.example.com admin auth.example.com redirect
+
+# Restrict to admin group
+just proxy-auth-config admin.example.com admin groups="admins"
+```
+
+### Public Site with Optional Auth
+```bash
+# Create public proxy
+just proxy-create www.example.com http://web-backend:3000 admin
+
+# Enable passthrough auth
+just proxy-auth-enable www.example.com admin auth.example.com passthrough
+```
+
+## Implementation Details
+
+### ForwardAuth Pattern
+The proxy handler implements the industry-standard ForwardAuth pattern:
+1. Original request details sent to auth service
+2. Auth service validates token/cookie
+3. Returns user info or auth required response
+4. Proxy acts based on auth result
+
+### State Management
+- JWT tokens stored in Redis with TTL
+- User sessions tracked for revocation
+- OAuth state parameters prevent CSRF
+- Cookies scoped to domain for SSO
+
+### Headers Added to Backend
+When authenticated, these headers are added:
+- `X-Auth-User-Id`: GitHub user ID
+- `X-Auth-User-Name`: GitHub username  
+- `X-Auth-User-Email`: User's email
+- `X-Auth-User-Groups`: Comma-separated groups
+- Custom claims as `X-Auth-{ClaimName}`
+
+## Troubleshooting
+
+### "Authentication service unavailable"
+- Check OAuth service is running: `docker-compose ps oauth-server`
+- Verify auth proxy exists: `just proxy-show auth.example.com`
+- Check OAuth service logs: `docker-compose logs oauth-server`
+
+### "User not authorized" despite valid login
+- Check user restrictions: `just proxy-auth-show <hostname>`
+- Verify GitHub username/email matches requirements
+- Use passthrough mode for debugging
+
+### Redirect loops
+- Ensure auth proxy has valid certificate
+- Check cookie domain settings match proxy domain
+- Verify OAuth callback URL in GitHub app settings

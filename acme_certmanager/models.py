@@ -141,6 +141,32 @@ class ProxyTarget(BaseModel):
     preserve_host_header: bool = True
     custom_headers: Optional[Dict[str, str]] = None
     
+    # Unified Auth Configuration
+    auth_enabled: bool = False
+    auth_proxy: Optional[str] = None  # e.g., "auth.example.com"
+    auth_mode: str = "forward"  # forward, redirect, or passthrough
+    auth_required_users: Optional[List[str]] = None
+    auth_required_emails: Optional[List[str]] = None
+    auth_required_groups: Optional[List[str]] = None
+    auth_pass_headers: bool = True  # Pass user info as headers
+    auth_cookie_name: str = "unified_auth_token"
+    auth_header_prefix: str = "X-Auth-"
+    
+    @validator('auth_mode')
+    def validate_auth_mode(cls, v):
+        valid_modes = ["forward", "redirect", "passthrough"]
+        if v not in valid_modes:
+            raise ValueError(f"auth_mode must be one of {valid_modes}")
+        return v
+    
+    @validator('auth_proxy')
+    def validate_auth_proxy(cls, v):
+        if v is not None:
+            v = v.strip().lower()
+            if not v or not '.' in v:
+                raise ValueError('Invalid auth proxy hostname')
+        return v
+    
     class Config:
         json_encoders = {
             datetime: lambda v: v.isoformat() if v else None
@@ -184,9 +210,62 @@ class ProxyTargetUpdate(BaseModel):
     enable_https: Optional[bool] = None
     preserve_host_header: Optional[bool] = None
     custom_headers: Optional[Dict[str, str]] = None
+    # Auth fields
+    auth_enabled: Optional[bool] = None
+    auth_proxy: Optional[str] = None
+    auth_mode: Optional[str] = None
+    auth_required_users: Optional[List[str]] = None
+    auth_required_emails: Optional[List[str]] = None
+    auth_required_groups: Optional[List[str]] = None
+    auth_pass_headers: Optional[bool] = None
+    auth_cookie_name: Optional[str] = None
+    auth_header_prefix: Optional[str] = None
     
     @validator('target_url')
     def validate_target_url(cls, v):
         if v is not None and not (v.startswith('http://') or v.startswith('https://')):
             raise ValueError('Target URL must start with http:// or https://')
+        return v
+    
+    @validator('auth_mode')
+    def validate_auth_mode(cls, v):
+        if v is not None:
+            valid_modes = ["forward", "redirect", "passthrough"]
+            if v not in valid_modes:
+                raise ValueError(f"auth_mode must be one of {valid_modes}")
+        return v
+    
+    @validator('auth_proxy')
+    def validate_auth_proxy(cls, v):
+        if v is not None:
+            v = v.strip().lower()
+            if not v or not '.' in v:
+                raise ValueError('Invalid auth proxy hostname')
+        return v
+
+
+class ProxyAuthConfig(BaseModel):
+    """Request model for configuring proxy authentication."""
+    enabled: bool = True
+    auth_proxy: str  # Required - e.g., "auth.example.com"
+    mode: str = "forward"  # forward, redirect, or passthrough
+    required_users: Optional[List[str]] = None
+    required_emails: Optional[List[str]] = None
+    required_groups: Optional[List[str]] = None
+    pass_headers: bool = True
+    cookie_name: str = "unified_auth_token"
+    header_prefix: str = "X-Auth-"
+    
+    @validator('auth_proxy')
+    def validate_auth_proxy(cls, v):
+        v = v.strip().lower()
+        if not v or not '.' in v:
+            raise ValueError('Invalid auth proxy hostname')
+        return v
+    
+    @validator('mode')
+    def validate_mode(cls, v):
+        valid_modes = ["forward", "redirect", "passthrough"]
+        if v not in valid_modes:
+            raise ValueError(f"mode must be one of {valid_modes}")
         return v

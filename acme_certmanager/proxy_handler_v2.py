@@ -1,11 +1,16 @@
 """Enhanced HTTP/S Proxy handler with WebSocket and streaming support."""
 
 import logging
-from typing import Dict, Optional, AsyncIterator
+import os
+import json
+import secrets
+import time
+from typing import Dict, Optional, AsyncIterator, Union
+from urllib.parse import quote
 import httpx
 import websockets
 from fastapi import Request, Response, HTTPException, WebSocket
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, RedirectResponse
 from starlette.background import BackgroundTask
 import asyncio
 from .storage import RedisStorage
@@ -20,17 +25,22 @@ class EnhancedProxyHandler:
     def __init__(self, storage: RedisStorage):
         """Initialize proxy handler with storage backend."""
         self.storage = storage
+        # Get timeout from environment with proper hierarchy
+        request_timeout = float(os.getenv('PROXY_REQUEST_TIMEOUT', '60'))
+        connect_timeout = float(os.getenv('PROXY_CONNECT_TIMEOUT', '5'))
+        
         # Create client with streaming support
         self.client = httpx.AsyncClient(
             follow_redirects=False,
             timeout=httpx.Timeout(
-                connect=5.0,     # Connection timeout
-                read=30.0,       # Read timeout
-                write=10.0,      # Write timeout
-                pool=None        # No pool timeout for streaming
+                connect=connect_timeout,     # Connection timeout
+                read=request_timeout,        # Read timeout (use request timeout)
+                write=10.0,                  # Write timeout
+                pool=None                    # No pool timeout for streaming
             ),
             limits=httpx.Limits(max_keepalive_connections=100)
         )
+        logger.info(f"EnhancedProxyHandler initialized with timeouts: read={request_timeout}s, connect={connect_timeout}s")
     
     async def handle_request(self, request: Request) -> Response:
         """Handle incoming proxy request."""
@@ -47,6 +57,22 @@ class EnhancedProxyHandler:
         
         if not target.enabled:
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
+        
+        # Check protocol-specific enable flags
+        is_https = request.url.scheme == "https"
+        if is_https and not target.enable_https:
+            raise HTTPException(404, f"HTTPS not enabled for {hostname}")
+        elif not is_https and not target.enable_http:
+            raise HTTPException(404, f"HTTP not enabled for {hostname}")
+        
+        # Check if auth is required
+        if target.auth_enabled and target.auth_proxy:
+            auth_result = await self._check_unified_auth(request, target)
+            if isinstance(auth_result, Response):
+                # Auth check returned a response (redirect or error)
+                return auth_result
+            # auth_result contains user info to add as headers
+            request.state.auth_user = auth_result
         
         # Handle OPTIONS (preflight) requests
         if request.method == "OPTIONS":
@@ -257,6 +283,26 @@ class EnhancedProxyHandler:
         headers["x-forwarded-proto"] = request.url.scheme
         headers["x-forwarded-host"] = request.headers.get("host", "")
         
+        # Add auth user headers if available
+        if hasattr(request.state, "auth_user") and target.auth_pass_headers:
+            auth_user = request.state.auth_user
+            header_prefix = target.auth_header_prefix
+            
+            # Add standard auth headers
+            if "user_id" in auth_user:
+                headers[f"{header_prefix}User-Id"] = str(auth_user["user_id"])
+            if "username" in auth_user:
+                headers[f"{header_prefix}User-Name"] = auth_user["username"]
+            if "email" in auth_user:
+                headers[f"{header_prefix}User-Email"] = auth_user["email"]
+            if "groups" in auth_user:
+                headers[f"{header_prefix}User-Groups"] = ",".join(auth_user["groups"])
+            
+            # Add custom claims
+            for key, value in auth_user.items():
+                if key not in ["user_id", "username", "email", "groups"]:
+                    headers[f"{header_prefix}{key.title()}"] = str(value)
+        
         return headers
     
     def _filter_response_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
@@ -285,3 +331,100 @@ class EnhancedProxyHandler:
     async def close(self):
         """Close the HTTP client."""
         await self.client.aclose()
+    
+    async def _check_unified_auth(self, request: Request, target: ProxyTarget) -> Union[Dict, Response]:
+        """Check authentication via unified auth proxy."""
+        
+        # Build auth verification request
+        auth_url = f"https://{target.auth_proxy}/verify"
+        
+        # Forward relevant headers and cookies
+        headers = {
+            "X-Original-URL": str(request.url),
+            "X-Original-Method": request.method,
+            "X-Forwarded-Host": request.headers.get("host", ""),
+            "X-Forwarded-Proto": request.url.scheme,
+            "X-Forwarded-For": request.client.host if request.client else "",
+        }
+        
+        # Include auth cookie if present
+        cookies = {}
+        if target.auth_cookie_name in request.cookies:
+            cookies[target.auth_cookie_name] = request.cookies[target.auth_cookie_name]
+        
+        # Include Authorization header if present
+        if "authorization" in request.headers:
+            headers["Authorization"] = request.headers["authorization"]
+        
+        try:
+            # Make auth verification request
+            auth_response = await self.client.get(
+                auth_url,
+                headers=headers,
+                cookies=cookies,
+                follow_redirects=False
+            )
+            
+            if auth_response.status_code == 200:
+                # Authentication successful
+                try:
+                    user_info = auth_response.json()
+                except json.JSONDecodeError:
+                    logger.error("Auth service returned invalid JSON")
+                    return Response(content="Authentication service error", status_code=503)
+                
+                # Check user/email/group restrictions
+                if target.auth_required_users:
+                    if user_info.get("username") not in target.auth_required_users:
+                        return Response(content="User not authorized", status_code=403)
+                
+                if target.auth_required_emails:
+                    email = user_info.get("email", "")
+                    if not any(pattern in email for pattern in target.auth_required_emails):
+                        return Response(content="Email not authorized", status_code=403)
+                
+                if target.auth_required_groups:
+                    user_groups = user_info.get("groups", [])
+                    if not any(group in user_groups for group in target.auth_required_groups):
+                        return Response(content="Group not authorized", status_code=403)
+                
+                return user_info
+            
+            elif auth_response.status_code == 401:
+                # Not authenticated - handle based on mode
+                if target.auth_mode == "redirect":
+                    # Redirect to auth proxy login
+                    return_url = str(request.url)
+                    auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}"
+                    return RedirectResponse(url=auth_login_url, status_code=302)
+                else:
+                    # Return 401 Unauthorized
+                    return Response(
+                        content="Authentication required",
+                        status_code=401,
+                        headers={"WWW-Authenticate": f'Bearer realm="{target.auth_proxy}"'}
+                    )
+            
+            else:
+                # Auth service error
+                logger.error(f"Auth service returned {auth_response.status_code}")
+                return Response(content="Authentication service error", status_code=503)
+                
+        except httpx.ConnectError:
+            logger.error(f"Failed to connect to auth service at {target.auth_proxy}")
+            if target.auth_mode == "passthrough":
+                # Continue without auth in passthrough mode
+                return {}
+            return Response(content="Authentication service unavailable", status_code=503)
+        except httpx.TimeoutException:
+            logger.error(f"Timeout connecting to auth service at {target.auth_proxy}")
+            if target.auth_mode == "passthrough":
+                # Continue without auth in passthrough mode
+                return {}
+            return Response(content="Authentication service timeout", status_code=503)
+        except Exception as e:
+            logger.error(f"Failed to verify auth: {e}")
+            if target.auth_mode == "passthrough":
+                # Continue without auth in passthrough mode
+                return {}
+            return Response(content="Authentication service error", status_code=503)
