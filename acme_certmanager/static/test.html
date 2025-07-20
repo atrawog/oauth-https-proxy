@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Test Browser API Call</title>
+</head>
+<body>
+    <h1>Testing Browser API Calls</h1>
+    <button onclick="testAPI()">Test API</button>
+    <pre id="output"></pre>
+
+    <script>
+    async function testAPI() {
+        const output = document.getElementById('output');
+        const token = 'acm_PikI3FoqDXghOEHdP9lf9wcf0zlEdK2AV9DvPinF-Us';
+        
+        output.textContent = 'Testing API calls...\n\n';
+        
+        try {
+            // Test 1: Token info
+            output.textContent += '1. Testing /token/info:\n';
+            const tokenResponse = await fetch('/token/info', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            output.textContent += `   Status: ${tokenResponse.status}\n`;
+            if (tokenResponse.ok) {
+                const tokenData = await tokenResponse.json();
+                output.textContent += `   Response: ${JSON.stringify(tokenData)}\n`;
+            }
+            
+            // Test 2: Certificates
+            output.textContent += '\n2. Testing /certificates:\n';
+            const certResponse = await fetch('/certificates', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            output.textContent += `   Status: ${certResponse.status}\n`;
+            if (certResponse.ok) {
+                const certData = await certResponse.json();
+                output.textContent += `   Number of certificates: ${certData.length}\n`;
+                output.textContent += `   Response: ${JSON.stringify(certData, null, 2)}\n`;
+            }
+            
+        } catch (error) {
+            output.textContent += `\nERROR: ${error.message}\n`;
+            output.textContent += `Stack: ${error.stack}\n`;
+        }
+    }
+    
+    // Auto-run on load
+    window.onload = () => {
+        testAPI();
+    };
+    </script>
+</body>
+</html>

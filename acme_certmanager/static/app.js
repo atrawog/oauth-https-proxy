@@ -136,6 +136,7 @@ let certificates = [];
 let proxyTargets = [];
 let routes = [];
 let statusPollingIntervals = new Map();
+let currentTokenInfo = null;
 
 // DOM Elements
 const loginSection = document.getElementById('login-section');
@@ -186,6 +187,19 @@ async function handleLogin(e) {
     try {
         api.setToken(token);
         await api.getCertificates(); // Test the token
+        
+        // Get token info to check if admin
+        try {
+            const response = await fetch('/token/info', {
+                headers: { 'Authorization': `Bearer ${token}` }
+            });
+            if (response.ok) {
+                currentTokenInfo = await response.json();
+            }
+        } catch (err) {
+            console.error('Failed to get token info:', err);
+        }
+        
         showDashboard();
         showNotification('Successfully authenticated', 'success');
     } catch (error) {
@@ -216,7 +230,25 @@ function showDashboard() {
     loginSection.classList.add('hidden');
     dashboardSection.classList.remove('hidden');
     logoutBtn.classList.remove('hidden');
-    authStatus.textContent = 'Authenticated';
+    
+    // Update auth status with token name if available
+    if (currentTokenInfo && currentTokenInfo.name) {
+        authStatus.textContent = `Authenticated as: ${currentTokenInfo.name}`;
+        
+        // Show ownership banner for non-admin users
+        const ownershipBanner = document.getElementById('ownership-banner');
+        const ownershipMessage = document.getElementById('ownership-message');
+        
+        if (currentTokenInfo.name !== 'ADMIN') {
+            ownershipBanner.classList.remove('hidden');
+            ownershipMessage.textContent = 'As a non-admin user, you can only see certificates and proxy targets that you own. Routes are global resources visible to all users.';
+        } else {
+            ownershipBanner.classList.add('hidden');
+        }
+    } else {
+        authStatus.textContent = 'Authenticated';
+    }
+    
     loadCertificates();
 }
 
@@ -234,10 +266,8 @@ function switchTab(tab) {
 
     tabContents.forEach(content => {
         if (content.id === `${tab}-tab`) {
-            content.classList.remove('hidden');
             content.classList.add('active');
         } else {
-            content.classList.add('hidden');
             content.classList.remove('active');
         }
     });
@@ -358,7 +388,13 @@ async function loadCertificates() {
         certificates = await api.getCertificates();
         
         if (certificates.length === 0) {
-            listContainer.innerHTML = '<div class="empty-state">No certificates found. Create your first certificate!</div>';
+            // Check if this is a non-admin user
+            const isNonAdmin = currentTokenInfo && currentTokenInfo.name !== 'ADMIN';
+            if (isNonAdmin) {
+                listContainer.innerHTML = '<div class="empty-state">No certificates owned by your token. Non-admin users can only see their own certificates.</div>';
+            } else {
+                listContainer.innerHTML = '<div class="empty-state">No certificates found. Create your first certificate!</div>';
+            }
             return;
         }
 
@@ -560,7 +596,13 @@ async function loadProxyTargets() {
         proxyTargets = await api.getProxyTargets();
         
         if (proxyTargets.length === 0) {
-            listContainer.innerHTML = '<p>No proxy targets configured. Create your first proxy target!</p>';
+            // Check if this is a non-admin user
+            const isNonAdmin = currentTokenInfo && currentTokenInfo.name !== 'ADMIN';
+            if (isNonAdmin) {
+                listContainer.innerHTML = '<div class="empty-state">No proxy targets owned by your token. Non-admin users can only see their own proxy targets.</div>';
+            } else {
+                listContainer.innerHTML = '<div class="empty-state">No proxy targets configured. Create your first proxy target!</div>';
+            }
             return;
         }
         
@@ -774,7 +816,7 @@ function showNotification(message, type = 'info') {
 }
 
 // Initialize on page load
-document.addEventListener('DOMContentLoaded', () => {
+document.addEventListener('DOMContentLoaded', async () => {
     // Add route form listener
     const newRouteForm = document.getElementById('new-route-form');
     if (newRouteForm) {
@@ -782,10 +824,26 @@ document.addEventListener('DOMContentLoaded', () => {
     }
     
     if (api.token) {
-        // Test if token is still valid
-        api.getCertificates()
-            .then(() => showDashboard())
-            .catch(() => showLogin());
+        try {
+            // Test if token is still valid
+            await api.getCertificates();
+            
+            // Get token info
+            try {
+                const response = await fetch('/token/info', {
+                    headers: { 'Authorization': `Bearer ${api.token}` }
+                });
+                if (response.ok) {
+                    currentTokenInfo = await response.json();
+                }
+            } catch (err) {
+                console.error('Failed to get token info:', err);
+            }
+            
+            showDashboard();
+        } catch (error) {
+            showLogin();
+        }
     } else {
         showLogin();
     }
@@ -808,7 +866,7 @@ function displayRoutes(routes) {
     const listContainer = document.getElementById('routes-list');
     
     if (routes.length === 0) {
-        listContainer.innerHTML = '<div class="empty-state">No routes configured</div>';
+        listContainer.innerHTML = '<div class="empty-state">No routes configured. Routes are global resources visible to all users.</div>';
         return;
     }
     
@@ -915,7 +973,9 @@ async function loadTokenInfo() {
         
         if (!response.ok) {            throw new Error('Failed to load token info');
         }        
-        const data = await response.json();        
+        const data = await response.json();
+        currentTokenInfo = data;  // Store for use in other parts of the app
+        
         // Update token info display
         document.getElementById('token-name').textContent = data.name || 'N/A';
         document.getElementById('token-preview').textContent = data.hash_preview || 'N/A';

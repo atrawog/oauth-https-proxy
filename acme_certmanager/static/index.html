@@ -29,6 +29,13 @@
 
             <!-- Dashboard Section (hidden by default) -->
             <section id="dashboard-section" class="section hidden">
+                <!-- Ownership Info Banner -->
+                <div id="ownership-banner" class="info-banner hidden">
+                    <div class="banner-content">
+                        <strong>Note:</strong> <span id="ownership-message"></span>
+                    </div>
+                </div>
+                
                 <div class="tabs">
                     <button class="tab-button active" data-tab="certificates">Certificates</button>
                     <button class="tab-button" data-tab="proxies">Proxies</button>
@@ -147,6 +154,10 @@
                     <div class="tab-header">
                         <h2>Routes</h2>
                         <button id="add-route-btn" class="btn btn-primary">Add Route</button>
+                    </div>
+                    
+                    <div class="info-message">
+                        <p><strong>Note:</strong> Routes are global resources visible to all users. They define how HTTP requests are routed before reaching specific proxy targets.</p>
                     </div>
                     
                     <!-- Route List -->
