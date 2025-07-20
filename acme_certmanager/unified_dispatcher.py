@@ -10,6 +10,7 @@ import logging
 import os
 import tempfile
 import struct
+import json
 from typing import Dict, Optional, List, Tuple, Set
 from datetime import datetime
 
@@ -18,6 +19,7 @@ from hypercorn.config import Config as HypercornConfig
 
 from .routes import Route, RouteTargetType
 from .proxy_app import create_proxy_app
+from .models import ProxyTarget
 
 logger = logging.getLogger(__name__)
 
@@ -89,7 +91,10 @@ class DomainInstance:
             # Configure Hypercorn for HTTP
             config = HypercornConfig()
             config.bind = [f"127.0.0.1:{self.http_port}"]
-            config.loglevel = os.getenv('LOG_LEVEL', 'INFO').upper()
+            log_level = os.getenv('LOG_LEVEL')
+            if not log_level:
+                raise ValueError("LOG_LEVEL not set in environment - required for server configuration")
+            config.loglevel = log_level.upper()
             
             logger.info(f"Starting HTTP instance on port {self.http_port} for domains: {self.domains}")
             
@@ -117,7 +122,10 @@ class DomainInstance:
             config.bind = [f"127.0.0.1:{self.https_port}"]
             config.certfile = self.cert_file
             config.keyfile = self.key_file
-            config.loglevel = os.getenv('LOG_LEVEL', 'INFO').upper()
+            log_level = os.getenv('LOG_LEVEL')
+            if not log_level:
+                raise ValueError("LOG_LEVEL not set in environment - required for server configuration")
+            config.loglevel = log_level.upper()
             
             logger.info(f"Starting HTTPS instance on port {self.https_port} for domains: {self.domains}")
             
@@ -179,6 +187,23 @@ class UnifiedDispatcher:
         # Named instances for routing targets
         self.named_instances: Dict[str, int] = {}  # name -> port
         
+    def get_applicable_routes(self, proxy_config: Optional[ProxyTarget]) -> List[Route]:
+        """Get routes applicable to a specific proxy based on its configuration."""
+        if not proxy_config:
+            # No proxy config means use all enabled routes (backwards compatibility)
+            return self.routes
+        
+        # Apply route filtering based on route_mode
+        if proxy_config.route_mode == "none":
+            # No routes apply
+            return []
+        elif proxy_config.route_mode == "selective":
+            # Only enabled routes apply
+            return [r for r in self.routes if r.route_id in proxy_config.enabled_routes]
+        else:  # route_mode == "all" (default)
+            # All routes except disabled ones
+            return [r for r in self.routes if r.route_id not in proxy_config.disabled_routes]
+    
     def register_instance(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
         """Register a domain instance for specific domains and protocols."""
@@ -354,20 +379,7 @@ class UnifiedDispatcher:
             if not data:
                 return
             
-            # First check generic routes
-            method, request_path = self.get_request_info(data)
-            if request_path:
-                for route in self.routes:
-                    if route.matches(request_path, method):
-                        target_port = self.resolve_route_target(route)
-                        if target_port:
-                            logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target_port}")
-                            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port)
-                            return
-                        else:
-                            logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
-            
-            # Extract hostname from HTTP Host header
+            # Extract hostname from HTTP Host header FIRST
             hostname = self.get_hostname_from_http_request(data)
             if not hostname:
                 logger.warning(f"No hostname found in HTTP request from {client_addr}")
@@ -377,7 +389,34 @@ class UnifiedDispatcher:
             
             logger.debug(f"HTTP hostname: {hostname}")
             
-            # Find the appropriate port
+            # Get proxy configuration to determine route filtering
+            proxy_config = None
+            if self.storage:
+                try:
+                    proxy_json = await self.storage.redis.get(f"proxy:{hostname}")
+                    if proxy_json:
+                        proxy_data = json.loads(proxy_json)
+                        proxy_config = ProxyTarget(**proxy_data)
+                except Exception as e:
+                    logger.debug(f"Could not load proxy config for {hostname}: {e}")
+            
+            # Apply route filtering based on proxy configuration
+            applicable_routes = self.get_applicable_routes(proxy_config)
+            
+            # Check generic routes with filtering
+            method, request_path = self.get_request_info(data)
+            if request_path and applicable_routes:
+                for route in applicable_routes:
+                    if route.matches(request_path, method):
+                        target_port = self.resolve_route_target(route)
+                        if target_port:
+                            logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target_port}")
+                            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port)
+                            return
+                        else:
+                            logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
+            
+            # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_http_port.get(hostname)
             if not target_port:
                 logger.warning(f"No HTTP instance found for hostname: {hostname}")
@@ -489,7 +528,10 @@ class UnifiedDispatcher:
     async def start(self):
         """Start both HTTP and HTTPS dispatchers without blocking."""
         # Start HTTP dispatcher on port 80
-        http_port = int(os.getenv('HTTP_PORT', '80'))
+        http_port_str = os.getenv('HTTP_PORT')
+        if not http_port_str:
+            raise ValueError("HTTP_PORT not set in environment - required for server configuration")
+        http_port = int(http_port_str)
         self.http_server = await asyncio.start_server(
             self.handle_http_connection,
             self.host,
@@ -498,7 +540,10 @@ class UnifiedDispatcher:
         logger.info(f"HTTP Dispatcher listening on {self.host}:{http_port}")
         
         # Start HTTPS dispatcher on port 443
-        https_port = int(os.getenv('HTTPS_PORT', '443'))
+        https_port_str = os.getenv('HTTPS_PORT')
+        if not https_port_str:
+            raise ValueError("HTTPS_PORT not set in environment - required for server configuration")
+        https_port = int(https_port_str)
         self.https_server = await asyncio.start_server(
             self.handle_https_connection,
             self.host,

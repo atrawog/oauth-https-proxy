@@ -12,7 +12,10 @@ from .models import CertificateRequest, Certificate
 logger = logging.getLogger(__name__)
 
 # Global executor for running blocking operations
-max_workers = int(os.getenv('CERT_GEN_MAX_WORKERS', '5'))
+max_workers_str = os.getenv('CERT_GEN_MAX_WORKERS')
+if not max_workers_str:
+    raise ValueError("CERT_GEN_MAX_WORKERS not set in environment - required for certificate generation")
+max_workers = int(max_workers_str)
 executor = ThreadPoolExecutor(max_workers=max_workers)
 
 # Track ongoing certificate generations
@@ -23,7 +26,9 @@ generation_results: Dict[str, Dict[str, Any]] = {}
 
 async def generate_certificate_async(
     manager: CertificateManager,
-    request: CertificateRequest
+    request: CertificateRequest,
+    owner_token_hash: str = None,
+    created_by: str = None
 ) -> Certificate:
     """Generate certificate in a thread to avoid blocking."""
     loop = asyncio.get_event_loop()
@@ -32,7 +37,9 @@ async def generate_certificate_async(
     certificate = await loop.run_in_executor(
         executor,
         manager.create_certificate,
-        request
+        request,
+        owner_token_hash,
+        created_by
     )
     
     return certificate
@@ -40,7 +47,9 @@ async def generate_certificate_async(
 
 async def generate_multi_domain_certificate_async(
     manager: CertificateManager,
-    request
+    request,
+    owner_token_hash: str = None,
+    created_by: str = None
 ) -> Certificate:
     """Generate multi-domain certificate in a thread to avoid blocking."""
     loop = asyncio.get_event_loop()
@@ -49,7 +58,9 @@ async def generate_multi_domain_certificate_async(
     certificate = await loop.run_in_executor(
         executor,
         manager.create_multi_domain_certificate,
-        request
+        request,
+        owner_token_hash,
+        created_by
     )
     
     return certificate
@@ -172,15 +183,13 @@ async def create_multi_domain_certificate_task(
                 "started_at": asyncio.get_event_loop().time()
             }
             
-            # Generate certificate
-            certificate = await generate_multi_domain_certificate_async(manager, request)
+            # Generate multi-domain certificate with ownership info
+            certificate = await generate_multi_domain_certificate_async(manager, request, owner_token_hash, created_by)
             
-            # Add ownership info
-            certificate.owner_token_hash = owner_token_hash
-            certificate.created_by = created_by
-            
-            # Store certificate with ownership info
-            manager.storage.store_certificate(cert_name, certificate)
+            # Verify certificate was stored
+            stored_cert = manager.storage.get_certificate(cert_name)
+            if not stored_cert:
+                raise Exception(f"Multi-domain certificate was generated but not stored in Redis for {cert_name}")
             
             # Update SSL context
             https_server.update_ssl_context(certificate)

@@ -26,12 +26,15 @@ class CertificateManager:
         self.ssl_contexts: Dict[str, any] = {}
         
         # Initialize logging
+        log_level = os.getenv('LOG_LEVEL')
+        if not log_level:
+            raise ValueError("LOG_LEVEL not set in environment - required for logging configuration")
         logging.basicConfig(
-            level=os.getenv('LOG_LEVEL', 'INFO'),
+            level=log_level,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
         )
     
-    def create_certificate(self, request: CertificateRequest) -> Certificate:
+    def create_certificate(self, request: CertificateRequest, owner_token_hash: str = None, created_by: str = None) -> Certificate:
         """Create new certificate from request."""
         logger.info(f"Creating certificate {request.cert_name} for {request.domain}")
         
@@ -40,12 +43,14 @@ class CertificateManager:
             domains=[request.domain],  # Can be extended to support multiple domains
             email=request.email,
             acme_directory_url=request.acme_directory_url,
-            cert_name=request.cert_name
+            cert_name=request.cert_name,
+            owner_token_hash=owner_token_hash,
+            created_by=created_by
         )
         
         return certificate
     
-    def create_multi_domain_certificate(self, request) -> Certificate:
+    def create_multi_domain_certificate(self, request, owner_token_hash: str = None, created_by: str = None) -> Certificate:
         """Create multi-domain certificate from request."""
         logger.info(f"Creating multi-domain certificate {request.cert_name} for {', '.join(request.domains)}")
         
@@ -54,7 +59,9 @@ class CertificateManager:
             domains=request.domains,
             email=request.email,
             acme_directory_url=request.acme_directory_url,
-            cert_name=request.cert_name
+            cert_name=request.cert_name,
+            owner_token_hash=owner_token_hash,
+            created_by=created_by
         )
         
         return certificate

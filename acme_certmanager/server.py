@@ -7,7 +7,7 @@ import ssl
 import tempfile
 import threading
 from contextlib import asynccontextmanager
-from typing import Dict, Optional, Union
+from typing import Dict, Optional, Union, List
 
 from fastapi import FastAPI, HTTPException, BackgroundTasks, Request, Depends, WebSocket
 from fastapi.responses import PlainTextResponse, RedirectResponse, JSONResponse
@@ -22,7 +22,7 @@ from typing import Tuple
 from .manager import CertificateManager
 from .models import (
     CertificateRequest, MultiDomainCertificateRequest, Certificate, HealthStatus,
-    ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig
+    ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig
 )
 from .routes import Route, RouteCreateRequest, RouteUpdateRequest, RouteTargetType
 from .scheduler import CertificateScheduler
@@ -628,8 +628,12 @@ async def create_proxy_target(
         cert = manager.get_certificate(cert_name)
         if not cert:
             # Create certificate request
-            # Use provided ACME URL or default to staging for tests
-            acme_url = request.acme_directory_url or os.getenv("ACME_STAGING_URL", "https://acme-staging-v02.api.letsencrypt.org/directory")
+            # Use provided ACME URL or get from environment
+            acme_url = request.acme_directory_url
+            if not acme_url:
+                acme_url = os.getenv("ACME_STAGING_URL")
+                if not acme_url:
+                    raise HTTPException(400, "ACME directory URL required - provide in request or set ACME_STAGING_URL in environment")
             
             # Use token's cert_email if not provided in request
             email = request.cert_email if request.cert_email else cert_email
@@ -852,6 +856,153 @@ async def get_proxy_auth_config(
         "auth_cookie_name": target.auth_cookie_name,
         "auth_header_prefix": target.auth_header_prefix
     }
+
+
+# Proxy-specific route management endpoints
+@app.get("/proxy/targets/{hostname}/routes",
+         dependencies=[Depends(get_current_token_info)])
+async def get_proxy_routes(
+    hostname: str,
+    token_info: Optional[Tuple[str, Optional[str], Optional[str]]] = Depends(get_optional_token_info)
+):
+    """Get route configuration for a proxy target."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Get all routes and filter applicable ones
+    all_routes = manager.storage.list_routes()
+    
+    # Determine applicable routes based on route_mode
+    if target.route_mode == "none":
+        applicable_routes = []
+    elif target.route_mode == "selective":
+        applicable_routes = [r for r in all_routes if r.route_id in target.enabled_routes]
+    else:  # route_mode == "all"
+        applicable_routes = [r for r in all_routes if r.route_id not in target.disabled_routes]
+    
+    return {
+        "route_mode": target.route_mode,
+        "enabled_routes": target.enabled_routes,
+        "disabled_routes": target.disabled_routes,
+        "applicable_routes": applicable_routes
+    }
+
+
+@app.put("/proxy/targets/{hostname}/routes",
+         dependencies=[Depends(require_proxy_owner)])
+async def update_proxy_routes(
+    hostname: str,
+    config: ProxyRoutesConfig,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Update route settings for a proxy target - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Update proxy target
+    updates = ProxyTargetUpdate(
+        route_mode=config.route_mode,
+        enabled_routes=config.enabled_routes,
+        disabled_routes=config.disabled_routes
+    )
+    
+    if not manager.storage.update_proxy_target(hostname, updates):
+        raise HTTPException(500, "Failed to update proxy routes")
+    
+    # Get updated target
+    target = manager.storage.get_proxy_target(hostname)
+    
+    logger.info(f"Routes updated for proxy {hostname}: mode={config.route_mode}")
+    
+    return {"status": "Routes configured", "proxy_target": target}
+
+
+@app.post("/proxy/targets/{hostname}/routes/{route_id}/enable",
+          dependencies=[Depends(require_proxy_owner)])
+async def enable_proxy_route(
+    hostname: str,
+    route_id: str,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Enable a specific route for a proxy target - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Verify route exists
+    route = manager.storage.get_route(route_id)
+    if not route:
+        raise HTTPException(404, f"Route {route_id} not found")
+    
+    # Update based on route_mode
+    updates = ProxyTargetUpdate()
+    
+    if target.route_mode == "selective":
+        # Add to enabled_routes
+        if route_id not in target.enabled_routes:
+            enabled_routes = target.enabled_routes.copy()
+            enabled_routes.append(route_id)
+            updates.enabled_routes = enabled_routes
+    elif target.route_mode == "all":
+        # Remove from disabled_routes
+        if route_id in target.disabled_routes:
+            disabled_routes = target.disabled_routes.copy()
+            disabled_routes.remove(route_id)
+            updates.disabled_routes = disabled_routes
+    else:
+        raise HTTPException(400, "Cannot enable routes when route_mode is 'none'")
+    
+    if not manager.storage.update_proxy_target(hostname, updates):
+        raise HTTPException(500, "Failed to enable route")
+    
+    logger.info(f"Route {route_id} enabled for proxy {hostname}")
+    
+    return {"status": "Route enabled", "route_id": route_id}
+
+
+@app.post("/proxy/targets/{hostname}/routes/{route_id}/disable",
+          dependencies=[Depends(require_proxy_owner)])
+async def disable_proxy_route(
+    hostname: str,
+    route_id: str,
+    token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+):
+    """Disable a specific route for a proxy target - owner only."""
+    target = manager.storage.get_proxy_target(hostname)
+    if not target:
+        raise HTTPException(404, f"Proxy target {hostname} not found")
+    
+    # Verify route exists
+    route = manager.storage.get_route(route_id)
+    if not route:
+        raise HTTPException(404, f"Route {route_id} not found")
+    
+    # Update based on route_mode
+    updates = ProxyTargetUpdate()
+    
+    if target.route_mode == "selective":
+        # Remove from enabled_routes
+        if route_id in target.enabled_routes:
+            enabled_routes = target.enabled_routes.copy()
+            enabled_routes.remove(route_id)
+            updates.enabled_routes = enabled_routes
+    elif target.route_mode == "all":
+        # Add to disabled_routes
+        if route_id not in target.disabled_routes:
+            disabled_routes = target.disabled_routes.copy()
+            disabled_routes.append(route_id)
+            updates.disabled_routes = disabled_routes
+    else:
+        raise HTTPException(400, "Cannot disable routes when route_mode is 'none'")
+    
+    if not manager.storage.update_proxy_target(hostname, updates):
+        raise HTTPException(500, "Failed to disable route")
+    
+    logger.info(f"Route {route_id} disabled for proxy {hostname}")
+    
+    return {"status": "Route disabled", "route_id": route_id}
 
 
 # Route management endpoints
@@ -1079,10 +1230,14 @@ def run_server():
         
         try:
             # Run unified multi-instance server with dispatchers for both HTTP and HTTPS
+            server_host = os.getenv('SERVER_HOST')
+            if not server_host:
+                raise ValueError("SERVER_HOST not set in environment - required for server configuration")
+            
             unified_server = UnifiedMultiInstanceServer(
                 https_server_instance=https_server,
                 app=app,
-                host=os.getenv('SERVER_HOST')
+                host=server_host
             )
             await unified_server.run()
         finally:

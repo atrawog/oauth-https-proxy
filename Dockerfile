@@ -12,6 +12,11 @@ WORKDIR /app
 COPY pixi.toml .
 COPY pyproject.toml .
 
+# Copy local dependencies referenced in pixi.toml
+COPY mcp-streamablehttp-client/ ./mcp-streamablehttp-client/
+COPY mcp-echo-streamablehttp-server-stateful/ ./mcp-echo-streamablehttp-server-stateful/
+COPY mcp-echo-streamablehttp-server-stateless/ ./mcp-echo-streamablehttp-server-stateless/
+
 # Install pixi
 RUN curl -fsSL https://pixi.sh/install.sh | bash && \
     echo 'export PATH="/root/.pixi/bin:$PATH"' >> ~/.bashrc

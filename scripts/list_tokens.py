@@ -69,15 +69,20 @@ def list_tokens():
                     if proxy_cursor == 0:
                         break
                 
+                name = token_data.get('name', 'Unknown')
+                # Show FULL token - user explicitly wants full visibility
+                token_display = token_data.get('token', 'N/A')
+                
                 tokens.append({
-                    'Name': token_data.get('name', 'Unknown'),
-                    'Token': token_data.get('token', 'N/A'),
+                    'Name': name,
+                    'Token': token_display,
                     'Email': token_data.get('cert_email') or '(not set)',
                     'Created': datetime.fromisoformat(
                         token_data.get('created_at', '')
                     ).strftime('%Y-%m-%d %H:%M') if token_data.get('created_at') else 'Unknown',
                     'Certs': cert_count,
-                    'Proxies': proxy_count
+                    'Proxies': proxy_count,
+                    'Type': 'Admin' if name == 'ADMIN' else 'User'
                 })
         except Exception as e:
             print(f"Error processing token {key}: {e}")

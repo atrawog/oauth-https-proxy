@@ -199,7 +199,7 @@ token-show-certs token="":
     docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token_certs.py "{{token}}"
 
 # Generate admin token and save to .env
-token-generate-admin cert-email="admin@example.com" force="false":
+token-generate-admin force="false":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -211,26 +211,37 @@ token-generate-admin cert-email="admin@example.com" force="false":
     if grep -q "^ADMIN_TOKEN=" .env 2>/dev/null && [ "{{force}}" != "true" ]; then
         echo "⚠️  Admin token already exists in .env"
         echo ""
-        echo "To regenerate, run: just token-generate-admin {{cert-email}} true"
+        echo "To regenerate, run: just token-generate-admin true"
         exit 0
     fi
     
-    # Check if admin token exists in Redis and delete it if force is true
-    if docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "admin" 2>/dev/null | grep -q "^Token: "; then
+    # Check if ADMIN token exists in Redis and delete it if force is true
+    if docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/show_token.py "ADMIN" 2>/dev/null | grep -q "^Token: "; then
         if [ "{{force}}" = "true" ]; then
-            echo "Removing existing admin token from system..."
-            docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/delete_admin_token.py
+            echo "Removing existing ADMIN token from system..."
+            # Delete by getting the hash first
+            existing_hash=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python -c "import os, sys; sys.path.insert(0, '/app'); from acme_certmanager.storage import RedisStorage; storage = RedisStorage(os.getenv('REDIS_URL')); token_data = storage.get_api_token_by_name('ADMIN'); print(token_data.get('hash', '') if token_data else '')" 2>/dev/null)
+            if [ -n "$existing_hash" ]; then
+                docker exec mcp-http-proxy-acme-certmanager-1 pixi run python -c "import os, sys; sys.path.insert(0, '/app'); from acme_certmanager.storage import RedisStorage; storage = RedisStorage(os.getenv('REDIS_URL')); storage.delete_api_token('$existing_hash')"
+            fi
         else
             echo "⚠️  Admin token already exists in system"
             echo ""
-            echo "To regenerate, run: just token-generate-admin {{cert-email}} true"
+            echo "To regenerate, run: just token-generate-admin true"
             exit 0
         fi
     fi
     
+    # Check if ADMIN_EMAIL exists in environment
+    if [ -z "${ADMIN_EMAIL:-}" ]; then
+        echo "❌ Error: ADMIN_EMAIL not found in .env"
+        echo "Please set ADMIN_EMAIL in .env before generating admin token."
+        exit 1
+    fi
+    
     # Generate new admin token
-    echo "Generating new admin token..."
-    output=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_token.py "admin" "{{cert-email}}")
+    echo "Generating new admin token with email: $ADMIN_EMAIL"
+    output=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/generate_admin_token.py "$ADMIN_EMAIL")
     
     # Extract token from output
     token=$(echo "$output" | grep "^Token: " | cut -d' ' -f2)
@@ -255,24 +266,39 @@ token-generate-admin cert-email="admin@example.com" force="false":
         echo "✓ Added ADMIN_TOKEN to .env"
     fi
     
-    # Update or add ADMIN_EMAIL in .env
-    if grep -q "^ADMIN_EMAIL=" .env 2>/dev/null; then
-        # Replace existing email
-        sed -i.bak "s/^ADMIN_EMAIL=.*/ADMIN_EMAIL={{cert-email}}/" .env
-        echo "✓ Updated ADMIN_EMAIL in .env"
-    else
-        # Add new email
-        echo "ADMIN_EMAIL={{cert-email}}" >> .env
-        echo "✓ Added ADMIN_EMAIL to .env"
-    fi
+    # ADMIN_EMAIL should already be in .env (we checked above)
     
     echo ""
     echo "Admin token generated successfully!"
-    echo "Token Name: admin"
-    echo "Email: {{cert-email}}"
+    echo "Token Name: ADMIN"
+    echo "Email: $ADMIN_EMAIL"
     echo ""
     echo "This token is now available as ADMIN_TOKEN in .env"
-    echo "and will be used for internal operations."
+    echo "and is also stored in Redis for consistency."
+    echo "It will appear in 'just token-list' as 'ADMIN'."
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+# Sync existing ADMIN_TOKEN from environment to Redis
+token-sync-admin:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "Syncing ADMIN_TOKEN to Redis"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    
+    # Check if ADMIN_TOKEN exists in environment
+    if [ -z "${ADMIN_TOKEN:-}" ]; then
+        echo "❌ Error: ADMIN_TOKEN not found in .env"
+        echo ""
+        echo "Please run 'just token-generate-admin' first to create an admin token."
+        exit 1
+    fi
+    
+    echo "Syncing ADMIN_TOKEN to Redis..."
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/sync_admin_token_to_redis.py
+    
+    echo ""
     echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
 
 # Show detailed info about a specific token
@@ -1098,6 +1124,92 @@ test-auth-flow hostname:
     set -euo pipefail
     echo "Testing auth flow for: {{hostname}}"
     pixi run python scripts/test_auth_flow.py "{{hostname}}"
+
+# Show proxy route configuration
+proxy-routes-show hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Route configuration for proxy: {{hostname}}"
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_routes_show.py "{{hostname}}"
+
+# Set proxy route mode (all, selective, none)
+proxy-routes-mode hostname token-name="" mode="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Setting route mode for proxy: {{hostname}} to {{mode}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_routes_mode.py "{{hostname}}" "$token" "{{mode}}"
+
+# Enable specific route for proxy
+proxy-route-enable hostname route-id token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Enabling route '{{route-id}}' for proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_route_enable.py "{{hostname}}" "{{route-id}}" "$token"
+
+# Disable specific route for proxy
+proxy-route-disable hostname route-id token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Disabling route '{{route-id}}' for proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_route_disable.py "{{hostname}}" "{{route-id}}" "$token"
+
+# Set multiple routes for proxy at once
+proxy-routes-set hostname token-name="" enabled="" disabled="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Setting routes for proxy: {{hostname}}"
+    
+    # Use ADMIN_TOKEN as default if no token provided
+    token="{{token-name}}"
+    if [ -z "$token" ]; then
+        token="${ADMIN_TOKEN:-}"
+        if [ -z "$token" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+    fi
+    
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/proxy_routes_set.py "{{hostname}}" "$token" "{{enabled}}" "{{disabled}}"
+
+# Test per-proxy route functionality
+test-proxy-routes:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Testing per-proxy route functionality..."
+    pixi run python scripts/test_proxy_routes.py
 
 # Generate RSA key for OAuth JWT signing
 generate-oauth-key:

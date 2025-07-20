@@ -19,8 +19,15 @@ class ProxyHandler:
         """Initialize proxy handler with storage backend."""
         self.storage = storage
         # Get timeout from environment with proper hierarchy
-        request_timeout = float(os.getenv('PROXY_REQUEST_TIMEOUT', '45'))
-        connect_timeout = float(os.getenv('PROXY_CONNECT_TIMEOUT', '5'))
+        request_timeout_str = os.getenv('PROXY_REQUEST_TIMEOUT')
+        if not request_timeout_str:
+            raise ValueError("PROXY_REQUEST_TIMEOUT not set in environment - required for proxy configuration")
+        request_timeout = float(request_timeout_str)
+        
+        connect_timeout_str = os.getenv('PROXY_CONNECT_TIMEOUT')
+        if not connect_timeout_str:
+            raise ValueError("PROXY_CONNECT_TIMEOUT not set in environment - required for proxy configuration")
+        connect_timeout = float(connect_timeout_str)
         
         # Create client with configured timeout
         self.client = httpx.AsyncClient(

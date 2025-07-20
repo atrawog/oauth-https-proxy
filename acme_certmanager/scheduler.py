@@ -32,8 +32,15 @@ class CertificateScheduler:
         )
         
         # Configuration
-        self.check_interval = int(os.getenv('RENEWAL_CHECK_INTERVAL', '86400'))  # 24 hours
-        self.threshold_days = int(os.getenv('RENEWAL_THRESHOLD_DAYS', '30'))
+        check_interval_str = os.getenv('RENEWAL_CHECK_INTERVAL')
+        if not check_interval_str:
+            raise ValueError("RENEWAL_CHECK_INTERVAL not set in environment - required for certificate renewal")
+        self.check_interval = int(check_interval_str)
+        
+        threshold_days_str = os.getenv('RENEWAL_THRESHOLD_DAYS')
+        if not threshold_days_str:
+            raise ValueError("RENEWAL_THRESHOLD_DAYS not set in environment - required for certificate renewal")
+        self.threshold_days = int(threshold_days_str)
         
         # Track renewal jobs
         self.renewal_jobs: Dict[str, str] = {}

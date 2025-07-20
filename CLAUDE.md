@@ -472,6 +472,56 @@ HTTP request routing is managed via Redis with priority-based matching:
 - `/api/` → api instance (priority 90)
 - `/health` → localhost (priority 80)
 
+#### Per-Proxy Route Control
+
+Each proxy can have its own route filtering configuration, allowing fine-grained control over which routes apply:
+
+**Route Modes:**
+- **`all`** (default): All global routes apply except those explicitly disabled
+- **`selective`**: Only explicitly enabled routes apply
+- **`none`**: No routes apply - only hostname-based routing
+
+**Per-Proxy Route Commands:**
+```bash
+# View proxy route configuration
+just proxy-routes-show <hostname>
+
+# Set route mode
+just proxy-routes-mode <hostname> <token> <all|selective|none>
+
+# Enable specific route for proxy
+just proxy-route-enable <hostname> <route-id> <token>
+
+# Disable specific route for proxy
+just proxy-route-disable <hostname> <route-id> <token>
+
+# Set multiple routes at once
+just proxy-routes-set <hostname> <token> <enabled-routes> <disabled-routes>
+
+# Test per-proxy routes
+just test-proxy-routes
+```
+
+**Examples:**
+
+```bash
+# Create proxy with default route mode (all routes apply)
+just proxy-create api.example.com http://backend:8080 admin
+
+# Switch to selective mode (no routes apply by default)
+just proxy-routes-mode api.example.com admin selective
+
+# Enable only ACME challenge route
+just proxy-route-enable api.example.com acme-challenge admin
+
+# Or use all mode and disable specific routes
+just proxy-routes-mode api.example.com admin all
+just proxy-route-disable api.example.com debug-route admin
+
+# Set multiple routes at once
+just proxy-routes-set api.example.com admin "api-v1,api-v2" ""
+```
+
 #### Route Commands
 ```bash
 # Route management
@@ -510,6 +560,14 @@ just test-proxy-all             # Run all proxy tests
 ```
 
 # Recent Updates
+
+### Per-Proxy Route Control
+- Each proxy can have independent route configuration
+- Three route modes: `all` (default), `selective`, `none`
+- Enable/disable specific routes per proxy
+- Bulk route management with `proxy-routes-set`
+- Full API and CLI support for route customization
+- Backwards compatible - existing proxies use `all` mode
 
 ### Multi-Domain Certificate Support
 - Single certificate can cover multiple domains (up to 100)
@@ -704,6 +762,42 @@ To verify the architecture is working correctly:
    - ❌ NO "client has been closed" errors
 
 ## Common Workflows
+
+### Per-Proxy Route Control Use Cases
+
+#### API Version Isolation
+```bash
+# Create separate proxies for API versions
+just proxy-create api-v1.example.com http://api-v1:3000 admin
+just proxy-create api-v2.example.com http://api-v2:3000 admin
+
+# Enable only v1 routes for v1 proxy
+just proxy-routes-mode api-v1.example.com admin selective
+just proxy-route-enable api-v1.example.com api-v1-routes admin
+
+# Enable only v2 routes for v2 proxy
+just proxy-routes-mode api-v2.example.com admin selective
+just proxy-route-enable api-v2.example.com api-v2-routes admin
+```
+
+#### Public vs Internal Services
+```bash
+# Public service - disable admin routes
+just proxy-create public.example.com http://app:3000 admin
+just proxy-route-disable public.example.com admin-panel admin
+just proxy-route-disable public.example.com debug-endpoints admin
+
+# Internal service - all routes enabled (default)
+just proxy-create internal.example.com http://app:3000 admin
+```
+
+#### Minimal Routing (Hostname Only)
+```bash
+# Create proxy with no path-based routing
+just proxy-create static.example.com http://cdn:80 admin
+just proxy-routes-mode static.example.com admin none
+# Now only hostname-based routing applies
+```
 
 ### Creating a Service Group with Shared Certificate
 ```bash

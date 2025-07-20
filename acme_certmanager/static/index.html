@@ -259,6 +259,42 @@
                     <div id="cert-details"></div>
                 </div>
             </div>
+
+            <!-- Proxy Route Management Modal -->
+            <div id="proxy-route-modal" class="modal hidden">
+                <div class="modal-content">
+                    <span class="close" onclick="closeProxyRouteModal()">&times;</span>
+                    <h2>Route Configuration: <span id="proxy-route-hostname"></span></h2>
+                    
+                    <div class="route-mode-section">
+                        <h3>Route Mode</h3>
+                        <div class="form-group">
+                            <label>
+                                <input type="radio" name="route-mode" value="all" onchange="updateRouteMode()">
+                                <strong>All</strong> - All routes apply except disabled ones
+                            </label>
+                            <label>
+                                <input type="radio" name="route-mode" value="selective" onchange="updateRouteMode()">
+                                <strong>Selective</strong> - Only enabled routes apply
+                            </label>
+                            <label>
+                                <input type="radio" name="route-mode" value="none" onchange="updateRouteMode()">
+                                <strong>None</strong> - No routes apply (hostname only)
+                            </label>
+                        </div>
+                    </div>
+                    
+                    <div id="proxy-routes-list" class="proxy-routes-list">
+                        <h3>Available Routes</h3>
+                        <div class="loading">Loading routes...</div>
+                    </div>
+                    
+                    <div class="modal-actions">
+                        <button class="btn btn-primary" onclick="saveProxyRoutes()">Save Changes</button>
+                        <button class="btn btn-secondary" onclick="closeProxyRouteModal()">Cancel</button>
+                    </div>
+                </div>
+            </div>
         </main>
 
         <footer>

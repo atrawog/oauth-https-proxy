@@ -61,7 +61,16 @@ async def get_current_token_info(
     
     # Special handling for admin token
     if is_admin_token(token):
-        return hash_token(token), "ADMIN", "admin@system.local"
+        token_hash = hash_token(token)
+        # Get admin token data from storage to get the correct cert_email
+        token_data = manager.storage.get_api_token(token_hash)
+        if token_data:
+            return token_hash, "ADMIN", token_data.get("cert_email")
+        # If ADMIN token not in storage, get email from environment
+        admin_email = os.getenv("ADMIN_EMAIL")
+        if not admin_email:
+            raise ValueError("ADMIN_EMAIL not set in environment - cannot proceed without valid email")
+        return token_hash, "ADMIN", admin_email
     
     token_hash = hash_token(token)
     
@@ -115,7 +124,16 @@ async def get_optional_token_info(
     
     # Special handling for admin token
     if is_admin_token(token):
-        return hash_token(token), "ADMIN", "admin@system.local"
+        token_hash = hash_token(token)
+        # Get admin token data from storage to get the correct cert_email
+        token_data = manager.storage.get_api_token(token_hash)
+        if token_data:
+            return token_hash, "ADMIN", token_data.get("cert_email")
+        # If ADMIN token not in storage, get email from environment
+        admin_email = os.getenv("ADMIN_EMAIL")
+        if not admin_email:
+            raise ValueError("ADMIN_EMAIL not set in environment - cannot proceed without valid email")
+        return token_hash, "ADMIN", admin_email
     
     token_hash = hash_token(token)
     

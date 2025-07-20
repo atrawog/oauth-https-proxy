@@ -152,11 +152,23 @@ class ProxyTarget(BaseModel):
     auth_cookie_name: str = "unified_auth_token"
     auth_header_prefix: str = "X-Auth-"
     
+    # Route control fields
+    route_mode: str = "all"  # all, selective, none
+    enabled_routes: List[str] = []  # Route IDs explicitly enabled (for selective mode)
+    disabled_routes: List[str] = []  # Route IDs explicitly disabled (for all mode)
+    
     @validator('auth_mode')
     def validate_auth_mode(cls, v):
         valid_modes = ["forward", "redirect", "passthrough"]
         if v not in valid_modes:
             raise ValueError(f"auth_mode must be one of {valid_modes}")
+        return v
+    
+    @validator('route_mode')
+    def validate_route_mode(cls, v):
+        valid_modes = ["all", "selective", "none"]
+        if v not in valid_modes:
+            raise ValueError(f"route_mode must be one of {valid_modes}")
         return v
     
     @validator('auth_proxy')
@@ -220,11 +232,23 @@ class ProxyTargetUpdate(BaseModel):
     auth_pass_headers: Optional[bool] = None
     auth_cookie_name: Optional[str] = None
     auth_header_prefix: Optional[str] = None
+    # Route control fields
+    route_mode: Optional[str] = None
+    enabled_routes: Optional[List[str]] = None
+    disabled_routes: Optional[List[str]] = None
     
     @validator('target_url')
     def validate_target_url(cls, v):
         if v is not None and not (v.startswith('http://') or v.startswith('https://')):
             raise ValueError('Target URL must start with http:// or https://')
+        return v
+    
+    @validator('route_mode')
+    def validate_route_mode(cls, v):
+        if v is not None:
+            valid_modes = ["all", "selective", "none"]
+            if v not in valid_modes:
+                raise ValueError(f"route_mode must be one of {valid_modes}")
         return v
     
     @validator('auth_mode')
@@ -241,6 +265,20 @@ class ProxyTargetUpdate(BaseModel):
             v = v.strip().lower()
             if not v or not '.' in v:
                 raise ValueError('Invalid auth proxy hostname')
+        return v
+
+
+class ProxyRoutesConfig(BaseModel):
+    """Request model for configuring proxy routes."""
+    route_mode: str  # all, selective, or none
+    enabled_routes: List[str] = []
+    disabled_routes: List[str] = []
+    
+    @validator('route_mode')
+    def validate_route_mode(cls, v):
+        valid_modes = ["all", "selective", "none"]
+        if v not in valid_modes:
+            raise ValueError(f"route_mode must be one of {valid_modes}")
         return v
 
 

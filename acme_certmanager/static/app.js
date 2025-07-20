@@ -108,6 +108,23 @@ class CertificateAPI {
     async deleteRoute(routeId) {
         return this.request('DELETE', `/routes/${routeId}`);
     }
+    
+    // Proxy route methods
+    async getProxyRoutes(hostname) {
+        return this.request('GET', `/proxy/targets/${hostname}/routes`);
+    }
+    
+    async updateProxyRoutes(hostname, data) {
+        return this.request('PUT', `/proxy/targets/${hostname}/routes`, data);
+    }
+    
+    async enableProxyRoute(hostname, routeId) {
+        return this.request('POST', `/proxy/targets/${hostname}/routes/${routeId}/enable`);
+    }
+    
+    async disableProxyRoute(hostname, routeId) {
+        return this.request('POST', `/proxy/targets/${hostname}/routes/${routeId}/disable`);
+    }
 }
 
 // Initialize API client
@@ -566,6 +583,8 @@ async function loadProxyTargets() {
                     <div class="proxy-actions">
                         <button onclick="toggleProxyTarget('${target.hostname}', ${!target.enabled})" 
                                 class="btn btn-sm">${target.enabled ? 'Disable' : 'Enable'}</button>
+                        <button onclick="showProxyRouteModal('${target.hostname}')" 
+                                class="btn btn-sm">Routes</button>
                         <button onclick="deleteProxyTarget('${target.hostname}')" 
                                 class="btn btn-sm btn-danger">Delete</button>
                     </div>
@@ -600,6 +619,138 @@ async function deleteProxyTarget(hostname) {
         loadProxyTargets();
     } catch (error) {
         showNotification(`Failed to delete proxy target: ${error.message}`, 'error');
+    }
+}
+
+// Proxy Route Management
+let currentProxyHostname = null;
+let currentProxyRouteConfig = null;
+let allRoutes = [];
+
+async function showProxyRouteModal(hostname) {
+    currentProxyHostname = hostname;
+    document.getElementById('proxy-route-hostname').textContent = hostname;
+    document.getElementById('proxy-route-modal').classList.remove('hidden');
+    
+    try {
+        // Load proxy route configuration
+        currentProxyRouteConfig = await api.getProxyRoutes(hostname);
+        
+        // Load all available routes
+        allRoutes = await api.getRoutes();
+        
+        // Set route mode radio button
+        const modeRadios = document.querySelectorAll('input[name="route-mode"]');
+        modeRadios.forEach(radio => {
+            radio.checked = radio.value === currentProxyRouteConfig.route_mode;
+        });
+        
+        // Display routes
+        displayProxyRoutes();
+        
+    } catch (error) {
+        showNotification(`Failed to load route configuration: ${error.message}`, 'error');
+    }
+}
+
+function closeProxyRouteModal() {
+    document.getElementById('proxy-route-modal').classList.add('hidden');
+    currentProxyHostname = null;
+    currentProxyRouteConfig = null;
+}
+
+function updateRouteMode() {
+    const selectedMode = document.querySelector('input[name="route-mode"]:checked').value;
+    currentProxyRouteConfig.route_mode = selectedMode;
+    displayProxyRoutes();
+}
+
+function displayProxyRoutes() {
+    const container = document.getElementById('proxy-routes-list');
+    const mode = currentProxyRouteConfig.route_mode;
+    
+    let html = '<h3>Available Routes</h3>';
+    
+    if (mode === 'none') {
+        html += '<p class="info">No routes will apply in "None" mode - only hostname-based routing.</p>';
+    } else {
+        html += '<div class="route-checkboxes">';
+        
+        allRoutes.forEach(route => {
+            const routeId = route.route_id;
+            let checked = false;
+            let disabled = false;
+            
+            if (mode === 'all') {
+                // In 'all' mode, routes are checked by default unless disabled
+                checked = !currentProxyRouteConfig.disabled_routes.includes(routeId);
+            } else if (mode === 'selective') {
+                // In 'selective' mode, only enabled routes are checked
+                checked = currentProxyRouteConfig.enabled_routes.includes(routeId);
+            }
+            
+            html += `
+                <label class="route-checkbox-label">
+                    <input type="checkbox" 
+                           value="${routeId}" 
+                           ${checked ? 'checked' : ''} 
+                           onchange="toggleRouteSelection('${routeId}')">
+                    <div class="route-info">
+                        <strong>${escapeHtml(route.path_pattern)}</strong>
+                        <span class="route-target">${route.target_type}: ${escapeHtml(route.target_value)}</span>
+                        ${route.description ? `<span class="route-desc">${escapeHtml(route.description)}</span>` : ''}
+                    </div>
+                </label>
+            `;
+        });
+        
+        html += '</div>';
+        
+        if (mode === 'all') {
+            html += '<p class="help-text">Unchecked routes will be disabled for this proxy.</p>';
+        } else if (mode === 'selective') {
+            html += '<p class="help-text">Only checked routes will apply to this proxy.</p>';
+        }
+    }
+    
+    container.innerHTML = html;
+}
+
+function toggleRouteSelection(routeId) {
+    const mode = currentProxyRouteConfig.route_mode;
+    
+    if (mode === 'all') {
+        // Toggle in disabled_routes
+        const index = currentProxyRouteConfig.disabled_routes.indexOf(routeId);
+        if (index === -1) {
+            currentProxyRouteConfig.disabled_routes.push(routeId);
+        } else {
+            currentProxyRouteConfig.disabled_routes.splice(index, 1);
+        }
+    } else if (mode === 'selective') {
+        // Toggle in enabled_routes
+        const index = currentProxyRouteConfig.enabled_routes.indexOf(routeId);
+        if (index === -1) {
+            currentProxyRouteConfig.enabled_routes.push(routeId);
+        } else {
+            currentProxyRouteConfig.enabled_routes.splice(index, 1);
+        }
+    }
+}
+
+async function saveProxyRoutes() {
+    try {
+        const data = {
+            route_mode: currentProxyRouteConfig.route_mode,
+            enabled_routes: currentProxyRouteConfig.enabled_routes,
+            disabled_routes: currentProxyRouteConfig.disabled_routes
+        };
+        
+        await api.updateProxyRoutes(currentProxyHostname, data);
+        showNotification(`Route configuration updated for ${currentProxyHostname}`, 'success');
+        closeProxyRouteModal();
+    } catch (error) {
+        showNotification(`Failed to update route configuration: ${error.message}`, 'error');
     }
 }
 

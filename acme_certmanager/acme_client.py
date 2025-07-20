@@ -82,12 +82,14 @@ class ACMEClient:
         """Register new account or login with existing."""
         try:
             # Try to register new account
-            regr = acme_client.new_account(
-                messages.NewRegistration.from_data(
-                    email=email,
-                    terms_of_service_agreed=True
-                )
+            # Create registration with contacts list
+            logger.info(f"Attempting to register ACME account for email: {email}")
+            new_reg = messages.NewRegistration(
+                contact=(f"mailto:{email}",),
+                terms_of_service_agreed=True
             )
+            logger.info(f"Registration object created with contact: {new_reg.contact}")
+            regr = acme_client.new_account(new_reg)
             logger.info(f"Registered new ACME account for {email}")
             return regr
         except errors.ConflictError as e:
@@ -172,9 +174,17 @@ class ACMEClient:
         )
         
         # Store certificate
-        self.storage.store_certificate(cert_name, certificate)
+        if not self.storage.store_certificate(cert_name, certificate):
+            logger.error(f"Failed to store certificate in Redis for {cert_name}")
+            raise Exception(f"Failed to store certificate in Redis for {cert_name}")
         
-        logger.info(f"Certificate generated successfully for {domains}")
+        # Verify certificate was stored
+        stored = self.storage.get_certificate(cert_name)
+        if not stored:
+            logger.error(f"Certificate verification failed - not found in Redis after storage for {cert_name}")
+            raise Exception(f"Certificate not found in Redis after storage for {cert_name}")
+            
+        logger.info(f"Certificate generated and stored successfully for {domains}")
         return certificate
     
     def _create_csr(self, private_key, domains: List[str]) -> bytes:
@@ -275,8 +285,15 @@ class ACMEClient:
         # Check status with shorter intervals to avoid blocking too long
         import os
         import time
-        max_attempts = int(os.getenv("ACME_POLL_MAX_ATTEMPTS", "60"))
-        poll_interval = int(os.getenv("ACME_POLL_INTERVAL_SECONDS", "2"))
+        max_attempts_str = os.getenv("ACME_POLL_MAX_ATTEMPTS")
+        if not max_attempts_str:
+            raise ValueError("ACME_POLL_MAX_ATTEMPTS not set in environment - required for ACME polling")
+        max_attempts = int(max_attempts_str)
+        
+        poll_interval_str = os.getenv("ACME_POLL_INTERVAL_SECONDS")
+        if not poll_interval_str:
+            raise ValueError("ACME_POLL_INTERVAL_SECONDS not set in environment - required for ACME polling")
+        poll_interval = int(poll_interval_str)
         
         logger.info("Checking authorization status...")
         for attempt in range(max_attempts):

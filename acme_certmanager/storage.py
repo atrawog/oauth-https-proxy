@@ -33,9 +33,17 @@ class RedisStorage:
         try:
             key = f"cert:{cert_name}"
             value = certificate.json()
-            return self.redis_client.set(key, value)
+            result = self.redis_client.set(key, value)
+            if result:
+                logger.info(f"Successfully stored certificate {cert_name} for domains {certificate.domains}")
+            else:
+                logger.error(f"Redis set returned False for certificate {cert_name}")
+            return result
         except RedisError as e:
-            logger.error(f"Failed to store certificate: {e}")
+            logger.error(f"Failed to store certificate {cert_name}: {e}")
+            return False
+        except Exception as e:
+            logger.error(f"Unexpected error storing certificate {cert_name}: {e}")
             return False
     
     def get_certificate(self, cert_name: str) -> Optional[Certificate]:
@@ -555,8 +563,10 @@ class RedisStorage:
     def initialize_default_routes(self) -> None:
         """Initialize default routes and ensure they have proper ownership."""
         try:
-            # Get admin token for ownership
-            admin_token = self.get_api_token_by_name("admin")
+            # Get admin token for ownership - try ADMIN first, then admin for backwards compatibility
+            admin_token = self.get_api_token_by_name("ADMIN")
+            if not admin_token:
+                admin_token = self.get_api_token_by_name("admin")
             admin_token_hash = admin_token.get("hash") if admin_token else None
             
             for route_config in DEFAULT_ROUTES:
@@ -566,14 +576,14 @@ class RedisStorage:
                 if not existing:
                     # Create new route with admin ownership
                     route_config["owner_token_hash"] = admin_token_hash
-                    route_config["created_by"] = "admin" if admin_token else None
+                    route_config["created_by"] = admin_token.get("name") if admin_token else None
                     route = Route(**route_config)
                     self.store_route(route)
                     logger.info(f"Initialized default route: {route_id}")
                 elif admin_token and not existing.owner_token_hash:
                     # Update existing route to have admin ownership if it doesn't have an owner
                     existing.owner_token_hash = admin_token_hash
-                    existing.created_by = "admin"
+                    existing.created_by = admin_token.get("name")
                     self.store_route(existing)
                     logger.info(f"Updated default route {route_id} with admin ownership")
         except Exception as e:
