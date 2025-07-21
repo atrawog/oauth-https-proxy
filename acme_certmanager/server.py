@@ -799,7 +799,7 @@ async def configure_proxy_auth(
     target.auth_header_prefix = config.header_prefix
     
     # Store updated target
-    if not manager.storage.store_proxy_target(target):
+    if not manager.storage.store_proxy_target(hostname, target):
         raise HTTPException(500, "Failed to update proxy target")
     
     logger.info(f"Auth configured for proxy {hostname}: enabled={config.enabled}, proxy={config.auth_proxy}, mode={config.mode}")
@@ -826,7 +826,7 @@ async def remove_proxy_auth(
     target.auth_required_groups = None
     
     # Store updated target
-    if not manager.storage.store_proxy_target(target):
+    if not manager.storage.store_proxy_target(hostname, target):
         raise HTTPException(500, "Failed to update proxy target")
     
     logger.info(f"Auth disabled for proxy {hostname}")

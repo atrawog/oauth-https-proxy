@@ -39,6 +39,7 @@ class EnhancedProxyHandler:
         # Create client with streaming support
         self.client = httpx.AsyncClient(
             follow_redirects=False,
+            verify=False,  # Skip SSL verification for internal connections
             timeout=httpx.Timeout(
                 connect=connect_timeout,     # Connection timeout
                 read=request_timeout,        # Read timeout (use request timeout)

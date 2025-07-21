@@ -522,6 +522,21 @@ just proxy-route-disable api.example.com debug-route admin
 just proxy-routes-set api.example.com admin "api-v1,api-v2" ""
 ```
 
+### OAuth Commands
+```bash
+# OAuth setup and management
+just generate-oauth-key                  # Generate RSA key for JWT signing
+just auth-setup <domain>                 # Setup OAuth service and create auth proxy
+just oauth-routes-setup <domain>         # Setup OAuth endpoint routes (CRITICAL!)
+
+# OAuth proxy authentication
+just proxy-auth-enable <hostname> <token> <auth-proxy> <mode>  # Enable auth (forward/redirect/passthrough)
+just proxy-auth-disable <hostname> <token>                      # Disable auth
+just proxy-auth-config <hostname> <token> users="" emails="" groups=""  # Configure auth requirements
+just proxy-auth-show <hostname>                                 # Show auth configuration
+just test-auth-flow <hostname>                                  # Test OAuth flow for a proxy
+```
+
 #### Route Commands
 ```bash
 # Route management
@@ -560,6 +575,18 @@ just test-proxy-all             # Run all proxy tests
 ```
 
 # Recent Updates
+
+### OAuth Route-Based Implementation (2025-07-21)
+- **CRITICAL**: OAuth endpoints are now implemented via the routing system
+- Added `just oauth-routes-setup` command to create all OAuth endpoint routes
+- Routes use priority 95 to ensure OAuth endpoints take precedence
+- All OAuth routes target `hostname:auth.{domain}` for proper routing
+- OAuth authentication is now fully integrated with the proxy and route system
+
+### Code Fixes (2025-07-21)
+- **SSL Verification**: Added `verify=False` to httpx.AsyncClient in proxy_handler_v2.py for internal service connections
+- **Missing Parameter**: Fixed `store_proxy_target()` calls to include hostname parameter
+- **OAuth Integration**: Fixed OAuth service startup with proper JWT configuration
 
 ### Per-Proxy Route Control
 - Each proxy can have independent route configuration
@@ -763,6 +790,40 @@ To verify the architecture is working correctly:
 
 ## Common Workflows
 
+### Complete OAuth Setup Workflow
+
+**CRITICAL**: OAuth requires BOTH proxy setup AND route configuration!
+
+```bash
+# 1. Ensure OAuth configuration in .env
+# GITHUB_CLIENT_ID=your_github_oauth_app_id
+# GITHUB_CLIENT_SECRET=your_github_oauth_app_secret
+# OAUTH_JWT_SECRET=your_jwt_secret
+# OAUTH_JWT_PRIVATE_KEY_B64=your_base64_rsa_key
+
+# 2. Generate RSA key if needed
+just generate-oauth-key
+
+# 3. Setup OAuth service and create auth proxy
+just auth-setup yourdomain.com
+
+# 4. CRITICAL: Setup OAuth routes for proper endpoint routing
+just oauth-routes-setup yourdomain.com
+
+# 5. Enable OAuth on services
+just proxy-auth-enable api.yourdomain.com "" auth.yourdomain.com forward
+just proxy-auth-enable admin.yourdomain.com "" auth.yourdomain.com redirect
+
+# 6. Configure user restrictions (optional)
+just proxy-auth-config api.yourdomain.com "" users="alice,bob"
+just proxy-auth-config admin.yourdomain.com "" emails="*@company.com"
+
+# 7. Verify OAuth is working
+just proxy-auth-show api.yourdomain.com
+curl -k https://api.yourdomain.com/health  # Should return 401
+curl -k https://auth.yourdomain.com/.well-known/oauth-authorization-server  # Should return metadata
+```
+
 ### Per-Proxy Route Control Use Cases
 
 #### API Version Isolation
@@ -952,7 +1013,27 @@ just generate-oauth-key
 
 # Setup OAuth service and create auth proxy
 just auth-setup example.com
+
+# CRITICAL: Setup OAuth routes for proper endpoint routing
+just oauth-routes-setup example.com
 ```
+
+### OAuth Route Configuration
+
+**CRITICAL**: OAuth endpoints MUST be configured as routes in the routing system!
+
+The `oauth-routes-setup` command creates the following routes:
+- `/authorize` → OAuth authorization endpoint (priority: 95)
+- `/token` → OAuth token endpoint (priority: 95)
+- `/callback` → OAuth callback endpoint (priority: 95)
+- `/register` → Dynamic client registration (priority: 95)
+- `/verify` → ForwardAuth verification endpoint (priority: 95)
+- `/.well-known/oauth-authorization-server` → OAuth metadata (priority: 95)
+- `/jwks` → JSON Web Key Set (priority: 95)
+- `/revoke` → Token revocation (priority: 95)
+- `/introspect` → Token introspection (priority: 95)
+
+All routes use `hostname:auth.{domain}` target type to route to the OAuth server.
 
 ### Enable Auth for Proxies
 ```bash
@@ -1095,3 +1176,145 @@ When authenticated, these headers are added:
 - Ensure auth proxy has valid certificate
 - Check cookie domain settings match proxy domain
 - Verify OAuth callback URL in GitHub app settings
+
+### SSL Certificate Verification Errors
+**Issue**: "SSL certificate problem: unable to get local issuer certificate"
+**Root Cause**: Proxy handler trying to verify internal service certificates
+**Solution**: Added `verify=False` to httpx.AsyncClient in proxy_handler_v2.py for internal connections
+
+### Missing Hostname Parameter Error
+**Issue**: `TypeError: RedisStorage.store_proxy_target() missing 1 required positional argument: 'target'`
+**Root Cause**: Missing hostname parameter in store_proxy_target() calls
+**Solution**: Fixed all calls to include hostname: `store_proxy_target(hostname, target)`
+
+### OAuth Routes Not Working
+**Issue**: OAuth endpoints return 404 or don't route properly
+**Root Cause**: OAuth endpoints need to be configured as routes in the routing system
+**Solution**: Run `just oauth-routes-setup` after setting up the auth proxy
+
+## Complete Command Reference
+
+### System Commands
+```bash
+just up                  # Start all services
+just down                # Stop all services
+just rebuild <service>   # Rebuild specific service
+just logs                # View service logs
+just shell               # Shell into certmanager container
+just redis-cli           # Access Redis CLI
+```
+
+### Token Management
+```bash
+just token-generate <name> [cert-email]     # Create token with optional cert email
+just token-show <name>                      # Retrieve full token
+just token-list                             # List all tokens
+just token-delete <name>                    # Delete token + certs
+just token-show-certs [name]                # Show certs by token
+```
+
+### Certificate Management
+```bash
+# Single-domain certificates
+just cert-create <name> <domain> <email> <token> [staging]
+just cert-delete <name> <token> [force]
+just cert-renew <name> <token> [force]
+just cert-list [token]
+just cert-show <name> [token] [pem]
+just cert-status <name> [token] [wait]
+just cert-to-production <name> [token]
+
+# Multi-domain certificates
+just cert-create-multi <name> <domains> <email> <token> [staging]
+just cert-create-wildcard <name> <base-domain> <email> <token> [staging]
+just cert-coverage <name> [token]
+```
+
+### Proxy Management
+```bash
+# Basic proxy operations
+just proxy-create <hostname> <target-url> <token> [staging] [preserve-host] [enable-http] [enable-https]
+just proxy-create-group <group-name> <hostnames> <target-url> <token> [staging] [preserve-host]
+just proxy-update <hostname> <token> [options]
+just proxy-delete <hostname> <token> [delete-cert] [force]
+just proxy-enable <hostname> <token>
+just proxy-disable <hostname> <token>
+just proxy-list [token]
+just proxy-show <hostname>
+just proxy-cleanup [hostname]
+
+# Certificate management for proxies
+just proxy-cert-generate <hostname> <token> [staging]
+just proxy-cert-attach <hostname> <cert-name> <token>
+```
+
+### OAuth Management
+```bash
+# OAuth setup
+just generate-oauth-key                          # Generate RSA key for JWT signing
+just auth-setup <domain>                         # Setup OAuth service and create auth proxy
+just oauth-routes-setup <domain> [token]         # Setup OAuth endpoint routes (CRITICAL!)
+
+# OAuth proxy authentication
+just proxy-auth-enable <hostname> <token> <auth-proxy> <mode>  # Enable auth (forward/redirect/passthrough)
+just proxy-auth-disable <hostname> <token>                      # Disable auth
+just proxy-auth-config <hostname> <token> users="" emails="" groups=""  # Configure auth requirements
+just proxy-auth-show <hostname>                                 # Show auth configuration
+just test-auth-flow <hostname>                                  # Test OAuth flow for a proxy
+```
+
+### Route Management
+```bash
+just route-list                                                        # Show all routes
+just route-show <route-id>                                            # Show route details
+just route-create <path> <target-type> <target-value> <token> [priority] [methods] [is-regex] [description]
+just route-update <route-id> <token> [options]
+just route-delete <route-id> <token>
+just route-enable <route-id> <token>
+just route-disable <route-id> <token>
+```
+
+### Per-Proxy Route Control
+```bash
+just proxy-routes-show <hostname>                                     # View proxy route configuration
+just proxy-routes-mode <hostname> <token> <all|selective|none>       # Set route mode
+just proxy-route-enable <hostname> <route-id> <token>                # Enable specific route
+just proxy-route-disable <hostname> <route-id> <token>               # Disable specific route
+just proxy-routes-set <hostname> <token> <enabled-routes> <disabled-routes>  # Set multiple routes
+```
+
+### Testing Commands
+```bash
+# Certificate tests
+just test-certs                  # Test certificate operations
+just test-multi-domain           # Test multi-domain certificates
+just test-cert-email            # Test certificate email configuration
+
+# Proxy tests
+just test-proxy-basic           # Test basic functionality
+just test-proxy-example         # Test with example.com
+just test-websocket-proxy       # Test WebSocket proxying
+just test-streaming-proxy       # Test streaming/SSE
+just test-proxy-all            # Run all proxy tests
+just test-proxy-routes         # Test per-proxy routes
+
+# Auth tests
+just test-auth [token]          # Test authorization system
+just test-auth-flow <hostname>  # Test auth flow for a proxy
+
+# All tests
+just test                       # Run standard test suite
+just test-all                   # Run comprehensive test suite
+```
+
+### Service-Specific Commands
+```bash
+# Fetcher service
+just fetcher-setup <hostname> [staging]
+just fetcher-status
+just fetcher-logs
+
+# Echo services
+just echo-stateful-setup <hostname> [staging]
+just echo-stateless-setup <hostname> [staging]
+```
