@@ -4,11 +4,16 @@
 
 ### Execution Requirements
 - **Command execution**: ONLY via `just` commands - no direct Python/bash or docker exec execution
-- **Configuration**: Single source `.env` file loaded by `just` 
+- **Configuration**: Single source `.env` file loaded by `just` - all environment variables are documented in their relevant sections below 
 - **Python environment**: `pixi.sh` exclusively
 - **Testing**: Real systems only - no mocks, stubs, or simulations via `just test-*` commands
 - **Debugging**: All debugging via `just` commands (logs, shell, redis-cli)
 - **Database**: Redis for everything (key-value, caching, queues, pub/sub, persistence)
+  - `REDIS_PASSWORD` - Redis authentication password (required, 32+ random bytes recommended)
+  - `REDIS_URL` - Full Redis connection URL including password (format: `redis://:password@host:port/db`)
+
+### Logging
+- `LOG_LEVEL` - Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
 
 ### Directory Structure
 ```
@@ -24,6 +29,14 @@
 3. Why was it allowed? (systemic failure)
 4. Why wasn't it caught? (testing blindness)
 5. Why will it never happen again? (prevention fix)
+
+### Security Best Practices
+- All sensitive values (tokens, passwords, secrets) should be generated securely
+- Redis password is required and should be strong (32+ random bytes recommended)
+- OAuth JWT private key must be base64-encoded
+- ACME URLs can be switched between staging and production for testing
+- HTTP routing configuration is managed via Redis, not environment variables
+
 
 ## Token Management
 
@@ -63,6 +76,13 @@ just token-email-update <n> <email>      # Update token cert email
 
 ### Core Architecture
 **CRITICAL**: UnifiedDispatcher is THE server - FastAPI is just another instance!
+
+#### Server Configuration
+- `HTTP_PORT` - HTTP server port (default: 80)
+- `HTTPS_PORT` - HTTPS server port (default: 443)
+- `SERVER_HOST` - Server bind address (default: 0.0.0.0)
+- `SELF_SIGNED_CN` - Common name for self-signed certificates (default: localhost)
+- `BASE_URL` - Base URL for API endpoints (default: http://localhost:80)
 
 ```
 Client → Port 80/443 → UnifiedDispatcher
@@ -111,6 +131,21 @@ class DomainInstance:
 - **Storage**: Redis-exclusive (no filesystem)
 - **Multi-domain**: Up to 100 domains per certificate
 - **Keys**: RSA 2048-bit, new key per certificate
+
+#### ACME Configuration
+- `ACME_DIRECTORY_URL` - Production ACME directory URL (default: https://acme-v02.api.letsencrypt.org/directory)
+- `ACME_STAGING_URL` - Staging ACME directory URL for testing (default: https://acme-staging-v02.api.letsencrypt.org/directory)
+- `ACME_POLL_MAX_ATTEMPTS` - Maximum polling attempts for ACME challenges (default: 60)
+- `ACME_POLL_INTERVAL_SECONDS` - Seconds between ACME polling attempts (default: 2)
+- `ACME_POLL_INITIAL_WAIT` - Initial wait before polling starts (default: 0)
+
+#### Certificate Management Configuration
+- `RENEWAL_CHECK_INTERVAL` - Seconds between certificate renewal checks (default: 86400 = 24 hours)
+- `RENEWAL_THRESHOLD_DAYS` - Days before expiry to trigger renewal (default: 30)
+- `CERT_STATUS_RETENTION_SECONDS` - How long to retain certificate generation status (default: 300)
+- `CERT_GEN_MAX_WORKERS` - Maximum concurrent certificate generation workers (default: 5)
+- `RSA_KEY_SIZE` - RSA key size for certificates (default: 2048)
+- `SELF_SIGNED_DAYS` - Validity period for self-signed certificates (default: 365)
 
 ### Certificate Object Schema
 ```json
@@ -172,6 +207,16 @@ just test-multi-domain           # Test multi-domain certificates
 - WebSocket and SSE streaming support
 - Per-request certificate provisioning
 - Redis-backed configuration
+
+#### Proxy Configuration
+- `PROXY_REQUEST_TIMEOUT` - Proxy request timeout in seconds (default: 120)
+- `PROXY_CONNECT_TIMEOUT` - Proxy connection timeout in seconds (default: 30)
+- `FETCHER_NAVIGATION_TIMEOUT` - Navigation timeout for fetcher service (default: 25)
+
+**Timeout Hierarchy**: The timeout values follow a hierarchy to prevent cascade failures:
+1. `FETCHER_NAVIGATION_TIMEOUT` (25s) - Shortest, for browser operations
+2. `PROXY_CONNECT_TIMEOUT` (30s) - For establishing proxy connections
+3. `PROXY_REQUEST_TIMEOUT` (120s) - Longest, for complete proxy requests
 
 ### Proxy Target Schema
 ```json
@@ -292,12 +337,29 @@ OAuth runs as a standard proxied service (not special):
 - Redis for all state
 - **MCP 2025-06-18 Compliant**: Full support for resource indicators, audience validation, and protected resource metadata
 
+#### OAuth Service Configuration
+- `GITHUB_CLIENT_ID` - GitHub OAuth application client ID (required for OAuth)
+- `GITHUB_CLIENT_SECRET` - GitHub OAuth application client secret (required for OAuth)
+- `BASE_DOMAIN` - Base domain for OAuth service (default: localhost)
+- `OAUTH_ACCESS_TOKEN_LIFETIME` - Access token lifetime in seconds (default: 1800 = 30 minutes)
+- `OAUTH_REFRESH_TOKEN_LIFETIME` - Refresh token lifetime in seconds (default: 31536000 = 1 year)
+- `OAUTH_SESSION_TIMEOUT` - OAuth session timeout in seconds (default: 300 = 5 minutes)
+- `OAUTH_CLIENT_LIFETIME` - OAuth client registration lifetime in seconds (default: 7776000 = 90 days)
+- `OAUTH_ALLOWED_GITHUB_USERS` - Allowed GitHub users (* = all users)
+- `OAUTH_MCP_PROTOCOL_VERSION` - MCP protocol version (default: 2025-06-18)
+
 ### JWT Configuration
 - Algorithm: RS256 
 - Access token lifetime: 30 minutes
 - Refresh token lifetime: 1 year
 - Secure cookies: HttpOnly, Secure, SameSite=Lax
 - MCP Scopes: `mcp:read`, `mcp:write`, `mcp:admin`
+
+#### JWT Environment Variables
+- `OAUTH_JWT_ALGORITHM` - JWT signing algorithm (default: RS256)
+- `OAUTH_JWT_SECRET` - JWT secret for fallback/testing (not used with RS256)
+- `OAUTH_JWT_PRIVATE_KEY_B64` - Base64-encoded RSA private key for JWT signing
+  - Generate with: `openssl genrsa -out private.pem 2048 && base64 -w 0 private.pem`
 
 ### ForwardAuth Implementation
 1. Proxy sends original request to `/verify`
@@ -572,6 +634,20 @@ just token-email-update <name> <email>      # Update token cert email
 ```
 
 ### Testing & Debugging
+
+#### Testing Configuration
+- `TEST_DOMAIN` - Domain for automated testing
+- `TEST_EMAIL` - Email for test certificates
+- `TEST_DOMAIN_BASE` - Base domain for test subdomains
+- `TEST_BASE_URL` - Base URL for test requests (default: http://localhost:80)
+- `TEST_PROXY_TARGET_URL` - Target URL for proxy testing (default: https://example.com)
+- `TEST_TOKEN` - Token for automated test authentication
+
+#### Administrative Configuration
+- `ADMIN_TOKEN` - Administrative token for privileged operations
+- `ADMIN_EMAIL` - Administrator email address for certificates
+- `MCP_SERVER_URL` - MCP server SSE endpoint URL
+
 ```bash
 # Comprehensive test suites
 just test                    # Run standard test suite
