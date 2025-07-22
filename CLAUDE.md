@@ -1192,6 +1192,382 @@ When authenticated, these headers are added:
 **Root Cause**: OAuth endpoints need to be configured as routes in the routing system
 **Solution**: Run `just oauth-routes-setup` after setting up the auth proxy
 
+# MCP Authorization Compliance
+
+**CRITICAL**: The current OAuth implementation does NOT fully comply with the [Model Context Protocol authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization). This section documents the missing requirements and implementation plan.
+
+## Missing MCP Requirements
+
+### 1. Resource Parameter (RFC 8707)
+
+**Specification Requirement**: 
+- MUST include `resource` parameter in authorization and token requests
+- Identifies target MCP server using canonical URI format
+- Enables audience-restricted tokens for specific resource servers
+
+**Current Status**: ❌ NOT IMPLEMENTED
+
+**Required Changes**:
+```python
+# Authorization endpoint must accept:
+resource = request.query_params.get("resource")  # e.g., "https://mcp.example.com"
+
+# Token endpoint must validate:
+if resource not in token_request.get("resource", []):
+    raise InvalidResourceError()
+
+# JWT must include audience restriction:
+{
+  "aud": ["https://mcp.example.com"],
+  "azp": "client_id",  # Authorized party
+  ...
+}
+```
+
+### 2. Protected Resource Metadata (RFC 9728)
+
+**Specification Requirement**:
+- MUST implement `/.well-known/oauth-protected-resource` endpoint
+- WWW-Authenticate header must include metadata URL
+
+**Current Status**: ❌ NOT IMPLEMENTED
+
+**Required Endpoint**:
+```json
+GET /.well-known/oauth-protected-resource
+{
+  "resource": "https://mcp.example.com",
+  "authorization_servers": ["https://auth.example.com"],
+  "jwks_uri": "https://auth.example.com/jwks",
+  "scopes_supported": ["mcp:read", "mcp:write"],
+  "bearer_methods_supported": ["header"],
+  "resource_documentation": "https://docs.example.com/mcp"
+}
+```
+
+**Required WWW-Authenticate Header**:
+```
+WWW-Authenticate: Bearer realm="MCP Server",
+  as_uri="https://auth.example.com/.well-known/oauth-authorization-server",
+  resource_uri="https://mcp.example.com/.well-known/oauth-protected-resource"
+```
+
+### 3. MCP Protocol Endpoints
+
+**Specification Requirement**:
+- MCP servers must implement `/mcp` or `/mcp/sessions` endpoints
+- Must validate token audience matches server resource identifier
+
+**Current Status**: ❌ NOT IMPLEMENTED IN OAUTH SERVER
+
+**Note**: MCP endpoints exist in separate services (mcp-echo-*, mcp-fetch) but OAuth server lacks MCP awareness
+
+### 4. Audience Validation
+
+**Specification Requirement**:
+- Tokens MUST be audience-restricted
+- Resource servers MUST validate token audience
+
+**Current Status**: ⚠️ PARTIALLY IMPLEMENTED
+- JWTs include `aud` claim but set to issuer URL
+- No validation based on requested resource
+- No multi-audience support
+
+## Implementation Plan
+
+### Phase 1: Resource Parameter Support (RFC 8707)
+
+**Priority**: CRITICAL
+
+**Tasks**:
+1. **Update OAuth Authorization Endpoint**
+   - Add `resource` parameter to `/authorize` endpoint
+   - Validate resource parameter format (must be valid URI)
+   - Store resource(s) with authorization code
+   - Support multiple resource parameters
+
+2. **Update Token Endpoint**
+   - Accept `resource` parameter in token requests
+   - Validate requested resources were authorized
+   - Include resources in JWT `aud` claim
+   - Return `invalid_target` error for unauthorized resources
+
+3. **Update JWT Token Generation**
+   - Set `aud` claim to array of authorized resources
+   - Include `azp` (authorized party) claim
+   - Add resource-specific scopes if applicable
+
+**Implementation Location**: `mcp-oauth-dynamicclient/src/mcp_oauth_dynamicclient/routes.py`
+
+### Phase 2: Protected Resource Metadata
+
+**Priority**: HIGH
+
+**Tasks**:
+1. **Add Protected Resource Metadata Endpoint**
+   - Implement `/.well-known/oauth-protected-resource` in each MCP server
+   - Return metadata about resource requirements
+   - Include supported scopes and authentication methods
+
+2. **Update WWW-Authenticate Headers**
+   - Modify `async_resource_protector.py` to include metadata URLs
+   - Add `as_uri` parameter pointing to auth server metadata
+   - Add `resource_uri` parameter for resource metadata
+
+3. **Create MCP Resource Registry**
+   - Redis-based registry of MCP resources
+   - Map resource URIs to proxy targets
+   - Enable resource discovery
+
+**Implementation Locations**: 
+- `mcp-oauth-dynamicclient/src/mcp_oauth_dynamicclient/resource_protector.py`
+- Each MCP service (mcp-echo-*, mcp-fetch)
+
+### Phase 3: Resource-Aware Token Validation
+
+**Priority**: HIGH
+
+**Tasks**:
+1. **Update Token Validation**
+   - Check token audience matches requested resource
+   - Support multiple audiences for token portability
+   - Implement audience intersection logic
+
+2. **Add Resource-Specific Scopes**
+   - Define MCP-specific scopes (mcp:read, mcp:write, mcp:session)
+   - Map resources to required scopes
+   - Validate scope sufficiency per resource
+
+3. **Update ForwardAuth Integration**
+   - Pass resource identifier in auth check
+   - Validate token is valid for specific resource
+   - Return resource-specific error messages
+
+**Implementation Location**: `mcp-oauth-dynamicclient/src/mcp_oauth_dynamicclient/async_resource_protector.py`
+
+### Phase 4: MCP Protocol Integration
+
+**Priority**: MEDIUM
+
+**Tasks**:
+1. **Add MCP Awareness to OAuth Server**
+   - Understand MCP session management
+   - Support MCP-specific token claims
+   - Enable MCP service registration
+
+2. **Create MCP Service Base Class**
+   - Automatic protected resource metadata
+   - Built-in audience validation
+   - MCP protocol compliance helpers
+
+3. **Update Existing MCP Services**
+   - Add resource identifiers
+   - Implement audience validation
+   - Add protected resource metadata endpoint
+
+**Implementation Locations**: 
+- New file: `mcp_base_service.py`
+- Update all MCP services
+
+### Phase 5: Authorization Server Metadata Updates
+
+**Priority**: LOW
+
+**Tasks**:
+1. **Update Authorization Server Metadata**
+   - Add `resource_indicators_supported: true`
+   - Add `resource_parameter_supported: true`
+   - Document supported resource types
+
+2. **Add Resource Documentation**
+   - Document resource URI format
+   - Provide examples of resource parameters
+   - Create resource registration guide
+
+**Implementation Location**: `mcp-oauth-dynamicclient/src/mcp_oauth_dynamicclient/routes.py` (metadata endpoint)
+
+## Testing Requirements
+
+### Unit Tests
+- Resource parameter validation
+- Audience restriction enforcement
+- Multi-resource authorization flows
+- Invalid resource rejection
+
+### Integration Tests
+- End-to-end flow with resource parameters
+- Cross-resource token rejection
+- Resource metadata discovery
+- MCP protocol compliance
+
+### Compliance Tests
+- Full MCP specification compliance
+- RFC 8707 compliance
+- RFC 9728 compliance
+- Security boundary validation
+
+## Configuration Updates
+
+### New Environment Variables
+```bash
+# Resource Indicators
+MCP_RESOURCE_INDICATORS_ENABLED=true
+MCP_MAX_RESOURCES_PER_TOKEN=5
+MCP_RESOURCE_VALIDATION_STRICT=true
+
+# MCP Protocol
+MCP_PROTOCOL_VERSION=1.0
+MCP_SESSION_TIMEOUT=3600
+MCP_MAX_SESSIONS_PER_CLIENT=10
+```
+
+### Redis Schema Updates
+```
+# Resource Registry
+resource:{resource_uri} = {
+  "uri": "https://mcp.example.com",
+  "name": "Example MCP Server",
+  "proxy_target": "mcp.example.com",
+  "scopes": ["mcp:read", "mcp:write"],
+  "metadata_url": "https://mcp.example.com/.well-known/oauth-protected-resource"
+}
+
+# Authorization with Resources
+auth_code:{code} = {
+  ...existing fields...,
+  "resources": ["https://mcp1.example.com", "https://mcp2.example.com"]
+}
+```
+
+## Migration Strategy
+
+1. **Backwards Compatibility**
+   - Resource parameter optional initially
+   - Fallback to current behavior without resource
+   - Gradual enforcement via configuration
+
+2. **Phased Rollout**
+   - Phase 1: Add support, keep optional
+   - Phase 2: Log warnings for missing resources
+   - Phase 3: Require resources for new clients
+   - Phase 4: Full enforcement
+
+3. **Client Migration**
+   - Provide migration guide
+   - Update client libraries
+   - Support period for legacy clients
+
+## Security Considerations
+
+1. **Resource Validation**
+   - Prevent resource injection attacks
+   - Validate resource ownership
+   - Enforce resource boundaries
+
+2. **Audience Confusion**
+   - Clear audience validation rules
+   - Prevent token misuse across resources
+   - Audit token usage patterns
+
+3. **Scope Isolation**
+   - Resource-specific scope namespaces
+   - Prevent scope elevation
+   - Clear scope inheritance rules
+
+## Architectural Decision: OAuth Service Separation
+
+### Should OAuth be moved into FastAPI? ❌ NO
+
+After careful analysis, the OAuth service should remain separate from the FastAPI service for the following reasons:
+
+#### 1. **MCP Specification Compliance**
+The MCP specification explicitly expects:
+- Separate authorization servers from resource servers
+- OAuth 2.1 authorization server as an independent entity
+- Clear separation between authentication and resources
+
+**Verdict**: Keeping OAuth separate aligns with MCP architecture principles.
+
+#### 2. **Current Architecture Strengths**
+- **Elegant Design**: OAuth is just another proxied service, proving the proxy system's versatility
+- **No Special Cases**: OAuth doesn't require special handling in the dispatcher
+- **Consistent Pattern**: All services (including auth) follow the same proxy pattern
+- **Demonstration Value**: Shows that even complex services like OAuth work through the proxy
+
+#### 3. **Separation of Concerns**
+- **Single Responsibility**: OAuth server handles only authentication
+- **FastAPI Focus**: Certificate management and proxy orchestration
+- **Clear Boundaries**: Each service has distinct responsibilities
+- **Independent Development**: Teams can work on OAuth without touching core proxy logic
+
+#### 4. **Operational Benefits**
+- **Independent Scaling**: OAuth can scale separately based on auth load
+- **Isolated Updates**: Update OAuth without touching proxy infrastructure
+- **Separate Testing**: OAuth can be tested in complete isolation
+- **Flexible Deployment**: OAuth server can be deployed anywhere
+
+#### 5. **Technical Advantages**
+- **Authlib Integration**: Current OAuth server uses battle-tested Authlib
+- **Clean Interfaces**: Clear HTTP APIs between services
+- **Microservices Pattern**: Follows established distributed system patterns
+- **Replaceability**: OAuth implementation can be swapped without proxy changes
+
+#### 6. **Consolidation Drawbacks**
+Moving OAuth into FastAPI would:
+- Violate single responsibility principle
+- Create a monolithic service with mixed concerns
+- Make FastAPI unnecessarily complex
+- Require rewriting proven OAuth implementation
+- Break the elegant "OAuth as a service" pattern
+- Make testing more difficult
+- Reduce deployment flexibility
+
+### Recommended Approach for MCP Compliance
+
+Instead of consolidation, enhance the **integration** between services:
+
+1. **Shared Resource Registry**
+   - Store MCP resource metadata in Redis
+   - Both OAuth and proxy services access same registry
+   - Maintain service separation with shared data
+
+2. **Enhanced Communication**
+   - Add internal APIs for resource validation
+   - OAuth server queries proxy for resource details
+   - Proxy validates tokens with resource context
+
+3. **Unified Configuration**
+   - Shared environment variables for MCP settings
+   - Consistent resource URI formats
+   - Coordinated feature flags
+
+4. **Integration Layer**
+   - Add MCP compliance module used by both services
+   - Shared libraries for resource validation
+   - Common token validation logic
+
+### Architecture Diagram
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   MCP Client    │────▶│  Proxy (FastAPI)│────▶│   MCP Server    │
+└─────────────────┘     └─────────────────┘     └─────────────────┘
+         │                       │                         │
+         │                       ▼                         │
+         │              ┌─────────────────┐               │
+         └─────────────▶│  OAuth Server   │◀──────────────┘
+                        └─────────────────┘
+                                 │
+                                 ▼
+                        ┌─────────────────┐
+                        │     Redis       │
+                        │ (Shared State)  │
+                        └─────────────────┘
+```
+
+### Conclusion
+
+The current architecture with OAuth as a separate proxied service is **correct** and should be maintained. MCP compliance should be achieved through enhanced integration, not consolidation.
+
 ## Complete Command Reference
 
 ### System Commands
@@ -1317,4 +1693,490 @@ just fetcher-logs
 # Echo services
 just echo-stateful-setup <hostname> [staging]
 just echo-stateless-setup <hostname> [staging]
+```
+
+### MCP Compliance Commands (Future)
+```bash
+# Resource Management
+just resource-register <resource-uri> <proxy-hostname> <name> [scopes]  # Register MCP resource
+just resource-list                                                      # List all MCP resources
+just resource-show <resource-uri>                                      # Show resource details
+just resource-delete <resource-uri>                                    # Delete resource registration
+just resource-validate <resource-uri> <token>                          # Validate token for resource
+
+# MCP Protocol Testing
+just test-mcp-compliance                      # Run MCP specification compliance tests
+just test-resource-indicators                 # Test RFC 8707 implementation
+just test-protected-resource                  # Test protected resource metadata
+just test-audience-validation                 # Test audience restriction
+
+# MCP Configuration
+just mcp-enable-resource-indicators          # Enable resource parameter support
+just mcp-status                              # Show MCP compliance status
+just mcp-metadata <hostname>                 # Show MCP server metadata
+```
+
+# OAuth Status API
+
+The FastAPI service provides comprehensive OAuth client and token status information through dedicated API endpoints. This enables monitoring, debugging, and management of OAuth authentication state across the proxy system.
+
+## Architecture
+
+### Data Access Pattern
+- **Direct Redis Access**: FastAPI reads OAuth data directly from shared Redis
+- **Read-Only Operations**: No modifications to OAuth state via status API
+- **Real-Time Data**: Live view of OAuth server's Redis-stored state
+- **Security Filtering**: Sensitive data (tokens, secrets) never exposed
+
+### Redis OAuth Data Schema
+```
+# OAuth Clients
+client:{client_id} = {
+  "client_id": "mcp_1234567890",
+  "client_name": "MCP Test Client",
+  "created_at": 1234567890,
+  "expires_at": 1234567890,
+  "client_secret_hash": "...",  // Never exposed
+  "registration_access_token_hash": "...",  // Never exposed
+  "metadata": {...}
+}
+
+# OAuth Tokens  
+token:{jti} = {
+  "jti": "unique-token-id",
+  "user_id": "github-user-id",
+  "client_id": "mcp_1234567890",
+  "issued_at": 1234567890,
+  "expires_at": 1234567890,
+  "scope": "read write",
+  "token_type": "access_token"
+}
+
+# User Sessions
+session:{session_id} = {
+  "user_id": "github-user-id",
+  "username": "alice",
+  "email": "alice@example.com",
+  "created_at": 1234567890,
+  "last_activity": 1234567890,
+  "active_tokens": ["jti1", "jti2"]
+}
+```
+
+## OAuth Status Endpoints
+
+### Client Management Endpoints
+
+#### `GET /oauth/clients`
+List all registered OAuth clients with filtering and pagination.
+
+Query Parameters:
+- `active_only`: Show only non-expired clients (default: true)
+- `page`: Page number (default: 1)
+- `per_page`: Items per page (default: 20, max: 100)
+- `sort_by`: Sort field (created_at, expires_at, name)
+- `order`: Sort order (asc, desc)
+
+Response:
+```json
+{
+  "clients": [
+    {
+      "client_id": "mcp_1234567890",
+      "client_name": "MCP Test Client",
+      "created_at": "2024-01-15T10:00:00Z",
+      "expires_at": "2024-04-15T10:00:00Z",
+      "is_active": true,
+      "days_until_expiry": 45,
+      "token_count": 5,
+      "last_token_issued": "2024-01-20T15:30:00Z"
+    }
+  ],
+  "pagination": {
+    "total": 25,
+    "page": 1,
+    "per_page": 20,
+    "pages": 2
+  },
+  "summary": {
+    "total_clients": 25,
+    "active_clients": 20,
+    "expired_clients": 5
+  }
+}
+```
+
+#### `GET /oauth/clients/{client_id}`
+Get detailed information about a specific OAuth client.
+
+Response:
+```json
+{
+  "client_id": "mcp_1234567890",
+  "client_name": "MCP Test Client",
+  "created_at": "2024-01-15T10:00:00Z",
+  "expires_at": "2024-04-15T10:00:00Z",
+  "is_active": true,
+  "metadata": {
+    "software_id": "mcp-test-client",
+    "software_version": "1.0.0",
+    "redirect_uris": ["https://client.example.com/callback"]
+  },
+  "usage_stats": {
+    "total_tokens_issued": 150,
+    "active_tokens": 5,
+    "total_authorizations": 200,
+    "failed_authorizations": 10,
+    "last_authorization": "2024-01-20T15:30:00Z"
+  },
+  "proxy_associations": [
+    {
+      "hostname": "api.example.com",
+      "auth_enabled": true,
+      "auth_mode": "forward",
+      "active_sessions": 3
+    }
+  ]
+}
+```
+
+#### `GET /oauth/clients/{client_id}/tokens`
+List tokens issued to a specific client.
+
+Response:
+```json
+{
+  "tokens": [
+    {
+      "jti": "token-id-hash",  // Hashed for security
+      "token_type": "access_token",
+      "user_id": "github-123",
+      "username": "alice",
+      "issued_at": "2024-01-20T15:00:00Z",
+      "expires_at": "2024-01-20T15:30:00Z",
+      "is_expired": false,
+      "scope": "read write",
+      "used_by_proxies": ["api.example.com", "admin.example.com"]
+    }
+  ],
+  "summary": {
+    "total_tokens": 5,
+    "active_tokens": 3,
+    "expired_tokens": 2
+  }
+}
+```
+
+### Token Status Endpoints
+
+#### `GET /oauth/tokens`
+Get OAuth token statistics and overview.
+
+Query Parameters:
+- `token_type`: Filter by type (access_token, refresh_token)
+- `include_expired`: Include expired tokens (default: false)
+- `user_id`: Filter by user ID
+- `client_id`: Filter by client ID
+
+Response:
+```json
+{
+  "summary": {
+    "total_access_tokens": 150,
+    "active_access_tokens": 45,
+    "total_refresh_tokens": 120,
+    "active_refresh_tokens": 100,
+    "tokens_expiring_soon": 5,  // Within 5 minutes
+    "average_token_lifetime": 1800
+  },
+  "by_client": [
+    {
+      "client_id": "mcp_1234567890",
+      "client_name": "MCP Test Client",
+      "active_tokens": 15,
+      "percentage": 33.3
+    }
+  ],
+  "by_user": [
+    {
+      "user_id": "github-123",
+      "username": "alice",
+      "active_tokens": 5,
+      "last_activity": "2024-01-20T15:45:00Z"
+    }
+  ],
+  "recent_activity": [
+    {
+      "timestamp": "2024-01-20T15:45:00Z",
+      "event": "token_issued",
+      "client_id": "mcp_1234567890",
+      "user_id": "github-123"
+    }
+  ]
+}
+```
+
+#### `GET /oauth/tokens/{jti}`
+Get specific token information (requires admin token or token ownership).
+
+Response:
+```json
+{
+  "jti": "token-id-hash",
+  "token_type": "access_token",
+  "client_id": "mcp_1234567890",
+  "client_name": "MCP Test Client",
+  "user": {
+    "user_id": "github-123",
+    "username": "alice",
+    "email": "alice@example.com"
+  },
+  "issued_at": "2024-01-20T15:00:00Z",
+  "expires_at": "2024-01-20T15:30:00Z",
+  "is_expired": false,
+  "time_until_expiry": 300,
+  "scope": "read write",
+  "claims": {
+    "sub": "github-123",
+    "aud": ["https://auth.example.com"],
+    "azp": "mcp_1234567890"
+  },
+  "usage": {
+    "last_used": "2024-01-20T15:25:00Z",
+    "use_count": 45,
+    "used_by_proxies": ["api.example.com"],
+    "user_agent": "MCP-Client/1.0"
+  }
+}
+```
+
+### Session Management Endpoints
+
+#### `GET /oauth/sessions`
+List active user sessions.
+
+Response:
+```json
+{
+  "sessions": [
+    {
+      "session_id": "sess_abc123",
+      "user_id": "github-123",
+      "username": "alice",
+      "email": "alice@example.com",
+      "created_at": "2024-01-20T14:00:00Z",
+      "last_activity": "2024-01-20T15:45:00Z",
+      "duration_minutes": 105,
+      "active_tokens": 2,
+      "accessed_proxies": ["api.example.com", "admin.example.com"]
+    }
+  ],
+  "summary": {
+    "total_sessions": 25,
+    "unique_users": 20,
+    "average_session_duration": 45
+  }
+}
+```
+
+#### `GET /oauth/sessions/{session_id}`
+Get detailed session information.
+
+#### `DELETE /oauth/sessions/{session_id}`
+Revoke a session and all associated tokens (requires admin or session owner).
+
+### Monitoring Endpoints
+
+#### `GET /oauth/metrics`
+Get OAuth system metrics for monitoring.
+
+Response:
+```json
+{
+  "timestamp": "2024-01-20T16:00:00Z",
+  "clients": {
+    "total": 25,
+    "active": 20,
+    "expiring_soon": 2
+  },
+  "tokens": {
+    "access_tokens": {
+      "total": 150,
+      "active": 45,
+      "issued_last_hour": 20,
+      "expired_last_hour": 15
+    },
+    "refresh_tokens": {
+      "total": 120,
+      "active": 100,
+      "used_last_hour": 10
+    }
+  },
+  "auth_flows": {
+    "authorization_requests": {
+      "last_hour": 50,
+      "success_rate": 0.92
+    },
+    "token_requests": {
+      "last_hour": 45,
+      "success_rate": 0.95
+    }
+  },
+  "errors": {
+    "invalid_client": 2,
+    "invalid_grant": 3,
+    "unauthorized_client": 1
+  }
+}
+```
+
+#### `GET /oauth/health`
+Check OAuth integration health.
+
+Response:
+```json
+{
+  "status": "healthy",
+  "checks": {
+    "redis_connection": "ok",
+    "oauth_server_reachable": "ok",
+    "token_validation": "ok",
+    "jwks_endpoint": "ok"
+  },
+  "last_successful_auth": "2024-01-20T15:55:00Z",
+  "auth_proxy": {
+    "hostname": "auth.example.com",
+    "status": "active",
+    "certificate_valid": true
+  }
+}
+```
+
+### Proxy Integration Endpoints
+
+#### `GET /oauth/proxies`
+Show OAuth status for all proxies.
+
+Response:
+```json
+{
+  "proxies": [
+    {
+      "hostname": "api.example.com",
+      "auth_enabled": true,
+      "auth_mode": "forward",
+      "auth_proxy": "auth.example.com",
+      "active_sessions": 5,
+      "recent_auth_failures": 2,
+      "last_auth_success": "2024-01-20T15:50:00Z"
+    }
+  ],
+  "summary": {
+    "total_proxies": 10,
+    "auth_enabled_proxies": 6,
+    "proxies_with_active_sessions": 4
+  }
+}
+```
+
+#### `GET /oauth/proxies/{hostname}/sessions`
+List active sessions for a specific proxy.
+
+## Implementation Details
+
+### Redis Access Pattern
+```python
+# FastAPI service reads OAuth data directly
+async def get_oauth_clients():
+    # Scan for client:* keys
+    clients = []
+    async for key in redis.scan_iter("client:*"):
+        client_data = await redis.get(key)
+        # Filter sensitive fields
+        safe_data = filter_sensitive(client_data)
+        clients.append(safe_data)
+    return clients
+```
+
+### Security Filtering
+```python
+SENSITIVE_FIELDS = {
+    "client_secret", "client_secret_hash",
+    "registration_access_token", "token_value",
+    "refresh_token", "access_token"
+}
+
+def filter_sensitive(data):
+    return {k: v for k, v in data.items() 
+            if k not in SENSITIVE_FIELDS}
+```
+
+### Caching Strategy
+- Cache client lists for 60 seconds
+- Cache token statistics for 30 seconds
+- Real-time data for specific lookups
+- Use Redis pub/sub for cache invalidation
+
+## Usage Examples
+
+### Dashboard Integration
+```javascript
+// Fetch OAuth overview for dashboard
+const response = await fetch('/oauth/metrics');
+const metrics = await response.json();
+
+// Display client status
+const clients = await fetch('/oauth/clients?active_only=true');
+const clientList = await clients.json();
+```
+
+### Monitoring Integration
+```bash
+# Prometheus metrics endpoint
+curl https://api.example.com/oauth/metrics
+
+# Health check for monitoring
+curl https://api.example.com/oauth/health
+```
+
+### Admin Operations
+```bash
+# List all active sessions
+just oauth-sessions-list
+
+# Show client details
+just oauth-client-show mcp_1234567890
+
+# Revoke specific session
+just oauth-session-revoke sess_abc123
+
+# Show token statistics
+just oauth-token-stats
+```
+
+## OAuth Status Commands
+```bash
+# OAuth Client Management
+just oauth-clients-list [active-only]           # List OAuth clients
+just oauth-client-show <client-id>              # Show client details
+just oauth-client-tokens <client-id>            # List client's tokens
+just oauth-client-stats <client-id>             # Show client statistics
+
+# OAuth Token Management  
+just oauth-tokens-stats                         # Token statistics
+just oauth-token-show <jti>                     # Show token details
+just oauth-tokens-cleanup                       # Remove expired tokens
+
+# OAuth Session Management
+just oauth-sessions-list                        # List active sessions
+just oauth-session-show <session-id>            # Show session details
+just oauth-session-revoke <session-id>          # Revoke session
+
+# OAuth Monitoring
+just oauth-metrics                              # Show OAuth metrics
+just oauth-health                               # Check OAuth health
+just oauth-proxy-status [hostname]              # OAuth status by proxy
+
+# OAuth Testing
+just test-oauth-status-api                      # Test status endpoints
 ```

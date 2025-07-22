@@ -2165,3 +2165,148 @@ echo-stateful-logs:
 # View echo-stateless logs
 echo-stateless-logs:
     docker-compose logs -f echo-stateless
+
+# ==============================================================================
+# OAuth Status Commands
+# ==============================================================================
+
+# List OAuth clients
+oauth-clients-list active-only="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - OAuth Clients"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    token="${ADMIN_TOKEN}"
+    url="${BASE_URL:-https://gui.atradev.org}/oauth-status/clients?active_only={{active-only}}"
+    
+    curl -sk -H "Authorization: Bearer $token" "$url" | python -m json.tool || {
+        echo "✗ Error: Failed to fetch OAuth clients"
+        exit 1
+    }
+
+# Show OAuth client details
+oauth-client-show client-id:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Showing OAuth client: {{client-id}}"
+    echo ""
+    
+    token="${ADMIN_TOKEN}"
+    url="${BASE_URL:-https://gui.atradev.org}/oauth-status/clients/{{client-id}}"
+    
+    curl -sk -H "Authorization: Bearer $token" "$url" | python -m json.tool || {
+        echo "✗ Error: Failed to fetch client details"
+        exit 1
+    }
+
+# Show OAuth system metrics
+oauth-metrics:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - OAuth Metrics"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    token="${ADMIN_TOKEN}"
+    url="${BASE_URL:-https://gui.atradev.org}/oauth-status/metrics"
+    
+    curl -sk -H "Authorization: Bearer $token" "$url" | python -m json.tool || {
+        echo "✗ Error: Failed to fetch OAuth metrics"
+        exit 1
+    }
+
+# Check OAuth health
+oauth-health:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - OAuth Health"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    token="${ADMIN_TOKEN}"
+    url="${BASE_URL:-https://gui.atradev.org}/oauth-status/health"
+    
+    curl -sk -H "Authorization: Bearer $token" "$url" | python -m json.tool || {
+        echo "✗ Error: Failed to check OAuth health"
+        exit 1
+    }
+
+# Show OAuth status by proxy
+oauth-proxy-status hostname="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - OAuth Proxy Status"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    token="${ADMIN_TOKEN}"
+    
+    if [ -z "{{hostname}}" ]; then
+        url="${BASE_URL:-https://gui.atradev.org}/oauth-status/proxies"
+    else
+        url="${BASE_URL:-https://gui.atradev.org}/oauth-status/proxies/{{hostname}}/sessions"
+    fi
+    
+    curl -sk -H "Authorization: Bearer $token" "$url" | python -m json.tool || {
+        echo "✗ Error: Failed to fetch proxy OAuth status"
+        exit 1
+    }
+
+# Test OAuth status API
+test-oauth-status-api:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo "MCP HTTP Proxy - OAuth Status API Test"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+    echo ""
+    
+    token="${ADMIN_TOKEN}"
+    base_url="${BASE_URL:-https://gui.atradev.org}"
+    
+    echo "▶ Testing OAuth health endpoint..."
+    if curl -sk -H "Authorization: Bearer $token" "$base_url/oauth-status/health" | python -m json.tool > /dev/null 2>&1; then
+        echo "✓ OAuth health endpoint working"
+    else
+        echo "✗ OAuth health endpoint failed"
+    fi
+    
+    echo ""
+    echo "▶ Testing OAuth clients endpoint..."
+    if curl -sk -H "Authorization: Bearer $token" "$base_url/oauth-status/clients" | python -m json.tool > /dev/null 2>&1; then
+        echo "✓ OAuth clients endpoint working"
+    else
+        echo "✗ OAuth clients endpoint failed"
+    fi
+    
+    echo ""
+    echo "▶ Testing OAuth metrics endpoint..."
+    if curl -sk -H "Authorization: Bearer $token" "$base_url/oauth-status/metrics" | python -m json.tool > /dev/null 2>&1; then
+        echo "✓ OAuth metrics endpoint working"
+    else
+        echo "✗ OAuth metrics endpoint failed"
+    fi
+    
+    echo ""
+    echo "▶ Testing OAuth proxies endpoint..."
+    if curl -sk -H "Authorization: Bearer $token" "$base_url/oauth-status/proxies" | python -m json.tool > /dev/null 2>&1; then
+        echo "✓ OAuth proxies endpoint working"
+    else
+        echo "✗ OAuth proxies endpoint failed"
+    fi
+    
+    echo ""
+    echo "✅ OAuth Status API test complete"
+    echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"

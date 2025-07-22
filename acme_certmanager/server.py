@@ -32,6 +32,7 @@ from .auth import (
     require_proxy_owner, require_route_owner
 )
 from .proxy_handler_v2 import EnhancedProxyHandler as ProxyHandler
+from .oauth_status import create_oauth_status_router
 
 logger = logging.getLogger(__name__)
 
@@ -223,11 +224,29 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ACME Certificate Manager")
     
     # Initialize global instances
-    global manager, https_server, scheduler, proxy_handler
+    global manager, https_server, scheduler, proxy_handler, oauth_router
     manager = CertificateManager()
     https_server = HTTPSServer(manager)
     scheduler = CertificateScheduler(manager)
     proxy_handler = ProxyHandler(manager.storage)
+    
+    # Create and add OAuth status router BEFORE catch-all routes
+    oauth_router = create_oauth_status_router(manager.storage)
+    app.include_router(oauth_router)
+    
+    # Register catch-all routes LAST to ensure all other routes take precedence
+    @app.api_route("/{path:path}", 
+                   methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
+                   include_in_schema=False)
+    async def proxy_request(request: Request, path: str):
+        """Handle all unmatched requests as potential proxy targets."""
+        return await proxy_handler.handle_request(request)
+    
+    # WebSocket proxy route - also catch-all
+    @app.websocket("/{path:path}")
+    async def proxy_websocket(websocket: WebSocket, path: str):
+        """Handle WebSocket connections for proxy targets."""
+        await proxy_handler.handle_websocket(websocket, path)
     
     # Load certificates
     https_server.load_certificates()
@@ -253,6 +272,9 @@ app = FastAPI(
 
 # Mount static files for web GUI
 app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+
+# Add OAuth status router (will be initialized with storage during lifespan)
+oauth_router = None
 
 
 # Add middleware to log ALL requests
@@ -1112,20 +1134,7 @@ async def delete_route(
     return {"message": f"Route {route_id} deleted successfully"}
 
 
-# Catch-all proxy route - MUST be last
-@app.api_route("/{path:path}", 
-               methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"],
-               include_in_schema=False)
-async def proxy_request(request: Request, path: str):
-    """Handle all unmatched requests as potential proxy targets."""
-    return await proxy_handler.handle_request(request)
-
-
-# WebSocket proxy route - also catch-all, must be after HTTP routes
-@app.websocket("/{path:path}")
-async def proxy_websocket(websocket: WebSocket, path: str):
-    """Handle WebSocket connections for proxy targets."""
-    await proxy_handler.handle_websocket(websocket, path)
+# Note: Catch-all routes are registered in lifespan to ensure they come after all other routes
 
 
 def get_ssl_context(server_name: str) -> Optional[ssl.SSLContext]:
