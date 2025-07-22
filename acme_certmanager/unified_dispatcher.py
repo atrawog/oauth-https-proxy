@@ -49,6 +49,23 @@ class DomainInstance:
         # For proxy-only instances, create a dedicated app
         if not is_api_instance and storage:
             self.app = create_proxy_app(storage)
+        elif is_api_instance and storage:
+            # For API instance, create a simple wrapper that forwards to the FastAPI app
+            # without triggering the lifespan again
+            from starlette.applications import Starlette
+            from starlette.routing import Mount
+            from starlette.middleware import Middleware
+            
+            # Create a simple Starlette app that mounts the FastAPI app
+            # This avoids the lifespan issue while preserving all routes
+            self.app = Starlette(
+                routes=[
+                    Mount("/", app=app),
+                ],
+                middleware=[],
+                on_startup=[],  # No startup handlers
+                on_shutdown=[]  # No shutdown handlers
+            )
         
     async def start(self):
         """Start HTTP and/or HTTPS instances based on proxy configuration."""

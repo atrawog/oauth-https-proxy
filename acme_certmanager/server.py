@@ -33,6 +33,7 @@ from .auth import (
 )
 from .proxy_handler_v2 import EnhancedProxyHandler as ProxyHandler
 from .oauth_status import create_oauth_status_router
+from .resource_registry import MCPResourceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -215,6 +216,7 @@ manager: Optional[CertificateManager] = None
 https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
+resource_registry: Optional[MCPResourceRegistry] = None
 
 
 @asynccontextmanager
@@ -224,11 +226,12 @@ async def lifespan(app: FastAPI):
     logger.info("Starting ACME Certificate Manager")
     
     # Initialize global instances
-    global manager, https_server, scheduler, proxy_handler, oauth_router
+    global manager, https_server, scheduler, proxy_handler, oauth_router, resource_registry
     manager = CertificateManager()
     https_server = HTTPSServer(manager)
     scheduler = CertificateScheduler(manager)
     proxy_handler = ProxyHandler(manager.storage)
+    resource_registry = MCPResourceRegistry(manager.storage.redis_client)
     
     # Create and add OAuth status router BEFORE catch-all routes
     oauth_router = create_oauth_status_router(manager.storage)
@@ -1134,6 +1137,117 @@ async def delete_route(
     return {"message": f"Route {route_id} deleted successfully"}
 
 
+# MCP Resource Registry endpoints (RFC 8707 Resource Indicators)
+@app.post("/resources",
+          dependencies=[Depends(get_current_token_info)])
+async def register_resource(
+    resource_uri: str,
+    proxy_hostname: str,
+    name: str,
+    scopes: Optional[List[str]] = None,
+    metadata: Optional[Dict[str, Union[str, int, bool]]] = None
+):
+    """Register an MCP resource for OAuth audience validation."""
+    resource = await resource_registry.register_resource(
+        resource_uri=resource_uri,
+        proxy_hostname=proxy_hostname,
+        name=name,
+        scopes=scopes,
+        metadata=metadata
+    )
+    return resource
+
+
+@app.get("/resources",
+         dependencies=[Depends(get_current_token_info)])
+async def list_resources():
+    """List all registered MCP resources."""
+    resources = await resource_registry.list_resources()
+    return {"resources": resources}
+
+
+@app.get("/resources/{resource_uri:path}",
+         dependencies=[Depends(get_current_token_info)])
+async def get_resource(resource_uri: str):
+    """Get a specific MCP resource."""
+    # Reconstruct full URI (FastAPI path params don't include protocol)
+    if not resource_uri.startswith(("http://", "https://")):
+        resource_uri = f"https://{resource_uri}"
+    
+    resource = await resource_registry.get_resource(resource_uri)
+    if not resource:
+        raise HTTPException(404, f"Resource {resource_uri} not found")
+    return resource
+
+
+@app.put("/resources/{resource_uri:path}",
+         dependencies=[Depends(get_current_token_info)])
+async def update_resource(
+    resource_uri: str,
+    updates: Dict[str, Union[str, int, bool, List[str]]]
+):
+    """Update an MCP resource."""
+    # Reconstruct full URI
+    if not resource_uri.startswith(("http://", "https://")):
+        resource_uri = f"https://{resource_uri}"
+    
+    resource = await resource_registry.update_resource(resource_uri, updates)
+    if not resource:
+        raise HTTPException(404, f"Resource {resource_uri} not found")
+    return resource
+
+
+@app.delete("/resources/{resource_uri:path}",
+            dependencies=[Depends(get_current_token_info)])
+async def delete_resource(resource_uri: str):
+    """Delete an MCP resource."""
+    # Reconstruct full URI
+    if not resource_uri.startswith(("http://", "https://")):
+        resource_uri = f"https://{resource_uri}"
+    
+    if not await resource_registry.delete_resource(resource_uri):
+        raise HTTPException(404, f"Resource {resource_uri} not found")
+    
+    return {"message": f"Resource {resource_uri} deleted successfully"}
+
+
+@app.post("/resources/auto-register",
+          dependencies=[Depends(get_current_token_info)])
+async def auto_register_resources():
+    """Auto-register MCP resources from existing proxy targets."""
+    count = await resource_registry.auto_register_proxy_resources()
+    return {
+        "message": f"Auto-registered {count} MCP resources",
+        "count": count
+    }
+
+
+@app.post("/resources/{resource_uri:path}/validate-token",
+          dependencies=[Depends(get_current_token_info)])
+async def validate_token_for_resource(
+    resource_uri: str,
+    token_audience: List[str],
+    required_scope: Optional[str] = None
+):
+    """Validate if a token audience is valid for a resource."""
+    # Reconstruct full URI
+    if not resource_uri.startswith(("http://", "https://")):
+        resource_uri = f"https://{resource_uri}"
+    
+    valid = await resource_registry.validate_token_for_resource(
+        resource_uri=resource_uri,
+        token_audience=token_audience,
+        required_scope=required_scope
+    )
+    
+    return {
+        "resource": resource_uri,
+        "valid": valid,
+        "audience": token_audience,
+        "scope": required_scope
+    }
+
+
 # Note: Catch-all routes are registered in lifespan to ensure they come after all other routes
 
 
@@ -1222,7 +1336,7 @@ def run_server():
     logger.info("Each domain will have its own dedicated Hypercorn instance")
     
     # Initialize the global instances before running the server
-    global manager, https_server, scheduler, proxy_handler
+    global manager, https_server, scheduler, proxy_handler, resource_registry
     if not manager:
         manager = CertificateManager()
     if not https_server:
@@ -1232,6 +1346,8 @@ def run_server():
         scheduler = CertificateScheduler(manager)
     if not proxy_handler:
         proxy_handler = ProxyHandler(manager.storage)
+    if not resource_registry:
+        resource_registry = MCPResourceRegistry(manager.storage.redis_client)
     
     async def run_servers():
         # Start scheduler
