@@ -1,5 +1,6 @@
 """Redis storage implementation for MCP HTTP Proxy."""
 
+import base64
 import json
 import logging
 from datetime import datetime, timedelta, timezone
@@ -55,15 +56,32 @@ class RedisStorage:
     
     # Certificate operations
     def store_certificate(self, cert_name: str, certificate: Certificate) -> bool:
-        """Store certificate in Redis."""
+        """Store certificate in Redis with domain uniqueness checking."""
         try:
+            # Check if any of the domains already have certificates
+            for domain in certificate.domains:
+                existing_cert_name = self.redis_client.get(f"cert:domain:{domain}")
+                if existing_cert_name and existing_cert_name != cert_name:
+                    logger.error(
+                        f"Domain {domain} already has certificate {existing_cert_name}. "
+                        f"Cannot create certificate {cert_name}"
+                    )
+                    return False
+            
+            # Store certificate data
             key = f"cert:{cert_name}"
             value = certificate.json()
             result = self.redis_client.set(key, value)
+            
             if result:
+                # Create domain indexes
+                for domain in certificate.domains:
+                    self.redis_client.set(f"cert:domain:{domain}", cert_name)
+                
                 logger.info(f"Successfully stored certificate {cert_name} for domains {certificate.domains}")
             else:
                 logger.error(f"Redis set returned False for certificate {cert_name}")
+            
             return result
         except RedisError as e:
             logger.error(f"Failed to store certificate {cert_name}: {e}")
@@ -99,8 +117,11 @@ class RedisStorage:
             return []
     
     def delete_certificate(self, cert_name: str) -> bool:
-        """Delete certificate from Redis and clean up associated proxy targets."""
+        """Delete certificate from Redis and clean up associated proxy targets and domain indexes."""
         try:
+            # Get certificate to find domains
+            cert = self.get_certificate(cert_name)
+            
             # First, find all proxy targets that reference this certificate
             proxy_targets_cleaned = 0
             for key in self.redis_client.scan_iter(match="proxy:*"):
@@ -116,6 +137,12 @@ class RedisStorage:
             
             if proxy_targets_cleaned > 0:
                 logger.info(f"Cleaned up {proxy_targets_cleaned} proxy targets that referenced certificate {cert_name}")
+            
+            # Delete domain indexes if certificate exists
+            if cert and cert.domains:
+                for domain in cert.domains:
+                    self.redis_client.delete(f"cert:domain:{domain}")
+                logger.info(f"Cleaned up domain indexes for domains: {cert.domains}")
             
             # Now delete the certificate
             key = f"cert:{cert_name}"
@@ -509,8 +536,23 @@ class RedisStorage:
     
     # Route operations
     def store_route(self, route: Route) -> bool:
-        """Store routing rule with priority indexing."""
+        """Store routing rule with priority indexing and uniqueness check."""
         try:
+            # Create unique key for path+priority combination
+            # Use base64 encoding to handle special characters in path
+            path_encoded = base64.b64encode(route.path_pattern.encode()).decode()
+            unique_key = f"route:unique:{path_encoded}:{route.priority}"
+            
+            # Check if route with same path and priority already exists
+            existing_route_id = self.redis_client.get(unique_key)
+            if existing_route_id and existing_route_id != route.route_id:
+                # A different route already exists with same path and priority
+                logger.error(
+                    f"Route already exists with path={route.path_pattern} and priority={route.priority}. "
+                    f"Existing route ID: {existing_route_id}"
+                )
+                return False
+            
             # Store route data
             route_key = f"route:{route.route_id}"
             result1 = self.redis_client.set(route_key, route.json())
@@ -519,7 +561,10 @@ class RedisStorage:
             priority_key = f"route:priority:{100 - route.priority:04d}:{route.route_id}"
             result2 = self.redis_client.set(priority_key, route.route_id)
             
-            return result1 and result2
+            # Store unique constraint
+            result3 = self.redis_client.set(unique_key, route.route_id)
+            
+            return result1 and result2 and result3
         except RedisError as e:
             logger.error(f"Failed to store route: {e}")
             return False
@@ -553,7 +598,7 @@ class RedisStorage:
             
             # Also get any routes without priority index (shouldn't happen)
             for key in self.redis_client.scan_iter(match="route:*"):
-                if not key.startswith("route:priority:"):
+                if not key.startswith("route:priority:") and not key.startswith("route:unique:"):
                     route_id = key.split(":", 1)[1]
                     if route_id not in route_ids:
                         route = self.get_route(route_id)
@@ -569,7 +614,7 @@ class RedisStorage:
             return []
     
     def delete_route(self, route_id: str) -> bool:
-        """Delete route and its priority index."""
+        """Delete route and all its indexes."""
         try:
             route = self.get_route(route_id)
             if not route:
@@ -583,7 +628,12 @@ class RedisStorage:
             priority_key = f"route:priority:{100 - route.priority:04d}:{route_id}"
             result2 = bool(self.redis_client.delete(priority_key))
             
-            return result1 and result2
+            # Delete unique constraint
+            path_encoded = base64.b64encode(route.path_pattern.encode()).decode()
+            unique_key = f"route:unique:{path_encoded}:{route.priority}"
+            result3 = bool(self.redis_client.delete(unique_key))
+            
+            return result1 and result2 and result3
         except RedisError as e:
             logger.error(f"Failed to delete route: {e}")
             return False

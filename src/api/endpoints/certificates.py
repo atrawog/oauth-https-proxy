@@ -39,7 +39,13 @@ def create_router(storage, cert_manager):
                     owner_token_hash=token_info['hash'],
                     created_by=token_info['name']
                 )
-                storage.store_certificate(cert_request.cert_name, cert)
+                if not storage.store_certificate(cert_request.cert_name, cert):
+                    # Storage rejected due to domain conflict
+                    raise HTTPException(
+                        409,
+                        f"A certificate already exists for domain '{cert_request.domain}'. "
+                        f"Each domain can only have one active certificate."
+                    )
             
             # Start async generation
             background_tasks.add_task(
@@ -68,6 +74,14 @@ def create_router(storage, cert_manager):
         try:
             cert_request = MultiDomainCertificateRequest(**request)
             
+            # Check if certificate with this name already exists
+            existing_cert = cert_manager.get_certificate(cert_request.cert_name)
+            if existing_cert:
+                raise HTTPException(
+                    409,
+                    f"Certificate '{cert_request.cert_name}' already exists"
+                )
+            
             # Store initial certificate record
             from ...certmanager.models import Certificate
             cert = Certificate(
@@ -79,7 +93,20 @@ def create_router(storage, cert_manager):
                 owner_token_hash=token_info['hash'],
                 created_by=token_info['name']
             )
-            storage.store_certificate(cert_request.cert_name, cert)
+            if not storage.store_certificate(cert_request.cert_name, cert):
+                # Storage rejected due to domain conflict
+                # Find which domain already has a certificate
+                conflicting_domains = []
+                for domain in cert_request.domains:
+                    existing_cert_name = storage.redis_client.get(f"cert:domain:{domain}")
+                    if existing_cert_name and existing_cert_name != cert_request.cert_name:
+                        conflicting_domains.append(domain)
+                
+                raise HTTPException(
+                    409,
+                    f"Certificate(s) already exist for domain(s): {', '.join(conflicting_domains)}. "
+                    f"Each domain can only have one active certificate."
+                )
             
             # Start async generation
             background_tasks.add_task(

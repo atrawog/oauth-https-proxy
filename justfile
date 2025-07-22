@@ -701,6 +701,274 @@ oauth-routes-setup domain token="":
         token_value="{{token}}"
     fi
     
-    docker exec {{container_name}} pixi run python scripts/oauth_routes_setup.py \
-        --auth-domain "{{domain}}" \
+    docker exec {{container_name}} pixi run python scripts/oauth_routes_setup.py "{{domain}}" "$token_value"
+
+# OAuth Client Testing Commands
+# Register a new OAuth client for testing
+oauth-client-register name redirect-uri="http://localhost:8080/callback" scope="mcp:read mcp:write":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Registering OAuth client '{{name}}'..."
+    
+    # Load BASE_DOMAIN from .env
+    BASE_DOMAIN=$(grep "^BASE_DOMAIN=" .env | cut -d= -f2)
+    
+    response=$(curl -k -s -X POST "https://auth.${BASE_DOMAIN}/register" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "client_name": "{{name}}",
+            "redirect_uris": ["{{redirect-uri}}"],
+            "grant_types": ["authorization_code", "refresh_token"],
+            "response_types": ["code"],
+            "scope": "{{scope}}",
+            "software_id": "mcp-test-client",
+            "software_version": "1.0.0"
+        }')
+    
+    client_id=$(echo "$response" | jq -r '.client_id')
+    client_secret=$(echo "$response" | jq -r '.client_secret')
+    registration_token=$(echo "$response" | jq -r '.registration_access_token')
+    registration_uri=$(echo "$response" | jq -r '.registration_client_uri')
+    
+    if [ "$client_id" = "null" ]; then
+        echo "Error registering client:"
+        echo "$response" | jq .
+        exit 1
+    fi
+    
+    echo "✅ Client registered successfully!"
+    echo ""
+    echo "Client ID: $client_id"
+    echo "Client Secret: $client_secret"
+    echo "Registration Token: $registration_token"
+    echo "Registration URI: $registration_uri"
+    echo ""
+    echo "Add these to your .env file:"
+    echo "MCP_CLIENT_ID=$client_id"
+    echo "MCP_CLIENT_SECRET=$client_secret"
+    echo "MCP_CLIENT_REGISTRATION_TOKEN=$registration_token"
+    echo "MCP_CLIENT_REGISTRATION_URI=$registration_uri"
+
+# Generate test OAuth tokens for MCP client
+oauth-test-tokens server-url:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Setting up OAuth test tokens for {{server-url}}..."
+    
+    # Check if we have credentials
+    if [ -z "${MCP_CLIENT_ID:-}" ] || [ -z "${MCP_CLIENT_SECRET:-}" ]; then
+        echo "No OAuth client found. Creating one..."
+        just oauth-client-register "mcp-test-$(date +%s)" "http://localhost:8080/callback"
+        echo ""
+        echo "Please add the credentials to .env and run this command again."
+        exit 1
+    fi
+    
+    # Write server URL to .env if not present
+    if ! grep -q "^MCP_SERVER_URL=" .env 2>/dev/null; then
+        echo "" >> .env
+        echo "# MCP Server Configuration" >> .env
+        echo "MCP_SERVER_URL={{server-url}}" >> .env
+        echo "Added MCP_SERVER_URL to .env"
+    else
+        sed -i.bak "s|^MCP_SERVER_URL=.*|MCP_SERVER_URL={{server-url}}|" .env
+        echo "Updated MCP_SERVER_URL in .env"
+    fi
+    
+    echo ""
+    echo "OAuth client configured. Use the following to get tokens:"
+    echo "cd mcp-streamablehttp-client"
+    echo "pixi run mcp-streamablehttp-client --token"
+
+# Test MCP client authentication
+mcp-test-auth:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd mcp-streamablehttp-client
+    
+    echo "Testing MCP client authentication..."
+    pixi run mcp-streamablehttp-client --test-auth
+
+# List tools available on MCP server
+mcp-list-tools:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd mcp-streamablehttp-client
+    
+    echo "Listing available MCP tools..."
+    pixi run mcp-streamablehttp-client --list-tools
+
+# Execute MCP command
+mcp-exec command:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd mcp-streamablehttp-client
+    
+    echo "Executing MCP command: {{command}}"
+    pixi run mcp-streamablehttp-client -c "{{command}}"
+
+# Test echo servers with MCP client
+mcp-test-echo type="stateful":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    if [ "{{type}}" = "stateful" ]; then
+        server_url="https://echo-stateful.${BASE_DOMAIN}/mcp"
+    else
+        server_url="https://echo-stateless.${BASE_DOMAIN}/mcp"
+    fi
+    
+    echo "Testing {{type}} echo server at $server_url"
+    
+    # Configure server URL
+    just oauth-test-tokens "$server_url"
+    
+    # Get tokens
+    cd mcp-streamablehttp-client
+    echo ""
+    echo "Authenticating with OAuth server..."
+    pixi run mcp-streamablehttp-client --token
+    
+    echo ""
+    echo "Testing echo functionality..."
+    pixi run mcp-streamablehttp-client -c 'echo message="Hello from MCP client!"'
+    
+    if [ "{{type}}" = "stateful" ]; then
+        echo ""
+        echo "Testing stateful functionality..."
+        pixi run mcp-streamablehttp-client -c 'echo message="First message"'
+        pixi run mcp-streamablehttp-client -c 'echo message="Second message"'
+        pixi run mcp-streamablehttp-client -c 'get_history'
+    fi
+
+# Run full MCP client test suite
+mcp-test-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Running full MCP client test suite..."
+    echo ""
+    
+    # Test stateful echo server
+    echo "1. Testing stateful echo server..."
+    just mcp-test-echo stateful
+    
+    echo ""
+    echo "2. Testing stateless echo server..."
+    just mcp-test-echo stateless
+    
+    echo ""
+    echo "✅ All MCP client tests completed!"
+
+# Route Management Commands
+# List all routes
+route-list:
+    docker exec {{container_name}} pixi run python scripts/route_list.py
+
+# Show route details
+route-show route-id:
+    docker exec {{container_name}} pixi run python scripts/route_show.py --route-id {{route-id}}
+
+# Create a new route
+route-create path target-type target-value token="" priority="50" methods="*" is-regex="false" description="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    docker exec {{container_name}} pixi run python scripts/route_create.py \
+        --path "{{path}}" \
+        --target-type "{{target-type}}" \
+        --target-value "{{target-value}}" \
+        --token "$token_value" \
+        --priority {{priority}} \
+        --methods "{{methods}}" \
+        --is-regex {{is-regex}} \
+        --description "{{description}}"
+
+# Delete a route
+route-delete route-id token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    docker exec {{container_name}} pixi run python scripts/route_delete.py \
+        --route-id "{{route-id}}" \
         --token "$token_value"
+
+# Setup MCP client development environment
+mcp-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Setting up MCP client development environment..."
+    
+    # Ensure OAuth service is running
+    if ! docker-compose ps mcp-oauth-dynamicclient | grep -q "Up"; then
+        echo "Starting OAuth service..."
+        docker-compose up -d mcp-oauth-dynamicclient
+        sleep 5
+    fi
+    
+    # Ensure echo servers are running
+    if ! docker-compose ps mcp-echo-streamablehttp-server-stateful | grep -q "Up"; then
+        echo "Starting echo servers..."
+        docker-compose up -d mcp-echo-streamablehttp-server-stateful
+        docker-compose up -d mcp-echo-streamablehttp-server-stateless
+        sleep 3
+    fi
+    
+    # Setup OAuth routes if needed
+    if ! just route-list | grep -q "/authorize"; then
+        echo "Setting up OAuth routes..."
+        just oauth-routes-setup "auth.${BASE_DOMAIN}" ADMIN
+    fi
+    
+    # Install MCP client dependencies
+    cd mcp-streamablehttp-client
+    if [ ! -d ".pixi" ]; then
+        echo "Installing MCP client dependencies..."
+        pixi install
+    fi
+    
+    echo ""
+    echo "✅ MCP client environment ready!"
+    echo ""
+    echo "Next steps:"
+    echo "1. Register an OAuth client: just oauth-client-register test-client"
+    echo "2. Add credentials to .env"
+    echo "3. Test authentication: just mcp-test-auth"
+    echo "4. Run tests: just mcp-test-all"

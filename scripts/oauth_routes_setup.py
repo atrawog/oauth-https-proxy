@@ -81,11 +81,21 @@ def setup_oauth_routes(auth_domain: str, token: str = None) -> bool:
         # Generate unique route ID
         route_id = f"{route['path'].replace('/', '-').replace('.', '-').strip('-')}-{hashlib.md5(f'{route["path"]}{time.time()}'.encode()).hexdigest()[:8]}"
         
-        # Create route command
-        cmd = f"""just route-create "{route['path']}" hostname "{auth_domain}" "{token}" 95 "" "" "{route['description']}" """
+        # Create route command (positional arguments)
+        cmd = [
+            "python", "scripts/route_create.py",
+            route['path'],        # path
+            "hostname",           # target-type
+            auth_domain,          # target-value
+            token,                # token
+            "95",                 # priority
+            "",                   # methods (empty = all)
+            "false",              # is-regex
+            route['description']  # description
+        ]
         
         print(f"\nCreating route: {route['path']} -> {auth_domain}")
-        result = run_command(cmd)
+        result = run_command(" ".join(cmd))
         
         if result["success"]:
             print(f"✓ Created successfully")

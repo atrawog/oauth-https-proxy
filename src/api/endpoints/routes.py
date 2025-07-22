@@ -41,9 +41,19 @@ def create_router(storage):
             created_by=token_name
         )
         
-        # Store in Redis
+        # Store in Redis - storage layer will check for duplicates
         if not storage.store_route(route):
-            raise HTTPException(500, "Failed to store route")
+            # Storage rejected due to duplicate path+priority
+            raise HTTPException(
+                409, 
+                f"A route already exists with path '{request.path_pattern}' and priority {request.priority}. "
+                f"Each path+priority combination must be unique."
+            )
+        
+        logger.info(
+            f"Created new route: id={route_id}, path={request.path_pattern}, "
+            f"target={request.target_type}:{request.target_value}, priority={request.priority}"
+        )
         
         return route
     
