@@ -4,7 +4,7 @@
 import sys
 import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 def cleanup_proxy_target(hostname: str):
     """Clean up a specific proxy target."""

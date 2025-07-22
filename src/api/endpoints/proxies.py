@@ -1,0 +1,427 @@
+"""Proxy management API endpoints."""
+
+import os
+import logging
+from datetime import datetime, timezone
+from typing import Optional, Tuple
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+
+from ..auth import require_auth, require_auth_header, get_current_token_info, require_proxy_owner
+from ...proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig
+from ...certmanager.models import CertificateRequest
+
+logger = logging.getLogger(__name__)
+
+
+def create_router(storage, cert_manager):
+    """Create proxy endpoints router."""
+    router = APIRouter(prefix="/proxy/targets", tags=["proxies"])
+    
+    @router.post("/")
+    async def create_proxy_target(
+        request: ProxyTargetRequest,
+        background_tasks: BackgroundTasks,
+        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    ):
+        """Create a new proxy target with optional certificate generation."""
+        token_hash, token_name, cert_email = token_info
+        
+        # Check if target already exists
+        existing = storage.get_proxy_target(request.hostname)
+        if existing:
+            raise HTTPException(409, f"Proxy target for {request.hostname} already exists")
+        
+        # Create proxy target
+        cert_name = f"proxy-{request.hostname.replace('.', '-')}"
+        target = ProxyTarget(
+            hostname=request.hostname,
+            target_url=request.target_url,
+            cert_name=cert_name,
+            owner_token_hash=token_hash,
+            created_by=token_name,
+            created_at=datetime.now(timezone.utc),
+            enabled=True,
+            enable_http=request.enable_http,
+            enable_https=request.enable_https,
+            preserve_host_header=request.preserve_host_header,
+            custom_headers=request.custom_headers
+        )
+        
+        # Store proxy target
+        if not storage.store_proxy_target(request.hostname, target):
+            raise HTTPException(500, "Failed to store proxy target")
+        
+        # Check if certificate exists and HTTPS is enabled
+        cert_status = "not_required"
+        if request.enable_https:
+            cert = cert_manager.get_certificate(cert_name)
+            if not cert:
+                # Create certificate request
+                acme_url = request.acme_directory_url
+                if not acme_url:
+                    acme_url = os.getenv("ACME_STAGING_URL")
+                    if not acme_url:
+                        raise HTTPException(400, "ACME directory URL required")
+                
+                # Use token's cert_email if not provided in request
+                email = request.cert_email if request.cert_email else cert_email
+                if not email:
+                    raise HTTPException(400, "Certificate email required")
+                
+                cert_request = CertificateRequest(
+                    domain=request.hostname,
+                    email=email,
+                    cert_name=cert_name,
+                    acme_directory_url=acme_url
+                )
+                
+                # Store initial certificate record
+                from ...certmanager.models import Certificate
+                cert = Certificate(
+                    cert_name=cert_name,
+                    domains=[request.hostname],
+                    email=email,
+                    acme_directory_url=acme_url,
+                    status="pending",
+                    owner_token_hash=token_hash,
+                    created_by=token_name
+                )
+                storage.store_certificate(cert_name, cert)
+                
+                # Trigger async certificate generation
+                background_tasks.add_task(
+                    cert_manager.acme_client.generate_certificate_async,
+                    cert_request
+                )
+                cert_status = "Certificate generation started"
+            else:
+                cert_status = "existing"
+        else:
+            logger.info(f"HTTPS disabled for {request.hostname}, skipping certificate generation")
+        
+        # Create instance for the proxy
+        # Import here to avoid circular imports at module level
+        try:
+            from ...dispatcher.unified_dispatcher import unified_server_instance
+            if unified_server_instance:
+                try:
+                    await unified_server_instance.create_instance_for_proxy(request.hostname)
+                    logger.info(f"Instance creation initiated for {request.hostname}")
+                except Exception as e:
+                    logger.error(f"Failed to create instance for {request.hostname}: {e}")
+            else:
+                logger.warning("Unified server not yet initialized")
+        except ImportError:
+            logger.warning("Unified dispatcher not available")
+            
+        return {
+            "proxy_target": target,
+            "certificate_status": cert_status,
+            "cert_name": cert_name if request.enable_https else None
+        }
+    
+    @router.get("/")
+    async def list_proxy_targets(
+        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    ):
+        """List proxy targets - filtered by ownership or all for admin."""
+        all_targets = storage.list_proxy_targets()
+        
+        token_hash, token_name, _ = token_info
+        
+        # Admin sees all proxy targets
+        if token_name == "ADMIN":
+            return all_targets
+        
+        # Regular users see only their own targets
+        return [target for target in all_targets if target.owner_token_hash == token_hash]
+    
+    @router.get("/{hostname}")
+    async def get_proxy_target(hostname: str):
+        """Get specific proxy target details."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        return target
+    
+    @router.put("/{hostname}")
+    async def update_proxy_target(
+        hostname: str,
+        updates: ProxyTargetUpdate,
+        _=Depends(require_proxy_owner)
+    ):
+        """Update proxy target configuration - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Apply updates
+        if updates.target_url is not None:
+            target.target_url = updates.target_url
+        if updates.cert_name is not None:
+            target.cert_name = updates.cert_name
+        if updates.enabled is not None:
+            target.enabled = updates.enabled
+        if updates.enable_http is not None:
+            target.enable_http = updates.enable_http
+        if updates.enable_https is not None:
+            target.enable_https = updates.enable_https
+        if updates.preserve_host_header is not None:
+            target.preserve_host_header = updates.preserve_host_header
+        if updates.custom_headers is not None:
+            target.custom_headers = updates.custom_headers
+        
+        # Store updated target
+        if not storage.store_proxy_target(hostname, target):
+            raise HTTPException(500, "Failed to update proxy target")
+        
+        return target
+    
+    @router.delete("/{hostname}")
+    async def delete_proxy_target(
+        hostname: str,
+        delete_certificate: bool = False,
+        _=Depends(require_proxy_owner)
+    ):
+        """Delete proxy target and optionally its certificate - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Delete proxy target
+        if not storage.delete_proxy_target(hostname):
+            raise HTTPException(500, "Failed to delete proxy target")
+        
+        # Remove instance for the proxy
+        try:
+            from ...dispatcher.unified_dispatcher import unified_server_instance
+            if unified_server_instance:
+                await unified_server_instance.remove_instance_for_proxy(hostname)
+        except ImportError:
+            logger.warning("Unified dispatcher not available")
+        
+        # Optionally delete certificate
+        if delete_certificate and target.cert_name:
+            cert_manager.delete_certificate(target.cert_name)
+        
+        return {"message": f"Proxy target {hostname} deleted successfully"}
+    
+    # Proxy auth configuration endpoints
+    @router.post("/{hostname}/auth")
+    async def configure_proxy_auth(
+        hostname: str,
+        config: ProxyAuthConfig,
+        _=Depends(require_proxy_owner)
+    ):
+        """Configure unified auth for a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Validate auth proxy exists
+        if config.auth_proxy:
+            auth_target = storage.get_proxy_target(config.auth_proxy)
+            if not auth_target:
+                raise HTTPException(400, f"Auth proxy {config.auth_proxy} not found")
+        
+        # Update auth configuration
+        target.auth_enabled = config.enabled
+        target.auth_proxy = config.auth_proxy
+        target.auth_mode = config.mode
+        target.auth_required_users = config.required_users
+        target.auth_required_emails = config.required_emails
+        target.auth_required_groups = config.required_groups
+        target.auth_pass_headers = config.pass_headers
+        target.auth_cookie_name = config.cookie_name
+        target.auth_header_prefix = config.header_prefix
+        
+        # Store updated target
+        if not storage.store_proxy_target(hostname, target):
+            raise HTTPException(500, "Failed to update proxy target")
+        
+        logger.info(f"Auth configured for proxy {hostname}: enabled={config.enabled}")
+        
+        return {"status": "Auth configured", "proxy_target": target}
+    
+    @router.delete("/{hostname}/auth")
+    async def remove_proxy_auth(
+        hostname: str,
+        _=Depends(require_proxy_owner)
+    ):
+        """Disable auth protection for a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Disable auth
+        target.auth_enabled = False
+        target.auth_proxy = None
+        target.auth_required_users = None
+        target.auth_required_emails = None
+        target.auth_required_groups = None
+        
+        # Store updated target
+        if not storage.store_proxy_target(hostname, target):
+            raise HTTPException(500, "Failed to update proxy target")
+        
+        logger.info(f"Auth disabled for proxy {hostname}")
+        
+        return {"status": "Auth protection removed", "proxy_target": target}
+    
+    @router.get("/{hostname}/auth")
+    async def get_proxy_auth_config(hostname: str):
+        """Get auth configuration for a proxy target."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Return auth configuration
+        return {
+            "auth_enabled": target.auth_enabled,
+            "auth_proxy": target.auth_proxy,
+            "auth_mode": target.auth_mode,
+            "auth_required_users": target.auth_required_users,
+            "auth_required_emails": target.auth_required_emails,
+            "auth_required_groups": target.auth_required_groups,
+            "auth_pass_headers": target.auth_pass_headers,
+            "auth_cookie_name": target.auth_cookie_name,
+            "auth_header_prefix": target.auth_header_prefix
+        }
+    
+    # Proxy-specific route management endpoints
+    @router.get("/{hostname}/routes")
+    async def get_proxy_routes(hostname: str):
+        """Get route configuration for a proxy target."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Get all routes and filter applicable ones
+        all_routes = storage.list_routes()
+        
+        # Determine applicable routes based on route_mode
+        if target.route_mode == "none":
+            applicable_routes = []
+        elif target.route_mode == "selective":
+            applicable_routes = [r for r in all_routes if r.route_id in target.enabled_routes]
+        else:  # route_mode == "all"
+            applicable_routes = [r for r in all_routes if r.route_id not in target.disabled_routes]
+        
+        return {
+            "route_mode": target.route_mode,
+            "enabled_routes": target.enabled_routes,
+            "disabled_routes": target.disabled_routes,
+            "applicable_routes": applicable_routes
+        }
+    
+    @router.put("/{hostname}/routes")
+    async def update_proxy_routes(
+        hostname: str,
+        config: ProxyRoutesConfig,
+        _=Depends(require_proxy_owner)
+    ):
+        """Update route settings for a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Update proxy target
+        updates = ProxyTargetUpdate(
+            route_mode=config.route_mode,
+            enabled_routes=config.enabled_routes,
+            disabled_routes=config.disabled_routes
+        )
+        
+        if not storage.update_proxy_target(hostname, updates):
+            raise HTTPException(500, "Failed to update proxy routes")
+        
+        # Get updated target
+        target = storage.get_proxy_target(hostname)
+        
+        logger.info(f"Routes updated for proxy {hostname}: mode={config.route_mode}")
+        
+        return {"status": "Routes configured", "proxy_target": target}
+    
+    @router.post("/{hostname}/routes/{route_id}/enable")
+    async def enable_proxy_route(
+        hostname: str,
+        route_id: str,
+        _=Depends(require_proxy_owner)
+    ):
+        """Enable a specific route for a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Verify route exists
+        route = storage.get_route(route_id)
+        if not route:
+            raise HTTPException(404, f"Route {route_id} not found")
+        
+        # Update based on route_mode
+        updates = ProxyTargetUpdate()
+        
+        if target.route_mode == "selective":
+            # Add to enabled_routes
+            if route_id not in target.enabled_routes:
+                enabled_routes = target.enabled_routes.copy()
+                enabled_routes.append(route_id)
+                updates.enabled_routes = enabled_routes
+        elif target.route_mode == "all":
+            # Remove from disabled_routes
+            if route_id in target.disabled_routes:
+                disabled_routes = target.disabled_routes.copy()
+                disabled_routes.remove(route_id)
+                updates.disabled_routes = disabled_routes
+        else:
+            raise HTTPException(400, "Cannot enable routes when route_mode is 'none'")
+        
+        if not storage.update_proxy_target(hostname, updates):
+            raise HTTPException(500, "Failed to enable route")
+        
+        logger.info(f"Route {route_id} enabled for proxy {hostname}")
+        
+        return {"status": "Route enabled", "route_id": route_id}
+    
+    @router.post("/{hostname}/routes/{route_id}/disable")
+    async def disable_proxy_route(
+        hostname: str,
+        route_id: str,
+        _=Depends(require_proxy_owner)
+    ):
+        """Disable a specific route for a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Verify route exists
+        route = storage.get_route(route_id)
+        if not route:
+            raise HTTPException(404, f"Route {route_id} not found")
+        
+        # Update based on route_mode
+        updates = ProxyTargetUpdate()
+        
+        if target.route_mode == "selective":
+            # Remove from enabled_routes
+            if route_id in target.enabled_routes:
+                enabled_routes = target.enabled_routes.copy()
+                enabled_routes.remove(route_id)
+                updates.enabled_routes = enabled_routes
+        elif target.route_mode == "all":
+            # Add to disabled_routes
+            if route_id not in target.disabled_routes:
+                disabled_routes = target.disabled_routes.copy()
+                disabled_routes.append(route_id)
+                updates.disabled_routes = disabled_routes
+        else:
+            raise HTTPException(400, "Cannot disable routes when route_mode is 'none'")
+        
+        if not storage.update_proxy_target(hostname, updates):
+            raise HTTPException(500, "Failed to disable route")
+        
+        logger.info(f"Route {route_id} disabled for proxy {hostname}")
+        
+        return {"status": "Route disabled", "route_id": route_id}
+    
+    return router

@@ -8,8 +8,8 @@ from datetime import datetime, timezone
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
-from acme_certmanager.models import Certificate
+from src.storage import RedisStorage
+from src.shared.models import Certificate
 
 redis_url = os.getenv('REDIS_URL')
 storage = RedisStorage(redis_url)

@@ -5,7 +5,7 @@
 ### Execution Requirements
 - **Command execution**: ONLY via `just` commands - no direct Python/bash or docker exec execution
 - **Configuration**: Single source `.env` file loaded by `just` - all environment variables are documented in their relevant sections below 
-- **Python environment**: `pixi.sh` exclusively
+- **Python environment**: `pixi` exclusively
 - **Testing**: Real systems only - no mocks, stubs, or simulations via `just test-*` commands
 - **Debugging**: All debugging via `just` commands (logs, shell, redis-cli)
 - **Database**: Redis for everything (key-value, caching, queues, pub/sub, persistence)

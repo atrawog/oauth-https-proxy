@@ -1,0 +1,95 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Tab Visibility Bug Demo</title>
+    <style>
+        /* Same CSS as the GUI */
+        .tab-content {
+            display: none;
+        }
+        .tab-content.active {
+            display: block;
+        }
+        .hidden {
+            display: none !important;
+        }
+        
+        /* Demo styles */
+        body { font-family: Arial, sans-serif; padding: 20px; }
+        .demo { border: 2px solid #ccc; padding: 20px; margin: 20px 0; }
+        .tab-content { padding: 10px; background: #f0f0f0; }
+        button { margin: 5px; padding: 10px; }
+        .highlight { background: yellow; }
+    </style>
+</head>
+<body>
+    <h1>Tab Visibility Bug Demonstration</h1>
+    
+    <div class="demo">
+        <h2>The Bug</h2>
+        <p>This tab has both 'active' AND 'hidden' classes:</p>
+        <div id="buggy-tab" class="tab-content active hidden">
+            <strong>This content is INVISIBLE!</strong><br>
+            Even though it has the 'active' class, the 'hidden' class with !important wins.
+        </div>
+        <p>Classes: <code class="highlight">class="tab-content active hidden"</code></p>
+        <p>Result: Content is hidden because .hidden { display: none !important; }</p>
+    </div>
+    
+    <div class="demo">
+        <h2>The Fix</h2>
+        <p>This tab has ONLY the 'active' class:</p>
+        <div id="fixed-tab" class="tab-content active">
+            <strong>This content is VISIBLE!</strong><br>
+            Using only the 'active' class system avoids conflicts.
+        </div>
+        <p>Classes: <code class="highlight">class="tab-content active"</code></p>
+        <p>Result: Content is visible!</p>
+    </div>
+    
+    <div class="demo">
+        <h2>Interactive Test</h2>
+        <button onclick="showBuggyBehavior()">Show Buggy Behavior</button>
+        <button onclick="showFixedBehavior()">Show Fixed Behavior</button>
+        
+        <div id="test-tab" class="tab-content">
+            <h3>Test Content</h3>
+            <p>Watch how this content appears/disappears based on class manipulation.</p>
+        </div>
+        <p>Current classes: <code id="current-classes"></code></p>
+    </div>
+    
+    <script>
+    function updateClassDisplay() {
+        const tab = document.getElementById('test-tab');
+        document.getElementById('current-classes').textContent = tab.className;
+    }
+    
+    function showBuggyBehavior() {
+        const tab = document.getElementById('test-tab');
+        // Buggy code: uses both systems
+        tab.classList.remove('hidden');
+        tab.classList.add('active');
+        // But then...
+        setTimeout(() => {
+            tab.classList.add('hidden'); // Oops! Now it's hidden even though active
+            updateClassDisplay();
+            alert('Added hidden class - content disappears even though active!');
+        }, 1000);
+        updateClassDisplay();
+    }
+    
+    function showFixedBehavior() {
+        const tab = document.getElementById('test-tab');
+        // Fixed code: only uses active system
+        tab.classList.remove('hidden'); // Clean up any hidden class
+        tab.classList.add('active');
+        updateClassDisplay();
+        alert('Using only active class - content stays visible!');
+    }
+    
+    // Initial state
+    updateClassDisplay();
+    </script>
+</body>
+</html>

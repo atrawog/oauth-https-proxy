@@ -10,7 +10,7 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 def show_token_certificates(token_name: str = None):
     """Show certificates owned by tokens."""

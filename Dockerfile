@@ -26,7 +26,8 @@ ENV PATH="/root/.pixi/bin:$PATH"
 RUN pixi install
 
 # Copy application code
-COPY acme_certmanager/ ./acme_certmanager/
+COPY src/ ./src/
+COPY run.py ./
 COPY scripts/ ./scripts/
 
 # Create log directory
@@ -40,4 +41,4 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 EXPOSE 80 443
 
 # Run the server
-CMD ["pixi", "run", "python", "scripts/run_server.py"]
+CMD ["pixi", "run", "python", "run.py"]

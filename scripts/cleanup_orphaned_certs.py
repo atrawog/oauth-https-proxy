@@ -8,7 +8,7 @@ from tabulate import tabulate
 
 sys.path.insert(0, '/app')
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 # Initialize storage
 storage = RedisStorage(os.getenv("REDIS_URL"))

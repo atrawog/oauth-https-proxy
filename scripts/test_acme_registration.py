@@ -9,8 +9,8 @@ from urllib.parse import urlparse
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from acme import messages
-from acme_certmanager.storage import RedisStorage
-from acme_certmanager.acme_client import ACMEClient
+from src.storage import RedisStorage
+from src.certmanager.acme_client import ACMEClient
 
 # Test email parsing
 email = "atrawog@gmail.com"

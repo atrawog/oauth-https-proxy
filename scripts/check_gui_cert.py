@@ -7,7 +7,7 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 redis_url = os.getenv('REDIS_URL')
 storage = RedisStorage(redis_url)
@@ -45,8 +45,8 @@ else:
 
 # Check where the certificate might be loaded from
 print("\nChecking HTTPS server certificates...")
-from acme_certmanager.https_server import HTTPSServer
-from acme_certmanager.certificate_manager import CertificateManager
+from src.https_server import HTTPSServer
+from src.certificate_manager import CertificateManager
 
 manager = CertificateManager()
 https_server = HTTPSServer(manager)

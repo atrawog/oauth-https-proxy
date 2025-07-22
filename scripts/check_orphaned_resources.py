@@ -7,7 +7,7 @@ import json
 
 sys.path.insert(0, '/app')
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 def check_orphaned_resources():
     """Check for orphaned certificates and proxy targets."""

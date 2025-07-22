@@ -59,7 +59,7 @@ def test_cert_cleanup():
     # Import the manager module to call delete_certificate directly
     import sys
     sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from acme_certmanager.manager import CertificateManager
+    from src.certmanager.manager import CertificateManager
     
     manager = CertificateManager()
     success = manager.delete_certificate(cert_name)

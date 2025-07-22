@@ -38,7 +38,8 @@ services:
     volumes:
       - ./logs:/app/logs
       # Mount source code for development - allows hot-reloading
-      - ./acme_certmanager:/app/acme_certmanager
+      - ./src:/app/src
+      - ./run.py:/app/run.py
       - ./scripts:/app/scripts
       - ./tests:/app/tests
     networks:
@@ -48,138 +49,69 @@ services:
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 40s
-
-  fetcher-mcp:
-    image: ghcr.io/jae-jae/fetcher-mcp:latest
-    restart: unless-stopped
-    environment:
-      - NODE_ENV=production
-    volumes:
-      - /tmp:/tmp
-    networks:
-      - acme_network
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "wget", "-q", "-O", "-", "http://localhost:3000/"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 60s
-    deploy:
-      resources:
-        limits:
-          memory: 2G
-
-  echo-stateful:
-    build: ./mcp-echo-streamablehttp-server-stateful
-    restart: unless-stopped
-    environment:
-      - MCP_ECHO_HOST=0.0.0.0
-      - MCP_ECHO_PORT=3000
-      - MCP_SESSION_TIMEOUT=3600
-      - MCP_ECHO_DEBUG=true
-    networks:
-      - acme_network
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "-X", "POST", "-H", "Mcp-Session-Id: health-check", "-H", "Content-Type: application/json", "-d", "{\"jsonrpc\":\"2.0\",\"method\":\"initialize\",\"params\":{\"protocolVersion\":\"2025-06-18\"},\"id\":1}", "http://localhost:3000/mcp"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
       start_period: 30s
-    volumes:
-      # Mount source code for development
-      - ./mcp-echo-streamablehttp-server-stateful/src:/app/src
 
-  echo-stateless:
-    build: ./mcp-echo-streamablehttp-server-stateless
-    restart: unless-stopped
-    environment:
-      - MCP_ECHO_HOST=0.0.0.0
-      - MCP_ECHO_PORT=3000
-    networks:
-      - acme_network
-    depends_on:
-      redis:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "-s", "http://localhost:3000/mcp"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-    volumes:
-      # Mount source code for development
-      - ./mcp-echo-streamablehttp-server-stateless/src:/app/src
-
-  # OAuth authentication service
-  oauth-server:
+  mcp-oauth-dynamicclient:
     build: ./mcp-oauth-dynamicclient
     restart: unless-stopped
+    # No ports exposed - accessed via acme-certmanager proxy
     environment:
+      - REDIS_URL=${REDIS_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
       - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-      - JWT_SECRET=${OAUTH_JWT_SECRET}
-      - JWT_ALGORITHM=${OAUTH_JWT_ALGORITHM:-RS256}
-      - JWT_PRIVATE_KEY_B64=${OAUTH_JWT_PRIVATE_KEY_B64}
-      - BASE_DOMAIN=${BASE_DOMAIN:-localhost}
-      - REDIS_URL=${REDIS_URL}
-      - REDIS_PASSWORD=${REDIS_PASSWORD}
-      - ACCESS_TOKEN_LIFETIME=${OAUTH_ACCESS_TOKEN_LIFETIME:-1800}
-      - REFRESH_TOKEN_LIFETIME=${OAUTH_REFRESH_TOKEN_LIFETIME:-31536000}
-      - SESSION_TIMEOUT=${OAUTH_SESSION_TIMEOUT:-300}
-      - CLIENT_LIFETIME=${OAUTH_CLIENT_LIFETIME:-7776000}
-      - ALLOWED_GITHUB_USERS=${OAUTH_ALLOWED_GITHUB_USERS:-*}
-      - MCP_PROTOCOL_VERSION=${OAUTH_MCP_PROTOCOL_VERSION:-2025-06-18}
+      - BASE_DOMAIN=${BASE_DOMAIN}
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    networks:
-      - acme_network
+    env_file:
+      - .env
     depends_on:
       redis:
         condition: service_healthy
+    volumes:
+      - ./logs/oauth:/app/logs
+    networks:
+      - acme_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
       timeout: 10s
       retries: 3
-      start_period: 30s
-    labels:
-      - "instance.name=oauth-server"
-    volumes:
-      # Mount source code for development
-      - ./mcp-oauth-dynamicclient/src:/app/src
 
-  # Test runner service - only runs when explicitly called
-  test-runner:
-    build: .
-    profiles: ["test"]  # Only runs when --profile test is specified
-    command: pixi run pytest tests/ -v --tb=short
+  mcp-echo-streamablehttp-server-stateful:
+    build: ./mcp-echo-streamablehttp-server-stateful
+    restart: unless-stopped
     environment:
-      - TEST_BASE_URL=http://acme-certmanager:80
-      - REDIS_URL=redis://redis:6379/0
-      - PYTHONPATH=/app
-      - LOG_LEVEL=DEBUG
-    depends_on:
-      acme-certmanager:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./logs/mcp-echo-stateful:/app/logs
     networks:
       - acme_network
-    volumes:
-      - ./tests:/app/tests
-      - ./acme_certmanager:/app/acme_certmanager
-      - ./scripts:/app/scripts
 
-volumes:
-  redis_data:
-    driver: local
+  mcp-echo-streamablehttp-server-stateless:
+    build: ./mcp-echo-streamablehttp-server-stateless
+    restart: unless-stopped
+    environment:
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+    volumes:
+      - ./logs/mcp-echo-stateless:/app/logs
+    networks:
+      - acme_network
+
+  # fetcher-mcp:
+  #   build: ./fetcher-mcp
+  #   restart: unless-stopped
+  #   environment:
+  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
+  #     - NAVIGATION_TIMEOUT=${FETCHER_NAVIGATION_TIMEOUT}
+  #   volumes:
+  #     - ./logs/fetcher-mcp:/app/logs
+  #   networks:
+  #     - acme_network
+  #   cap_add:
+  #     - SYS_ADMIN  # Required for Chrome
 
 networks:
   acme_network:
     driver: bridge
+
+volumes:
+  redis_data:

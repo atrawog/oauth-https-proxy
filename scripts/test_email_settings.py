@@ -10,7 +10,7 @@ from tabulate import tabulate
 # Add the parent directory to sys.path so we can import from acme_certmanager
 sys.path.insert(0, '/app')
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 # Configuration
 BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:80")

@@ -17,8 +17,8 @@ def debug_cert_generation():
     # Generate a test token
     print("1. Generating test token...")
     sys.path.insert(0, '/app')
-    from acme_certmanager.auth import generate_token, hash_token
-    from acme_certmanager.storage import RedisStorage
+    from src.api.auth import generate_token, hash_token
+    from src.storage import RedisStorage
     
     token = generate_token()
     token_hash = hash_token(token)

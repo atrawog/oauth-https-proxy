@@ -4,7 +4,7 @@ import os
 import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 import os
 
 redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")

@@ -6,7 +6,7 @@ import json
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 def delete_admin_token():
     """Delete admin token from Redis."""

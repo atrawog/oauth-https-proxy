@@ -6,8 +6,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
-from acme_certmanager.auth import hash_token, ADMIN_TOKEN
+from src.storage import RedisStorage
+from src.api.auth import hash_token, ADMIN_TOKEN
 
 def check_admin_tokens():
     """Check status of both real ADMIN_TOKEN and any Redis-stored 'admin' token."""

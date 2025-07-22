@@ -7,8 +7,8 @@ import os
 # Add app directory to Python path
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.auth import generate_token, hash_token
-from acme_certmanager.storage import RedisStorage
+from src.api.auth import generate_token, hash_token
+from src.storage import RedisStorage
 
 
 def main():

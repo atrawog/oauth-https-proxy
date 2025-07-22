@@ -93,3 +93,6 @@ reports/
 *.bak
 *.swp
 *~.nib
+
+# Analysis
+analysis/

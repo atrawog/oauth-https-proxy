@@ -11,7 +11,7 @@ from pathlib import Path
 # Add parent directory to path to import from acme_certmanager
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from acme_certmanager.models import ProxyAuthConfig
+from src.shared.models import ProxyAuthConfig
 
 
 async def enable_proxy_auth(hostname: str, token: str, auth_proxy: str, mode: str):

@@ -6,7 +6,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 # List all proxy-related methods
 proxy_methods = [m for m in dir(RedisStorage) if 'proxy' in m]

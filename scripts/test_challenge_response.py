@@ -4,7 +4,7 @@
 import httpx
 import time
 import os
-from acme_certmanager.storage import RedisStorage
+from src.storage import RedisStorage
 
 def main():
     # Test direct challenge response
