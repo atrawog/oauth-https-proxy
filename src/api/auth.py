@@ -236,3 +236,16 @@ async def get_token_info_from_header(
     """Get token info from authorization header."""
     token_info = await require_auth(request, credentials)
     return token_info
+
+
+async def require_admin(
+    request: Request,
+    credentials: HTTPAuthorizationCredentials = Depends(security)
+) -> dict:
+    """Require admin token for access."""
+    token_info = await require_auth(request, credentials)
+    
+    if token_info['name'] != 'ADMIN':
+        raise HTTPException(403, "Admin access required")
+    
+    return token_info

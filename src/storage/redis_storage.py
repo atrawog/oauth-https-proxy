@@ -609,3 +609,63 @@ class RedisStorage:
                     
         except Exception as e:
             logger.error(f"Failed to initialize default routes: {e}")
+    
+    def count_certificates_by_owner(self, owner_token_hash: str) -> int:
+        """Count certificates owned by a specific token."""
+        try:
+            count = 0
+            for key in self.redis_client.scan_iter(match="cert:*"):
+                cert_data = self.redis_client.get(key)
+                if cert_data:
+                    cert_dict = json.loads(cert_data)
+                    if cert_dict.get('owner_token_hash') == owner_token_hash:
+                        count += 1
+            return count
+        except Exception as e:
+            logger.error(f"Failed to count certificates by owner: {e}")
+            return 0
+    
+    def count_proxies_by_owner(self, owner_token_hash: str) -> int:
+        """Count proxy targets owned by a specific token."""
+        try:
+            count = 0
+            for key in self.redis_client.scan_iter(match="proxy:*"):
+                proxy_data = self.redis_client.get(key)
+                if proxy_data:
+                    proxy_dict = json.loads(proxy_data)
+                    if proxy_dict.get('owner_token_hash') == owner_token_hash:
+                        count += 1
+            return count
+        except Exception as e:
+            logger.error(f"Failed to count proxies by owner: {e}")
+            return 0
+    
+    def list_certificate_names_by_owner(self, owner_token_hash: str) -> List[str]:
+        """List certificate names owned by a specific token."""
+        try:
+            names = []
+            for key in self.redis_client.scan_iter(match="cert:*"):
+                cert_data = self.redis_client.get(key)
+                if cert_data:
+                    cert_dict = json.loads(cert_data)
+                    if cert_dict.get('owner_token_hash') == owner_token_hash:
+                        names.append(cert_dict.get('cert_name', ''))
+            return names
+        except Exception as e:
+            logger.error(f"Failed to list certificate names by owner: {e}")
+            return []
+    
+    def list_proxy_names_by_owner(self, owner_token_hash: str) -> List[str]:
+        """List proxy hostnames owned by a specific token."""
+        try:
+            names = []
+            for key in self.redis_client.scan_iter(match="proxy:*"):
+                proxy_data = self.redis_client.get(key)
+                if proxy_data:
+                    proxy_dict = json.loads(proxy_data)
+                    if proxy_dict.get('owner_token_hash') == owner_token_hash:
+                        names.append(proxy_dict.get('hostname', ''))
+            return names
+        except Exception as e:
+            logger.error(f"Failed to list proxy names by owner: {e}")
+            return []
