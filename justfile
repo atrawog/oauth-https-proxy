@@ -653,3 +653,54 @@ docs-build:
 # Clean up orphaned resources
 cleanup-orphaned:
     docker exec {{container_name}} pixi run python scripts/cleanup_orphaned.py
+
+# OAuth Commands
+# Generate RSA private key for OAuth JWT signing
+generate-oauth-key:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Generating RSA private key for OAuth JWT signing..."
+    
+    # Generate key and convert to base64
+    key_b64=$(openssl genrsa 2048 2>/dev/null | base64 -w 0)
+    
+    # Check if OAUTH_JWT_PRIVATE_KEY_B64 already exists in .env
+    if grep -q "^OAUTH_JWT_PRIVATE_KEY_B64=" .env 2>/dev/null; then
+        # Update existing key
+        sed -i.bak "s|^OAUTH_JWT_PRIVATE_KEY_B64=.*|OAUTH_JWT_PRIVATE_KEY_B64=${key_b64}|" .env
+        echo "Updated OAUTH_JWT_PRIVATE_KEY_B64 in .env"
+    else
+        # Add new key
+        echo "" >> .env
+        echo "# OAuth JWT Private Key (base64 encoded)" >> .env
+        echo "OAUTH_JWT_PRIVATE_KEY_B64=${key_b64}" >> .env
+        echo "Added OAUTH_JWT_PRIVATE_KEY_B64 to .env"
+    fi
+    
+    echo "OAuth key generation complete!"
+
+# Setup OAuth routes for the auth domain
+oauth-routes-setup domain token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    docker exec {{container_name}} pixi run python scripts/oauth_routes_setup.py \
+        --auth-domain "{{domain}}" \
+        --token "$token_value"

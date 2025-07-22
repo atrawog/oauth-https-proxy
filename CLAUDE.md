@@ -17,7 +17,7 @@
 
 ### Directory Structure
 ```
-./analysis/    # All plans and code or issue analysis (added to .gitignore) 
+./analysis/    # All plans and code or issue analysis (add to .gitignore) 
 ./scripts/     # All executable scripts
 ./docs/        # JupyterBook documentation only
 ./tests/       # Pytest tests only

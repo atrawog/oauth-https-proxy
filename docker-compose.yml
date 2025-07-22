@@ -69,7 +69,9 @@ services:
     volumes:
       - ./logs/oauth:/app/logs
     networks:
-      - acme_network
+      acme_network:
+        aliases:
+          - oauth-server
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
       interval: 30s
@@ -84,7 +86,9 @@ services:
     volumes:
       - ./logs/mcp-echo-stateful:/app/logs
     networks:
-      - acme_network
+      acme_network:
+        aliases:
+          - echo-stateful
 
   mcp-echo-streamablehttp-server-stateless:
     build: ./mcp-echo-streamablehttp-server-stateless
