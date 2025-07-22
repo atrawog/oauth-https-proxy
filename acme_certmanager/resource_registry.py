@@ -1,4 +1,10 @@
-"""MCP Resource Registry for tracking MCP servers and their metadata."""
+"""Optional MCP Resource Registry for tracking MCP servers and their metadata.
+
+NOTE: This is NOT required by the MCP specification. It's an administrative
+feature for managing and tracking MCP resources. The MCP spec only requires:
+- OAuth servers to handle the 'resource' parameter
+- MCP servers to implement /.well-known/oauth-protected-resource
+"""
 
 import json
 from typing import Optional, List, Dict, Any
@@ -10,7 +16,12 @@ logger = logging.getLogger(__name__)
 
 
 class MCPResourceRegistry:
-    """Registry for MCP resources compliant with RFC 8707 and RFC 9728."""
+    """Optional registry for MCP resources.
+    
+    This is an administrative feature, NOT required by RFC 8707 or RFC 9728.
+    It provides convenient management of MCP resources but is not necessary
+    for MCP specification compliance.
+    """
     
     def __init__(self, redis_client: redis.Redis):
         self.redis = redis_client

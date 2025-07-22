@@ -108,15 +108,6 @@ DEFAULT_ROUTES = [
         "enabled": True
     },
     {
-        "route_id": "api",
-        "path_pattern": "/api/",
-        "target_type": RouteTargetType.INSTANCE,
-        "target_value": "api",
-        "priority": 90,
-        "description": "API endpoints",
-        "enabled": True
-    },
-    {
         "route_id": "health",
         "path_pattern": "/health",
         "target_type": RouteTargetType.INSTANCE,
@@ -124,5 +115,63 @@ DEFAULT_ROUTES = [
         "priority": 80,
         "description": "Health check endpoint",
         "enabled": True
+    }
+]
+
+# OAuth routes that need to be created for OAuth functionality
+OAUTH_ROUTES = [
+    {
+        "path_pattern": "/authorize",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "OAuth authorization endpoint"
+    },
+    {
+        "path_pattern": "/token",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "OAuth token endpoint"
+    },
+    {
+        "path_pattern": "/callback",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "OAuth callback endpoint"
+    },
+    {
+        "path_pattern": "/register",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "OAuth client registration"
+    },
+    {
+        "path_pattern": "/verify",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "ForwardAuth verification"
+    },
+    {
+        "path_pattern": "/.well-known/oauth-authorization-server",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "OAuth server metadata"
+    },
+    {
+        "path_pattern": "/jwks",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "JSON Web Key Set"
+    },
+    {
+        "path_pattern": "/revoke",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "Token revocation"
+    },
+    {
+        "path_pattern": "/introspect",
+        "target_type": RouteTargetType.HOSTNAME,
+        "priority": 95,
+        "description": "Token introspection"
     }
 ]

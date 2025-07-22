@@ -406,11 +406,25 @@ class EnhancedProxyHandler:
                     auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}"
                     return RedirectResponse(url=auth_login_url, status_code=302)
                 else:
-                    # Return 401 Unauthorized
+                    # Return 401 Unauthorized with MCP-compliant headers (RFC 9728)
+                    # Build resource metadata URL based on current host
+                    host = request.headers.get("host", target.hostname)
+                    proto = request.headers.get("x-forwarded-proto", "https")
+                    resource_metadata_url = f"{proto}://{host}/.well-known/oauth-protected-resource"
+                    auth_metadata_url = f"https://{target.auth_proxy}/.well-known/oauth-authorization-server"
+                    
+                    # Build WWW-Authenticate header per RFC 9728 Section 5.1
+                    www_auth_params = [
+                        'Bearer',
+                        f'realm="{target.auth_proxy}"',
+                        f'as_uri="{auth_metadata_url}"',
+                        f'resource_uri="{resource_metadata_url}"'
+                    ]
+                    
                     return Response(
                         content="Authentication required",
                         status_code=401,
-                        headers={"WWW-Authenticate": f'Bearer realm="{target.auth_proxy}"'}
+                        headers={"WWW-Authenticate": ', '.join(www_auth_params)}
                     )
             
             else:

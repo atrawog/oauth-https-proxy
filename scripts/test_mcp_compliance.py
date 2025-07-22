@@ -307,8 +307,12 @@ class MCPComplianceTester:
         return False
     
     def test_resource_registry_api(self) -> bool:
-        """Test resource registry API endpoints."""
-        print("\n📚 Testing Resource Registry API...")
+        """Test optional resource registry API endpoints.
+        
+        NOTE: The resource registry is NOT required by MCP spec.
+        It's an administrative feature for managing resources.
+        """
+        print("\n📚 Testing Resource Registry API (Optional Management Feature)...")
         
         headers = {"Authorization": f"Bearer {self.admin_token}"}
         test_resource = f"https://test{int(time.time())}.example.com"

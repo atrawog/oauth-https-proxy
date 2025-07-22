@@ -1194,9 +1194,9 @@ When authenticated, these headers are added:
 
 # MCP Authorization Compliance
 
-**CRITICAL**: The current OAuth implementation does NOT fully comply with the [Model Context Protocol authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization). This section documents the missing requirements and implementation plan.
+**STATUS**: The OAuth implementation is now FULLY COMPLIANT with the [Model Context Protocol authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization).
 
-## Missing MCP Requirements
+## MCP Requirements Implementation Status
 
 ### 1. Resource Parameter (RFC 8707)
 
@@ -1205,7 +1205,7 @@ When authenticated, these headers are added:
 - Identifies target MCP server using canonical URI format
 - Enables audience-restricted tokens for specific resource servers
 
-**Current Status**: ❌ NOT IMPLEMENTED
+**Current Status**: ✅ IMPLEMENTED
 
 **Required Changes**:
 ```python
@@ -1227,10 +1227,10 @@ if resource not in token_request.get("resource", []):
 ### 2. Protected Resource Metadata (RFC 9728)
 
 **Specification Requirement**:
-- MUST implement `/.well-known/oauth-protected-resource` endpoint
+- MUST implement `/.well-known/oauth-protected-resource` endpoint on MCP servers
 - WWW-Authenticate header must include metadata URL
 
-**Current Status**: ❌ NOT IMPLEMENTED
+**Current Status**: ✅ IMPLEMENTED
 
 **Required Endpoint**:
 ```json
@@ -1273,7 +1273,37 @@ WWW-Authenticate: Bearer realm="MCP Server",
 - No validation based on requested resource
 - No multi-audience support
 
-## Implementation Plan
+## Implementation Status
+
+### Required by MCP Specification (ALL COMPLETED)
+
+#### OAuth Server Requirements (RFC 8707)
+✅ **Authorization Endpoint** accepts `resource` parameter
+✅ **Token Endpoint** validates resources were authorized
+✅ **JWT Generation** includes resources in `aud` claim
+✅ **Server Metadata** indicates `resource_indicators_supported: true`
+
+#### MCP Server Requirements (RFC 9728)
+✅ **Protected Resource Metadata** endpoint at `/.well-known/oauth-protected-resource`
+✅ **WWW-Authenticate Headers** include metadata URLs
+✅ **Resource Identification** in metadata responses
+
+### Optional Management Features (NOT Required by MCP)
+
+The following features were added for administrative convenience but are **NOT required** by the MCP specification:
+
+#### Resource Registry API
+- `GET /resources` - List registered MCP resources
+- `POST /resources` - Register new MCP resource
+- `GET /resources/{uri}` - Get resource details
+- `PUT /resources/{uri}` - Update resource
+- `DELETE /resources/{uri}` - Remove resource
+- `POST /resources/{uri}/validate-token` - Validate token for resource
+- `POST /resources/auto-register` - Auto-discover proxy resources
+
+These endpoints provide a convenient way to manage MCP resources but are completely optional. The MCP specification only requires proper handling of the `resource` parameter in OAuth flows and the protected resource metadata endpoint on MCP servers.
+
+## Original Implementation Plan (For Reference)
 
 ### Phase 1: Resource Parameter Support (RFC 8707)
 
@@ -1567,6 +1597,25 @@ Instead of consolidation, enhance the **integration** between services:
 ### Conclusion
 
 The current architecture with OAuth as a separate proxied service is **correct** and should be maintained. MCP compliance should be achieved through enhanced integration, not consolidation.
+
+## Summary: MCP Specification Compliance
+
+### What the MCP Specification Actually Requires
+
+After careful review of the MCP specification and relevant RFCs:
+
+**Required by MCP (ALL IMPLEMENTED ✅)**:
+1. OAuth servers must accept and validate `resource` parameter (RFC 8707)
+2. JWT tokens must include resources in `aud` claim
+3. MCP servers must implement `/.well-known/oauth-protected-resource` endpoint (RFC 9728)
+4. WWW-Authenticate headers must include metadata URLs
+
+**NOT Required by MCP (Optional Management Features)**:
+- `/resources` API endpoints for resource management
+- `MCPResourceRegistry` class for tracking resources
+- Resource registration/validation endpoints
+
+The resource registry features are administrative conveniences, not MCP requirements. They are clearly marked as optional in the code documentation.
 
 ## Complete Command Reference
 

@@ -1021,11 +1021,11 @@ oauth-routes-setup domain="${BASE_DOMAIN}" token-name="":
     echo "Setting up OAuth routes..."
     
     # Look up token
-    echo "Looking up token: {{token-name}}"
     if [ -z "{{token-name}}" ]; then
-        echo "Using admin token"
+        echo "Using ADMIN_TOKEN from environment"
         token="${ADMIN_TOKEN}"
     else
+        echo "Looking up token: {{token-name}}"
         token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/token_lookup.py "{{token-name}}")
         if [ $? -ne 0 ] || [ -z "$token" ]; then
             echo "Error: Failed to lookup token '{{token-name}}'"
@@ -1033,62 +1033,51 @@ oauth-routes-setup domain="${BASE_DOMAIN}" token-name="":
         fi
     fi
     
-    # OAuth endpoints that need to be routed to auth service
-    echo "Creating OAuth endpoint routes..."
+    # Use the Python script to setup OAuth routes
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/oauth_routes_setup.py "auth.{{domain}}" "$token"
     
-    # Authorization endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/authorize" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "OAuth authorization endpoint" || true
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo ""
+        echo "OAuth endpoints now available at:"
+        echo "  • https://{{domain}}/authorize"
+        echo "  • https://{{domain}}/token"
+        echo "  • https://{{domain}}/callback"
+        echo "  • https://{{domain}}/register"
+        echo "  • https://{{domain}}/.well-known/oauth-authorization-server"
+    fi
     
-    # Token endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/token" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "OAuth token endpoint" || true
+    exit $exit_code
+
+# Cleanup OAuth routes for the auth service
+oauth-routes-cleanup domain="${BASE_DOMAIN}" token-name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Cleaning up OAuth routes..."
     
-    # Callback endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/callback" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "OAuth callback endpoint" || true
+    # Look up token
+    if [ -z "{{token-name}}" ]; then
+        echo "Using ADMIN_TOKEN from environment"
+        token="${ADMIN_TOKEN}"
+    else
+        echo "Looking up token: {{token-name}}"
+        token=$(docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/token_lookup.py "{{token-name}}")
+        if [ $? -ne 0 ] || [ -z "$token" ]; then
+            echo "Error: Failed to lookup token '{{token-name}}'"
+            exit 1
+        fi
+    fi
     
-    # Registration endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/register" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "OAuth client registration" || true
+    # Use the Python script to cleanup OAuth routes
+    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/oauth_routes_setup.py "auth.{{domain}}" "$token" cleanup
     
-    # Verify endpoint for ForwardAuth
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/verify" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "ForwardAuth verification" || true
+    exit_code=$?
+    if [ $exit_code -eq 0 ]; then
+        echo ""
+        echo "✅ OAuth routes cleaned up successfully!"
+    fi
     
-    # Well-known metadata
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/.well-known/oauth-authorization-server" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "OAuth server metadata" || true
-    
-    # JWKS endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/jwks" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "JSON Web Key Set" || true
-    
-    # Revocation endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/revoke" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "Token revocation" || true
-    
-    # Introspection endpoint
-    docker exec mcp-http-proxy-acme-certmanager-1 pixi run python scripts/route_create.py \
-        "/introspect" "hostname" "auth.{{domain}}" "$token" \
-        95 "" false "Token introspection" || true
-    
-    echo ""
-    echo "OAuth routes created successfully!"
-    echo "OAuth endpoints are now accessible at:"
-    echo "  • https://{{domain}}/authorize"
-    echo "  • https://{{domain}}/token"
-    echo "  • https://{{domain}}/callback"
-    echo "  • https://{{domain}}/register"
-    echo "  • https://{{domain}}/.well-known/oauth-authorization-server"
+    exit $exit_code
 
 # Enable auth for a proxy (defaults to ADMIN_TOKEN)
 proxy-auth-enable hostname token-name="" auth-proxy="auth.${BASE_DOMAIN}" mode="forward":

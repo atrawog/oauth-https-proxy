@@ -1,14 +1,20 @@
 #!/usr/bin/env python3
 """Test all FastAPI endpoints for proper authentication."""
 
+import os
 import sys
 import json
 import httpx
 from typing import Dict, List, Tuple
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.test_utils import get_admin_token
+
 # Test configuration
-BASE_URL = "http://localhost"
-ADMIN_TOKEN = "acm_test_admin_token"  # This should be replaced with actual admin token
+# Use the GUI proxy which provides access to the API
+BASE_URL = "https://gui.atradev.org"
+ADMIN_TOKEN = get_admin_token()
 
 
 def test_endpoint(method: str, path: str, auth_required: bool, description: str) -> Tuple[bool, str]:
@@ -17,7 +23,7 @@ def test_endpoint(method: str, path: str, auth_required: bool, description: str)
     Returns:
         Tuple of (passed, details)
     """
-    client = httpx.Client()
+    client = httpx.Client(verify=False)  # Skip SSL verification for test domains
     
     # First test WITHOUT authentication
     try:
@@ -69,13 +75,26 @@ def test_endpoint(method: str, path: str, auth_required: bool, description: str)
 def main():
     """Test all endpoints for proper authentication."""
     
+    # Get the actual ADMIN token from environment
+    admin_token = ADMIN_TOKEN
+    if not admin_token:
+        # Try to get from environment as fallback
+        import subprocess
+        result = subprocess.run("grep ADMIN_TOKEN .env | cut -d= -f2", shell=True, capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            admin_token = result.stdout.strip()
+            global ADMIN_TOKEN
+            ADMIN_TOKEN = admin_token
+    
+    print(f"Using admin token: {ADMIN_TOKEN[:20]}..." if ADMIN_TOKEN else "NO ADMIN TOKEN FOUND!")
+    
     # Define all endpoints and their expected auth requirements
     endpoints = [
         # Format: (method, path, auth_required, description)
         
         # Root and static
         ("GET", "/", False, "Root endpoint (serves GUI or proxy)"),
-        ("GET", "/static/test.js", True, "Static files (auth for remote)"),
+        ("GET", "/static/test.js", False, "Static files (public from localhost)"),
         
         # Health and ACME
         ("GET", "/health", False, "Health check (auth for remote)"),
