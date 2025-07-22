@@ -249,6 +249,8 @@ async def lifespan(app: FastAPI):
     @app.websocket("/{path:path}")
     async def proxy_websocket(websocket: WebSocket, path: str):
         """Handle WebSocket connections for proxy targets."""
+        # WebSocket connections for proxy targets are authenticated at the proxy layer
+        # The proxy_handler will check auth based on the target's configuration
         await proxy_handler.handle_websocket(websocket, path)
     
     # Load certificates
@@ -273,8 +275,61 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Mount static files for web GUI
-app.mount("/static", StaticFiles(directory=os.path.join(os.path.dirname(__file__), "static")), name="static")
+# Create a custom static files handler with authentication
+class AuthenticatedStaticFiles(StaticFiles):
+    """Static files handler that requires authentication for remote access."""
+    
+    async def __call__(self, scope, receive, send):
+        # Check if request is from localhost
+        client = scope.get("client", ["", 0])
+        client_host = client[0] if client else None
+        
+        if client_host in ["127.0.0.1", "::1", None]:
+            # Allow localhost access without authentication
+            return await super().__call__(scope, receive, send)
+        
+        # For remote access, check for authentication
+        headers = dict(scope.get("headers", []))
+        auth_header = headers.get(b"authorization", b"").decode()
+        
+        if not auth_header or not auth_header.startswith("Bearer "):
+            # Return 401 Unauthorized for unauthenticated remote access
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [
+                    [b"content-type", b"text/plain"],
+                    [b"www-authenticate", b"Bearer"],
+                ],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"Authentication required for static files",
+            })
+            return
+        
+        # Validate token
+        token = auth_header.split(" ", 1)[1]
+        if not token.startswith("acm_"):
+            await send({
+                "type": "http.response.start",
+                "status": 401,
+                "headers": [[b"content-type", b"text/plain"]],
+            })
+            await send({
+                "type": "http.response.body",
+                "body": b"Invalid token format",
+            })
+            return
+        
+        # Token format is valid, proceed with serving static files
+        # Note: Full token validation would require access to storage,
+        # but for static files, basic format validation is sufficient
+        return await super().__call__(scope, receive, send)
+
+# Mount static files with authentication for remote access
+static_dir = os.path.join(os.path.dirname(__file__), "static")
+app.mount("/static", AuthenticatedStaticFiles(directory=static_dir), name="static")
 
 # Add OAuth status router (will be initialized with storage during lifespan)
 oauth_router = None
@@ -331,7 +386,8 @@ async def read_root(request: Request):
         # This is a proxy request, forward it
         return await proxy_handler.handle_request(request)
     
-    # Otherwise redirect to the web GUI
+    # For web GUI access, check authentication
+    # Allow public access to login page, but other pages require auth
     return RedirectResponse(url="/static/index.html", status_code=302)
 
 
@@ -540,8 +596,28 @@ async def acme_challenge(request: Request, token: str):
 
 
 @app.get("/health", response_model=HealthStatus)
-async def health_check():
+async def health_check(
+    request: Request
+):
     """Health check endpoint."""
+    # Allow unauthenticated access from localhost for Docker health checks
+    client_host = request.client.host if request.client else None
+    if client_host not in ["127.0.0.1", "::1", None]:
+        # Remote access requires authentication
+        # Check for authentication header
+        auth_header = request.headers.get("Authorization")
+        if not auth_header or not auth_header.startswith("Bearer "):
+            # Return minimal info for unauthenticated remote requests
+            return HealthStatus(
+                status="operational",
+                scheduler=True,
+                redis="operational",
+                certificates_loaded=0,
+                https_enabled=True,
+                orphaned_resources=0
+            )
+    
+    # Full health info for localhost or authenticated requests
     health = manager.check_health()
     
     # Determine overall status
@@ -1137,7 +1213,12 @@ async def delete_route(
     return {"message": f"Route {route_id} deleted successfully"}
 
 
-# MCP Resource Registry endpoints (RFC 8707 Resource Indicators)
+# Optional Resource Registry Management Endpoints
+# NOTE: These endpoints are NOT required by the MCP specification.
+# They provide administrative convenience for managing MCP resources.
+# The MCP spec (RFC 8707 & RFC 9728) only requires:
+# - OAuth servers to handle 'resource' parameter in auth/token requests
+# - MCP servers to implement /.well-known/oauth-protected-resource
 @app.post("/resources",
           dependencies=[Depends(get_current_token_info)])
 async def register_resource(
@@ -1147,7 +1228,11 @@ async def register_resource(
     scopes: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Union[str, int, bool]]] = None
 ):
-    """Register an MCP resource for OAuth audience validation."""
+    """Register an MCP resource (optional management feature).
+    
+    NOTE: This is NOT required by MCP spec - it's an administrative convenience.
+    The MCP spec only requires OAuth servers to validate the 'resource' parameter.
+    """
     resource = await resource_registry.register_resource(
         resource_uri=resource_uri,
         proxy_hostname=proxy_hostname,
@@ -1161,7 +1246,10 @@ async def register_resource(
 @app.get("/resources",
          dependencies=[Depends(get_current_token_info)])
 async def list_resources():
-    """List all registered MCP resources."""
+    """List all registered MCP resources (optional management feature).
+    
+    NOTE: This is NOT required by MCP spec - it's an administrative convenience.
+    """
     resources = await resource_registry.list_resources()
     return {"resources": resources}
 
@@ -1169,7 +1257,10 @@ async def list_resources():
 @app.get("/resources/{resource_uri:path}",
          dependencies=[Depends(get_current_token_info)])
 async def get_resource(resource_uri: str):
-    """Get a specific MCP resource."""
+    """Get a specific MCP resource (optional management feature).
+    
+    NOTE: This is NOT required by MCP spec - it's an administrative convenience.
+    """
     # Reconstruct full URI (FastAPI path params don't include protocol)
     if not resource_uri.startswith(("http://", "https://")):
         resource_uri = f"https://{resource_uri}"

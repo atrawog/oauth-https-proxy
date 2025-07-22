@@ -161,7 +161,15 @@ class OAuthStatusRouter:
         self._setup_routes()
     
     def _setup_routes(self):
-        """Setup all OAuth status routes."""
+        """Setup all OAuth status routes.
+        
+        Note on Authentication:
+        Most OAuth status endpoints are intentionally public to support monitoring and debugging.
+        - All endpoints filter sensitive data (tokens, secrets, keys)
+        - Session revocation requires authentication to prevent abuse
+        - Public access enables health monitoring by external systems
+        - Consider adding authentication if deployment requires stricter access control
+        """
         # Client management endpoints
         self.router.get("/clients", response_model=Dict)(self.list_clients)
         self.router.get("/clients/{client_id}", response_model=ClientDetail)(self.get_client)
