@@ -2,7 +2,7 @@
 # This is a refactored version with modular approach and API-first design
 
 # Variables
-container_name := "mcp-http-proxy-acme-certmanager-1"
+container_name := "mcp-http-proxy-proxy-1"
 default_base_url := "http://localhost"
 staging_cert_email := env_var_or_default("TEST_EMAIL", "test@example.com")
 
@@ -38,7 +38,7 @@ down:
 restart: down up
 
 # Rebuild a specific service
-rebuild service="acme-certmanager":
+rebuild service="proxy":
     docker compose build {{service}}
     docker compose up -d {{service}}
 
@@ -999,7 +999,7 @@ instance-delete name token="":
 
 # Register OAuth server instance (convenience command)
 instance-register-oauth token="":
-    just instance-register "oauth-server" "http://mcp-oauth-dynamicclient:8000" "{{token}}" "OAuth 2.0 Authorization Server"
+    just instance-register "auth" "http://auth:8000" "{{token}}" "OAuth 2.0 Authorization Server"
 
 # Route Management Commands
 # List all routes
@@ -1076,17 +1076,17 @@ mcp-setup:
     echo "Setting up MCP client development environment..."
     
     # Ensure OAuth service is running
-    if ! docker-compose ps mcp-oauth-dynamicclient | grep -q "Up"; then
+    if ! docker-compose ps auth | grep -q "Up"; then
         echo "Starting OAuth service..."
-        docker-compose up -d mcp-oauth-dynamicclient
+        docker-compose up -d auth
         sleep 5
     fi
     
     # Ensure echo servers are running
-    if ! docker-compose ps mcp-echo-streamablehttp-server-stateful | grep -q "Up"; then
+    if ! docker-compose ps echo-stateful | grep -q "Up"; then
         echo "Starting echo servers..."
-        docker-compose up -d mcp-echo-streamablehttp-server-stateful
-        docker-compose up -d mcp-echo-streamablehttp-server-stateless
+        docker-compose up -d echo-stateful
+        docker-compose up -d echo-stateless
         sleep 3
     fi
     
@@ -1111,6 +1111,195 @@ mcp-setup:
     echo "2. Add credentials to .env"
     echo "3. Test authentication: just mcp-test-auth"
     echo "4. Run tests: just mcp-test-all"
+
+# ============================================================================
+# SERVICE NAME MIGRATION
+# ============================================================================
+
+# Migrate to new service names (run this after updating docker-compose.yml)
+@migrate-service-names token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "🔄 Migrating to new service names..."
+    echo "=================================="
+    
+    # 1. Start services with new names
+    echo "1️⃣ Starting services with new names..."
+    just up
+    
+    # 2. Wait for services to be healthy
+    echo ""
+    echo "2️⃣ Waiting for services to be healthy..."
+    sleep 15
+    
+    # 3. Update proxy targets
+    echo ""
+    echo "3️⃣ Updating proxy targets..."
+    
+    # Update auth proxy
+    if just proxy-list | grep -q "auth.${BASE_DOMAIN}"; then
+        echo "   Updating auth.${BASE_DOMAIN}..."
+        curl -X PUT -H "Authorization: Bearer {{token}}" \
+            -H "Content-Type: application/json" \
+            -d '{"target_url": "http://auth:8000"}' \
+            http://localhost/proxy/targets/auth.${BASE_DOMAIN} > /dev/null 2>&1 || true
+    fi
+    
+    # Update echo-stateful proxy
+    if just proxy-list | grep -q "echo-stateful.${BASE_DOMAIN}"; then
+        echo "   Updating echo-stateful.${BASE_DOMAIN}..."
+        curl -X PUT -H "Authorization: Bearer {{token}}" \
+            -H "Content-Type: application/json" \
+            -d '{"target_url": "http://echo-stateful:3000"}' \
+            http://localhost/proxy/targets/echo-stateful.${BASE_DOMAIN} > /dev/null 2>&1 || true
+    fi
+    
+    # Update echo-stateless proxy
+    if just proxy-list | grep -q "echo-stateless.${BASE_DOMAIN}"; then
+        echo "   Updating echo-stateless.${BASE_DOMAIN}..."
+        curl -X PUT -H "Authorization: Bearer {{token}}" \
+            -H "Content-Type: application/json" \
+            -d '{"target_url": "http://echo-stateless:3000"}' \
+            http://localhost/proxy/targets/echo-stateless.${BASE_DOMAIN} > /dev/null 2>&1 || true
+    fi
+    
+    # Update fetcher proxy
+    if just proxy-list | grep -q "fetcher.${BASE_DOMAIN}"; then
+        echo "   Updating fetcher.${BASE_DOMAIN}..."
+        curl -X PUT -H "Authorization: Bearer {{token}}" \
+            -H "Content-Type: application/json" \
+            -d '{"target_url": "http://fetcher:3000"}' \
+            http://localhost/proxy/targets/fetcher.${BASE_DOMAIN} > /dev/null 2>&1 || true
+    fi
+    
+    # 4. Verify services
+    echo ""
+    echo "4️⃣ Verifying services..."
+    docker compose ps
+    
+    echo ""
+    echo "5️⃣ Updated proxy targets:"
+    just proxy-list | grep -E "auth|echo|fetcher" || true
+    
+    echo ""
+    echo "✅ Migration complete!"
+    echo ""
+    echo "Service name changes:"
+    echo "  - acme-certmanager → proxy"
+    echo "  - mcp-proxy-gateway → proxy"
+    echo "  - mcp-oauth-dynamicclient → auth"
+    echo "  - mcp-oauth-server → auth"
+    echo "  - mcp-echo-streamablehttp-server-stateful → echo-stateful"
+    echo "  - mcp-echo-stateful → echo-stateful"
+    echo "  - mcp-echo-streamablehttp-server-stateless → echo-stateless"
+    echo "  - mcp-echo-stateless → echo-stateless"
+    echo "  - fetcher-mcp → fetcher"
+    echo "  - mcp-fetcher → fetcher"
+
+# ============================================================================
+# MCP ECHO SERVER MANAGEMENT  
+# ============================================================================
+
+# Start MCP echo servers
+@mcp-echo-start:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Starting MCP echo servers..."
+    docker compose up -d echo-stateful echo-stateless
+    
+    # Wait for services to be healthy
+    echo "Waiting for services to be healthy..."
+    for i in {1..10}; do
+        echo -n "."
+        sleep 1
+    done
+    echo ""
+    
+    echo "✓ Echo servers started"
+
+# Complete setup for MCP echo servers (one command to rule them all!)
+@mcp-echo-setup token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "🚀 Setting up MCP Echo Servers..."
+    echo "================================"
+    
+    # 1. Ensure echo services are running
+    echo "1️⃣ Starting echo services..."
+    just mcp-echo-start || true
+    
+    # Wait a bit more for services to fully initialize
+    sleep 5
+    
+    # 2. Create proxy entries for both echo servers
+    echo ""
+    echo "2️⃣ Creating proxy entries..."
+    
+    # Stateless echo server
+    if ! just proxy-list | grep -q "echo-stateless.${BASE_DOMAIN}"; then
+        echo "   Creating echo-stateless proxy..."
+        just proxy-create "echo-stateless.${BASE_DOMAIN}" "http://echo-stateless:3000" "{{token}}" "${ADMIN_EMAIL}" "false" "true" "true" "true"
+    else
+        echo "   ✓ echo-stateless proxy already exists"
+    fi
+    
+    # Stateful echo server  
+    if ! just proxy-list | grep -q "echo-stateful.${BASE_DOMAIN}"; then
+        echo "   Creating echo-stateful proxy..."
+        just proxy-create "echo-stateful.${BASE_DOMAIN}" "http://echo-stateful:3000" "{{token}}" "${ADMIN_EMAIL}" "false" "true" "true" "true"
+    else
+        echo "   ✓ echo-stateful proxy already exists"
+    fi
+    
+    # 3. Disable auth on both echo servers for easy testing
+    echo ""
+    echo "3️⃣ Configuring authentication..."
+    
+    # Disable auth on stateless
+    echo "   Disabling auth on echo-stateless..."
+    curl -s -X DELETE -H "Authorization: Bearer {{token}}" http://localhost/proxy/targets/echo-stateless.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
+    echo "   ✓ Auth disabled on echo-stateless"
+    
+    # Disable auth on stateful
+    echo "   Disabling auth on echo-stateful..."
+    curl -s -X DELETE -H "Authorization: Bearer {{token}}" http://localhost/proxy/targets/echo-stateful.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
+    echo "   ✓ Auth disabled on echo-stateful"
+    
+    # 4. Verify everything is working
+    echo ""
+    echo "4️⃣ Verifying setup..."
+    
+    # Test stateless
+    if curl -s https://echo-stateless.${BASE_DOMAIN}/.well-known/oauth-protected-resource | grep -q "mcp_server_info"; then
+        echo "   ✅ echo-stateless is accessible"
+    else
+        echo "   ❌ echo-stateless check failed"
+    fi
+    
+    # Test stateful
+    if curl -s https://echo-stateful.${BASE_DOMAIN}/.well-known/oauth-protected-resource | grep -q "mcp_server_info"; then
+        echo "   ✅ echo-stateful is accessible"
+    else
+        echo "   ❌ echo-stateful check failed"
+    fi
+    
+    # 5. Show the URLs
+    echo ""
+    echo "✨ MCP Echo Servers Ready!"
+    echo "=========================="
+    echo ""
+    echo "Stateless server: https://echo-stateless.${BASE_DOMAIN}/mcp"
+    echo "Stateful server:  https://echo-stateful.${BASE_DOMAIN}/mcp"
+    echo ""
+    echo "Both servers are configured WITHOUT authentication for easy testing."
+    echo "You can now use these URLs in claude.ai or any MCP client!"
+    echo ""
+    echo "To test with the MCP client:"
+    echo "  just mcp-client-tokens-all    # Generate tokens for both servers"
+    echo "  just mcp-client-run           # List available tools"
 
 # ============================================================================
 # MCP STREAMABLEHTTP CLIENT TOKEN GENERATION

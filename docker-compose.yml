@@ -16,9 +16,9 @@ services:
       retries: 5
       start_period: 10s
     networks:
-      - acme_network
+      - proxy_network
 
-  acme-certmanager:
+  proxy:
     build: .
     restart: unless-stopped
     ports:
@@ -43,7 +43,7 @@ services:
       - ./scripts:/app/scripts
       - ./tests:/app/tests
     networks:
-      - acme_network
+      - proxy_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]
       interval: 30s
@@ -51,10 +51,10 @@ services:
       retries: 3
       start_period: 30s
 
-  mcp-oauth-dynamicclient:
+  auth:
     build: ./mcp-oauth-dynamicclient
     restart: unless-stopped
-    # No ports exposed - accessed via acme-certmanager proxy
+    # No ports exposed - accessed via proxy
     environment:
       - REDIS_URL=${REDIS_URL}
       - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
@@ -69,16 +69,15 @@ services:
     volumes:
       - ./logs/oauth:/app/logs
     networks:
-      acme_network:
-        aliases:
-          - oauth-server
+      - proxy_network
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      test: ["CMD", "curl", "-f", "http://localhost:8000/.well-known/oauth-authorization-server"]
       interval: 30s
       timeout: 10s
       retries: 3
+      start_period: 30s
 
-  mcp-echo-streamablehttp-server-stateful:
+  echo-stateful:
     build: ./mcp-echo-streamablehttp-server-stateful
     restart: unless-stopped
     environment:
@@ -86,11 +85,9 @@ services:
     volumes:
       - ./logs/mcp-echo-stateful:/app/logs
     networks:
-      acme_network:
-        aliases:
-          - echo-stateful
+      - proxy_network
 
-  mcp-echo-streamablehttp-server-stateless:
+  echo-stateless:
     build: ./mcp-echo-streamablehttp-server-stateless
     restart: unless-stopped
     environment:
@@ -98,9 +95,9 @@ services:
     volumes:
       - ./logs/mcp-echo-stateless:/app/logs
     networks:
-      - acme_network
+      - proxy_network
 
-  # fetcher-mcp:
+  # fetcher:
   #   build: ./fetcher-mcp
   #   restart: unless-stopped
   #   environment:
@@ -114,7 +111,7 @@ services:
   #     - SYS_ADMIN  # Required for Chrome
 
 networks:
-  acme_network:
+  proxy_network:
     driver: bridge
 
 volumes:
