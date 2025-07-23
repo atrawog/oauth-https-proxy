@@ -48,8 +48,10 @@ def create_router(storage, cert_manager):
                     )
             
             # Start async generation
+            from ...certmanager.async_acme import generate_certificate_async
             background_tasks.add_task(
-                cert_manager.acme_client.generate_certificate_async,
+                generate_certificate_async,
+                cert_manager,
                 cert_request
             )
             

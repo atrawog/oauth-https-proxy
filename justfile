@@ -78,9 +78,12 @@ token-generate name email="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Use provided email or prompt
+    # Use provided email or ADMIN_EMAIL or prompt
     if [ -n "{{email}}" ]; then
         cert_email="{{email}}"
+    elif [ -n "${ADMIN_EMAIL:-}" ]; then
+        cert_email="$ADMIN_EMAIL"
+        echo "Using ADMIN_EMAIL: $cert_email"
     else
         read -p "Certificate email for {{name}}: " cert_email
     fi
@@ -219,11 +222,17 @@ cert-create name domain email="" token="" staging="false":
     
     # Get certificate email if not provided
     if [ -z "{{email}}" ]; then
+        # Try to get from token first
         response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
+        
+        # Fall back to ADMIN_EMAIL if token has no email
         if [ -z "$cert_email" ]; then
-            echo "Error: No email provided and token has no default email"
-            exit 1
+            cert_email="${ADMIN_EMAIL:-}"
+            if [ -z "$cert_email" ]; then
+                echo "Error: No email provided, token has no default email, and ADMIN_EMAIL not set"
+                exit 1
+            fi
         fi
     else
         cert_email="{{email}}"
@@ -237,13 +246,13 @@ cert-create name domain email="" token="" staging="false":
         --arg staging "{{staging}}" \
         '{
             cert_name: $cert_name,
-            domains: [$domain],
+            domain: $domain,
             email: $email,
-            acme_directory_url: (if $staging == "true" then env.ACME_STAGING_URL else null end)
+            acme_directory_url: (if $staging == "true" then env.ACME_STAGING_URL else env.ACME_DIRECTORY_URL end)
         }')
     
     # Create certificate
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/certificates" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/certificates/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -396,7 +405,7 @@ cert-delete name token="" force="false":
 # ============================================================================
 
 # Create proxy target
-proxy-create hostname target-url token="" staging="false" preserve-host="true" enable-http="true" enable-https="true":
+proxy-create hostname target-url token="" email="" staging="false" preserve-host="true" enable-http="true" enable-https="true":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -425,12 +434,22 @@ proxy-create hostname target-url token="" staging="false" preserve-host="true" e
     
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     
-    # Get certificate email
-    response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/tokens/info")
-    cert_email=$(echo "$response" | jq -r '.cert_email // empty')
-    if [ -z "$cert_email" ]; then
-        echo "Error: Token has no certificate email set"
-        exit 1
+    # Get certificate email - use parameter first, then token, then ADMIN_EMAIL
+    if [ -n "{{email}}" ]; then
+        cert_email="{{email}}"
+    else
+        # Try to get from token
+        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/tokens/info")
+        cert_email=$(echo "$response" | jq -r '.cert_email // empty')
+        
+        # Fall back to ADMIN_EMAIL if token has no email
+        if [ -z "$cert_email" ]; then
+            cert_email="${ADMIN_EMAIL:-}"
+            if [ -z "$cert_email" ]; then
+                echo "Error: No email provided, token has no certificate email, and ADMIN_EMAIL not set"
+                exit 1
+            fi
+        fi
     fi
     
     # Build request data
@@ -449,11 +468,11 @@ proxy-create hostname target-url token="" staging="false" preserve-host="true" e
             preserve_host_header: ($preserve_host == "true"),
             enable_http: ($enable_http == "true"),
             enable_https: ($enable_https == "true"),
-            acme_directory_url: (if $staging == "true" then env.ACME_STAGING_URL else null end)
+            acme_directory_url: (if $staging == "true" then env.ACME_STAGING_URL else env.ACME_DIRECTORY_URL end)
         }')
     
     # Create proxy
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/proxy/targets" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/proxy/targets/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
