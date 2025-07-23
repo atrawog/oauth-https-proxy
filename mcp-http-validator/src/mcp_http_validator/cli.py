@@ -1,0 +1,1539 @@
+"""Command-line interface for MCP HTTP Validator."""
+
+import asyncio
+import json
+import os
+import sys
+import time
+from pathlib import Path
+from typing import Optional
+
+import click
+from dotenv import load_dotenv
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import Progress, SpinnerColumn, TextColumn
+from rich.table import Table
+from rich.text import Text
+
+from .compliance import ComplianceChecker
+from .models import TestStatus
+from .oauth import OAuthTestClient
+from .validator import MCPValidator
+from .env_manager import EnvManager
+from .rfc8707 import RFC8707Validator
+from .rfc7591 import RFC7591Validator, RFC7592Validator
+
+console = Console()
+
+
+def load_env_config():
+    """Load configuration from .env file."""
+    env_file = Path(".env")
+    if env_file.exists():
+        load_dotenv(env_file)
+        console.print(f"[dim]Loaded configuration from {env_file}[/dim]")
+
+
+@click.group()
+@click.version_option(version="0.1.0", prog_name="mcp-validate")
+def cli():
+    """MCP HTTP Validator - Test MCP servers for specification compliance."""
+    load_env_config()
+
+
+@cli.command()
+@click.argument("server_url")
+@click.option(
+    "--token",
+    "-t",
+    help="OAuth access token for authenticated tests",
+    envvar="MCP_ACCESS_TOKEN",
+)
+@click.option(
+    "--output",
+    "-o",
+    type=click.Choice(["terminal", "json", "markdown"]),
+    default="terminal",
+    help="Output format",
+)
+@click.option(
+    "--output-file",
+    "-f",
+    type=click.Path(),
+    help="Save output to file",
+)
+@click.option(
+    "--no-ssl-verify",
+    is_flag=True,
+    help="Disable SSL certificate verification",
+)
+@click.option(
+    "--timeout",
+    default=30.0,
+    help="Request timeout in seconds",
+)
+@click.option(
+    "--no-auto-register",
+    is_flag=True,
+    help="Disable automatic OAuth client registration",
+)
+@click.option(
+    "--force-register",
+    is_flag=True,
+    help="Force new OAuth client registration",
+)
+@click.option(
+    "--verbose",
+    "-v",
+    is_flag=True,
+    help="Show detailed test information",
+)
+def validate(
+    server_url: str,
+    token: Optional[str],
+    output: str,
+    output_file: Optional[str],
+    no_ssl_verify: bool,
+    timeout: float,
+    no_auto_register: bool,
+    force_register: bool,
+    verbose: bool,
+):
+    """Validate an MCP server for specification compliance.
+    
+    Automatically discovers OAuth servers and registers clients as needed.
+    
+    Example:
+        mcp-validate https://mcp.example.com
+        mcp-validate https://mcp.example.com --force-register
+    """
+    async def run_validation():
+        with Progress(
+            SpinnerColumn(),
+            TextColumn("[progress.description]{task.description}"),
+            console=console,
+        ) as progress:
+            task = progress.add_task("Validating MCP server...", total=None)
+            
+            async with MCPValidator(
+                server_url,
+                access_token=token,
+                timeout=timeout,
+                verify_ssl=not no_ssl_verify,
+                auto_register=not no_auto_register,
+            ) as validator:
+                # Setup OAuth client if needed
+                if not token and not no_auto_register:
+                    progress.update(task, description="Setting up OAuth client...")
+                    oauth_client = await validator.setup_oauth_client(force_new=force_register)
+                    
+                    if oauth_client and oauth_client.client_id:
+                        console.print(f"[green]✓[/green] OAuth client configured: {oauth_client.client_id}")
+                        if force_register:
+                            console.print("[yellow]New client registered and saved to .env[/yellow]")
+                    elif not token:
+                        console.print("[yellow]⚠[/yellow] No OAuth client available, some tests may be skipped")
+                
+                progress.update(task, description="Running validation tests...")
+                validation_result = await validator.validate()
+                server_info = validator.server_info
+                
+                # Note token acquisition method
+                if not token:
+                    if validator.access_token:
+                        if validator.env_manager.get_valid_access_token(server_url):
+                            console.print("[dim]Using stored access token from .env[/dim]")
+                        else:
+                            console.print("[dim]Token refreshed using refresh token from .env[/dim]")
+                    elif validator.oauth_client:
+                        console.print("[dim]Note: Attempted automated token acquisition (client credentials grant)[/dim]")
+            
+            progress.update(task, completed=True)
+        
+        # Generate compliance report
+        checker = ComplianceChecker(validation_result, server_info)
+        report = checker.check_compliance()
+        
+        # Output results
+        if output == "terminal":
+            display_terminal_report(report, verbose=verbose)
+        elif output == "json":
+            output_data = json.dumps(report.model_dump(), indent=2, default=str)
+            if output_file:
+                Path(output_file).write_text(output_data)
+                console.print(f"[green]Report saved to {output_file}[/green]")
+            else:
+                console.print(output_data)
+        elif output == "markdown":
+            markdown = report.to_markdown()
+            if output_file:
+                Path(output_file).write_text(markdown)
+                console.print(f"[green]Report saved to {output_file}[/green]")
+            else:
+                console.print(markdown)
+    
+    try:
+        asyncio.run(run_validation())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def display_terminal_report(report, verbose=False):
+    """Display compliance report in terminal."""
+    # Header
+    console.print()
+    console.print(Panel.fit(
+        f"[bold]MCP Compliance Report[/bold]\n"
+        f"Server: {report.server_info.url}\n"
+        f"Compliance Level: [bold]{report.compliance_level}[/bold]",
+        border_style="blue",
+    ))
+    
+    # Summary statistics
+    result = report.validation_result
+    console.print()
+    console.print("[bold]Test Summary:[/bold]")
+    
+    summary_table = Table(show_header=False, box=None)
+    summary_table.add_column(style="dim")
+    summary_table.add_column()
+    
+    summary_table.add_row("Total Tests:", str(result.total_tests))
+    summary_table.add_row("Passed:", f"[green]{result.passed_tests}[/green]")
+    summary_table.add_row("Failed:", f"[red]{result.failed_tests}[/red]")
+    summary_table.add_row("Success Rate:", f"{result.success_rate:.1f}%")
+    
+    # Check for OAuth server discovery
+    oauth_test = next((r for r in result.test_results if r.test_case.id == "oauth-server-discovery"), None)
+    if oauth_test and oauth_test.details:
+        oauth_server = oauth_test.details.get("oauth_server_found")
+        if oauth_server:
+            summary_table.add_row("OAuth Server:", f"[cyan]{oauth_server}[/cyan]")
+    
+    console.print(summary_table)
+    
+    # Test results table
+    console.print()
+    console.print("[bold]Test Results:[/bold]")
+    
+    results_table = Table()
+    results_table.add_column("Test", style="cyan")
+    results_table.add_column("Status", justify="center")
+    results_table.add_column("Category")
+    results_table.add_column("Details")
+    
+    for test_result in result.test_results:
+        status_style = {
+            TestStatus.PASSED: "[green]✓ PASS[/green]",
+            TestStatus.FAILED: "[red]✗ FAIL[/red]",
+            TestStatus.SKIPPED: "[yellow]⊘ SKIP[/yellow]",
+            TestStatus.ERROR: "[red]⚠ ERROR[/red]",
+        }
+        
+        status = status_style.get(test_result.status, test_result.status)
+        
+        details = ""
+        if test_result.error_message:
+            details = Text(test_result.error_message, style="dim")
+        
+        results_table.add_row(
+            test_result.test_case.name,
+            status,
+            test_result.test_case.category,
+            details,
+        )
+    
+    console.print(results_table)
+    
+    # Critical failures
+    if report.critical_failures:
+        console.print()
+        console.print("[bold red]Critical Failures:[/bold red]")
+        for failure in report.critical_failures:
+            console.print(f"  • {failure.test_case.name}: {failure.error_message}")
+    
+    # Recommendations
+    if report.recommendations:
+        console.print()
+        console.print("[bold yellow]Recommendations:[/bold yellow]")
+        for rec in report.recommendations:
+            console.print(f"  • {rec}")
+    
+    # Verbose output - show detailed test information
+    if verbose:
+        console.print()
+        console.print("[bold]Detailed Test Information:[/bold]")
+        
+        for test_result in result.test_results:
+            if test_result.details and (test_result.status != TestStatus.PASSED or verbose):
+                console.print()
+                console.print(f"[cyan]{test_result.test_case.name}:[/cyan]")
+                
+                # Special handling for OAuth server discovery
+                if test_result.test_case.id == "oauth-server-discovery":
+                    details = test_result.details
+                    if details.get("oauth_server_found"):
+                        console.print(f"  OAuth Server: {details['oauth_server_found']}")
+                    
+                    rfc8414_validation = details.get("rfc8414_validation")
+                    if rfc8414_validation:
+                        console.print(f"  RFC 8414 Valid: {rfc8414_validation.get('valid', False)}")
+                        
+                        issues = rfc8414_validation.get("issues", {})
+                        if issues.get("errors"):
+                            console.print("  [red]Errors:[/red]")
+                            for error in issues["errors"]:
+                                console.print(f"    • {error}")
+                        
+                        if issues.get("warnings"):
+                            console.print("  [yellow]Warnings:[/yellow]")
+                            for warning in issues["warnings"]:
+                                console.print(f"    • {warning}")
+                        
+                        if issues.get("info"):
+                            console.print("  [blue]Info:[/blue]")
+                            for info in issues["info"]:
+                                console.print(f"    • {info}")
+                        
+                        # Show metadata summary
+                        metadata = rfc8414_validation.get("metadata", {})
+                        if metadata:
+                            console.print("  [dim]Metadata Summary:[/dim]")
+                            console.print(f"    Issuer: {metadata.get('issuer', 'N/A')}")
+                            console.print(f"    Scopes: {', '.join(metadata.get('scopes_supported', []))}")
+                            console.print(f"    Resource Indicators: {metadata.get('resource_indicators_supported', False)}")
+                
+                # Special handling for MCP tools test
+                elif test_result.test_case.id == "mcp-tools":
+                    details = test_result.details
+                    console.print(f"  Session initialized: {details.get('session_initialized', False)}")
+                    if details.get('session_error'):
+                        console.print(f"  Session error: [red]{details['session_error']}[/red]")
+                    console.print(f"  Tools discovered: {details.get('tools_discovered', 0)}")
+                    
+                    # Show any errors encountered
+                    errors = details.get('errors', [])
+                    if errors:
+                        console.print("  [red]Errors encountered:[/red]")
+                        for error in errors:
+                            console.print(f"    • {error}")
+                    
+                    if details.get('tools_discovered', 0) > 0:
+                        console.print(f"  Tools tested: {details.get('tools_tested', 0)}")
+                        console.print(f"  Tools passed: [green]{details.get('tools_passed', 0)}[/green]")
+                        console.print(f"  Tools failed: [red]{details.get('tools_failed', 0)}[/red]")
+                        console.print(f"  Tools skipped: [yellow]{details.get('tools_skipped', 0)}[/yellow]")
+                        
+                        # Show individual tool results
+                        tool_results = details.get('tool_results', [])
+                        if tool_results:
+                            console.print("\n  [bold]Tool Test Results:[/bold]")
+                            
+                            for tool_result in tool_results:
+                                status_style = {
+                                    "success": "[green]✓[/green]",
+                                    "failed": "[red]✗[/red]",
+                                    "error": "[red]✗[/red]",
+                                    "tool_error": "[yellow]⚠[/yellow]",
+                                    "skipped": "[yellow]⊘[/yellow]",
+                                    "exception": "[red]⚠[/red]",
+                                    "invalid": "[red]✗[/red]"
+                                }
+                                
+                                status_icon = status_style.get(tool_result['status'], "?")
+                                tool_name = tool_result['tool_name']
+                                
+                                console.print(f"\n    {status_icon} [bold]{tool_name}[/bold]")
+                                if tool_result.get('description'):
+                                    console.print(f"      Description: {tool_result['description']}")
+                                
+                                if tool_result.get('destructive'):
+                                    console.print("      [yellow]⚠ Destructive tool[/yellow]")
+                                if tool_result.get('read_only'):
+                                    console.print("      [dim]Read-only tool[/dim]")
+                                
+                                if tool_result['status'] != 'success':
+                                    if tool_result.get('error'):
+                                        console.print(f"      Error: [red]{tool_result['error']}[/red]")
+                                
+                                if tool_result.get('test_params'):
+                                    console.print(f"      Test params: {json.dumps(tool_result['test_params'], indent=8)}")
+                
+                # Special handling for skipped tests
+                elif test_result.status == TestStatus.SKIPPED:
+                    suggestion = test_result.details.get("suggestion")
+                    note = test_result.details.get("note")
+                    if suggestion:
+                        console.print(f"  [yellow]→ {suggestion}[/yellow]")
+                    if note:
+                        console.print(f"  [dim]{note}[/dim]")
+                
+                # Generic details display for other tests
+                else:
+                    for key, value in test_result.details.items():
+                        if isinstance(value, (dict, list)):
+                            console.print(f"  {key}: {json.dumps(value, indent=2)}")
+                        else:
+                            console.print(f"  {key}: {value}")
+
+
+@cli.command()
+@click.argument("auth_server_url")
+@click.option(
+    "--client-id",
+    help="OAuth client ID",
+    envvar="OAUTH_CLIENT_ID",
+)
+@click.option(
+    "--client-secret",
+    help="OAuth client secret",
+    envvar="OAUTH_CLIENT_SECRET",
+)
+@click.option(
+    "--register",
+    is_flag=True,
+    help="Register a new OAuth client",
+)
+def oauth(
+    auth_server_url: str,
+    client_id: Optional[str],
+    client_secret: Optional[str],
+    register: bool,
+):
+    """Test OAuth authorization server compliance.
+    
+    Example:
+        mcp-validate oauth https://auth.example.com --register
+    """
+    async def run_oauth_test():
+        async with OAuthTestClient(
+            auth_server_url,
+            client_id=client_id,
+            client_secret=client_secret,
+        ) as client:
+            # Discover metadata
+            console.print("[bold]Discovering OAuth server metadata...[/bold]")
+            try:
+                metadata = await client.discover_metadata()
+                console.print("[green]✓[/green] Metadata endpoint found")
+                console.print(f"  Issuer: {metadata.issuer}")
+                console.print(f"  Authorization: {metadata.authorization_endpoint}")
+                console.print(f"  Token: {metadata.token_endpoint}")
+            except Exception as e:
+                console.print(f"[red]✗[/red] Failed to discover metadata: {e}")
+                return
+            
+            # Check compliance
+            console.print()
+            console.print("[bold]Checking OAuth compliance...[/bold]")
+            
+            compliance_results = await ComplianceChecker.check_oauth_server_compliance(client)
+            
+            for check, result in compliance_results.items():
+                if result == "PASS":
+                    console.print(f"[green]✓[/green] {check}")
+                elif result.startswith("WARN"):
+                    console.print(f"[yellow]⚠[/yellow] {check}: {result}")
+                else:
+                    console.print(f"[red]✗[/red] {check}: {result}")
+            
+            # Register client if requested
+            if register:
+                console.print()
+                console.print("[bold]Registering OAuth client...[/bold]")
+                try:
+                    new_client_id, new_secret = await client.register_client()
+                    console.print("[green]✓[/green] Client registered successfully")
+                    console.print(f"  Client ID: {new_client_id}")
+                    if new_secret:
+                        console.print(f"  Client Secret: {new_secret}")
+                        console.print()
+                        console.print("[yellow]Save these credentials to your .env file:[/yellow]")
+                        console.print(f"OAUTH_CLIENT_ID={new_client_id}")
+                        console.print(f"OAUTH_CLIENT_SECRET={new_secret}")
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Failed to register client: {e}")
+    
+    try:
+        asyncio.run(run_oauth_test())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("mcp_server_url")
+@click.option(
+    "--scope",
+    default="mcp:read mcp:write",
+    help="OAuth scope to request",
+)
+@click.option(
+    "--no-ssl-verify",
+    is_flag=True,
+    help="Disable SSL certificate verification",
+)
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force new OAuth flow even if valid token exists",
+)
+def flow(
+    mcp_server_url: str,
+    scope: str,
+    no_ssl_verify: bool,
+    force: bool,
+):
+    """Complete OAuth authentication flow with an MCP server.
+    
+    Checks for existing valid tokens first. Only initiates new flow if:
+    - No valid access token exists
+    - Token refresh fails
+    - --force flag is used
+    
+    Automatically discovers OAuth server and uses saved credentials.
+    
+    Examples:
+        mcp-validate flow https://mcp.example.com         # Check/refresh first
+        mcp-validate flow https://mcp.example.com --force # Force new flow
+    """
+    async def run_oauth_flow():
+        # First, create validator to discover OAuth server
+        env_manager = EnvManager()
+        
+        async with MCPValidator(
+            mcp_server_url,
+            verify_ssl=not no_ssl_verify,
+        ) as validator:
+            # Discover OAuth server
+            console.print("[bold]Discovering OAuth server...[/bold]")
+            auth_server_url = await validator.discover_oauth_server()
+            
+            if not auth_server_url:
+                console.print("[red]✗[/red] Failed to discover OAuth server from MCP metadata")
+                return
+            
+            console.print(f"[green]✓[/green] Found OAuth server: {auth_server_url}")
+            
+            # Get credentials for this server
+            credentials = env_manager.get_oauth_credentials(mcp_server_url)
+            
+            if not credentials["client_id"]:
+                console.print("[yellow]No OAuth client found. Run [cyan]mcp-validate client register[/cyan] command first.[/yellow]")
+                console.print(f"Example: [dim]mcp-validate client register {mcp_server_url}[/dim]")
+                return
+            
+            # Check for existing valid token
+            if not force:
+                console.print("\n[bold]Checking for existing tokens...[/bold]")
+                valid_token = env_manager.get_valid_access_token(mcp_server_url)
+                
+                if valid_token:
+                    # Get token expiration info
+                    server_key = mcp_server_url.replace("https://", "").replace("http://", "").replace("/", "_").replace(".", "_").upper()
+                    expires_at = env_manager.get(f"OAUTH_TOKEN_EXPIRES_AT_{server_key}")
+                    
+                    # Calculate remaining time
+                    remaining = int(expires_at) - int(time.time()) if expires_at else 0
+                    if remaining > 3600:
+                        time_left = f"{int(remaining/3600)}h {int((remaining%3600)/60)}m"
+                    elif remaining > 60:
+                        time_left = f"{int(remaining/60)}m"
+                    else:
+                        time_left = f"{remaining}s"
+                    
+                    console.print(f"[green]✓[/green] Valid access token found (expires in {time_left})")
+                    console.print(f"  Token: {valid_token[:20]}...")
+                    
+                    # Test token with MCP server
+                    console.print("\n[bold]Testing token with MCP server...[/bold]")
+                    async with OAuthTestClient(
+                        auth_server_url,
+                        client_id=credentials["client_id"],
+                        client_secret=credentials["client_secret"],
+                        verify_ssl=not no_ssl_verify,
+                    ) as test_client:
+                        success, error, details = await test_client.test_mcp_server_with_token(
+                            mcp_server_url,
+                            valid_token,
+                        )
+                        
+                        if success:
+                            console.print("[green]✓[/green] Token is valid and working")
+                            console.print("\n[dim]Use --force to get a new token anyway[/dim]")
+                            return
+                        else:
+                            console.print(f"[yellow]⚠[/yellow] Token rejected by server: {error}")
+                            console.print("Proceeding with token refresh/new flow...")
+                
+                # Check for refresh token if access token is expired
+                refresh_token = env_manager.get_refresh_token(mcp_server_url)
+                if refresh_token and not force:
+                    console.print("\n[bold]Attempting to refresh token...[/bold]")
+                    
+                    async with OAuthTestClient(
+                        auth_server_url,
+                        client_id=credentials["client_id"],
+                        client_secret=credentials["client_secret"],
+                        verify_ssl=not no_ssl_verify,
+                    ) as refresh_client:
+                        try:
+                            await refresh_client.discover_metadata()
+                            token_response = await refresh_client.refresh_token(refresh_token, scope=scope)
+                            
+                            console.print("[green]✓[/green] Token refreshed successfully")
+                            console.print(f"  New access token: {token_response.access_token[:20]}...")
+                            console.print(f"  Expires in: {token_response.expires_in} seconds")
+                            
+                            # Save new tokens
+                            env_manager.save_tokens(
+                                mcp_server_url,
+                                token_response.access_token,
+                                token_response.expires_in,
+                                token_response.refresh_token or refresh_token  # Keep old refresh token if new one not provided
+                            )
+                            console.print("[green]✓[/green] New tokens saved to .env")
+                            
+                            # Test new token
+                            console.print("\n[bold]Testing refreshed token...[/bold]")
+                            success, error, details = await refresh_client.test_mcp_server_with_token(
+                                mcp_server_url,
+                                token_response.access_token,
+                            )
+                            
+                            if success:
+                                console.print("[green]✓[/green] Refreshed token is valid and working")
+                                return
+                            else:
+                                console.print(f"[yellow]⚠[/yellow] Refreshed token rejected: {error}")
+                                console.print("Proceeding with new OAuth flow...")
+                        except Exception as e:
+                            console.print(f"[yellow]⚠[/yellow] Token refresh failed: {e}")
+                            console.print("Proceeding with new OAuth flow...")
+                
+            # If we get here, we need to do the full OAuth flow
+            console.print("\n[bold]Starting OAuth authorization flow...[/bold]")
+            
+            # Create OAuth client
+            async with OAuthTestClient(
+                auth_server_url,
+                client_id=credentials["client_id"],
+                client_secret=credentials["client_secret"],
+                verify_ssl=not no_ssl_verify,
+            ) as client:
+                # Discover metadata
+                await client.discover_metadata()
+                
+                # Generate authorization URL
+                auth_url, state, verifier = client.generate_authorization_url(
+                    scope=scope,
+                    resources=[mcp_server_url],
+                )
+                
+                # RFC 8707 validation - Step 1: Authorization Request
+                auth_has_resource, auth_resources = RFC8707Validator.validate_authorization_request(
+                    auth_url, [mcp_server_url]
+                )
+                
+                console.print("[bold]OAuth Authorization Flow Test with RFC 8707 Validation[/bold]")
+                console.print()
+                
+                # Show RFC 8707 status for auth request
+                if auth_has_resource:
+                    console.print("[green]✓[/green] RFC 8707: Authorization request includes resource parameter")
+                    console.print(f"  Resources: {auth_resources}")
+                else:
+                    console.print("[red]✗[/red] RFC 8707: Authorization request missing resource parameter")
+                
+                console.print()
+                console.print("1. Visit this URL to authorize:")
+                console.print(f"   [blue]{auth_url}[/blue]")
+                console.print()
+                console.print("2. After authorizing, you'll see an authorization code displayed.")
+                console.print("   The page might show the code directly or in the URL.")
+                console.print()
+                
+                # Wait for user to provide code
+                code = console.input("3. Enter the authorization code: ")
+                
+                # Exchange code for token
+                console.print()
+                console.print("Exchanging code for token...")
+                
+                try:
+                    token_response = await client.exchange_code_for_token(
+                        code,
+                        code_verifier=verifier,
+                        resources=[mcp_server_url],
+                    )
+                    console.print("[green]✓[/green] Token obtained successfully")
+                    console.print(f"  Access token: {token_response.access_token[:20]}...")
+                    console.print(f"  Expires in: {token_response.expires_in} seconds")
+                    
+                    # Save tokens to .env
+                    env_manager.save_tokens(
+                        mcp_server_url,
+                        token_response.access_token,
+                        token_response.expires_in,
+                        token_response.refresh_token
+                    )
+                    console.print("[green]✓[/green] Tokens saved to .env file")
+                    
+                    # RFC 8707 validation - Step 2: Token Response
+                    console.print()
+                    console.print("[bold]RFC 8707 Token Validation:[/bold]")
+                    
+                    token_compliant, token_validation = RFC8707Validator.validate_token_response(
+                        token_response.access_token,
+                        [mcp_server_url]
+                    )
+                    
+                    if token_compliant:
+                        console.print("[green]✓[/green] RFC 8707 compliant: Token includes requested resources in audience")
+                    else:
+                        console.print("[red]✗[/red] RFC 8707 VIOLATION: OAuth server did not include requested resources in token")
+                        for error in token_validation["errors"]:
+                            console.print(f"  • {error}")
+                    
+                    console.print(f"  Token audience: {token_validation['token_audience']}")
+                    console.print(f"  Requested: {token_validation['requested_resources']}")
+                    
+                    # Test MCP server access
+                    console.print()
+                    console.print("[bold]Testing MCP Server Access:[/bold]")
+                    
+                    success, error, details = await client.test_mcp_server_with_token(
+                        mcp_server_url,
+                        token_response.access_token,
+                    )
+                    
+                    if success:
+                        console.print("[green]✓[/green] MCP server accepted the token")
+                    else:
+                        console.print(f"[red]✗[/red] MCP server rejected the token: {error}")
+                        if details.get("www_authenticate"):
+                            console.print(f"  WWW-Authenticate: {details['www_authenticate']}")
+                    
+                    # RFC 8707 validation - Step 3: Resource Server Check
+                    server_compliant, server_validation = RFC8707Validator.validate_resource_server_check(
+                        mcp_server_url,
+                        success,
+                        token_validation.get("token_audience", [])
+                    )
+                    
+                    console.print()
+                    console.print("[bold]RFC 8707 Resource Server Validation:[/bold]")
+                    
+                    if server_compliant:
+                        console.print("[green]✓[/green] Server properly validates token audience")
+                    else:
+                        console.print("[red]✗[/red] RFC 8707 VIOLATION: Server audience validation failure")
+                        for error in server_validation["errors"]:
+                            console.print(f"  • {error}")
+                        
+                        if server_validation.get("security_risk"):
+                            console.print()
+                            console.print(f"[red bold]  ⚠️  {server_validation['security_risk']}[/red bold]")
+                    
+                    # Generate RFC 8707 compliance report
+                    console.print()
+                    console.print("─" * 60)
+                    report = RFC8707Validator.generate_report(
+                        auth_has_resource,
+                        auth_resources,
+                        token_validation,
+                        server_validation
+                    )
+                    console.print(report)
+                    
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Token exchange failed: {e}")
+    
+    try:
+        asyncio.run(run_oauth_flow())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.group()
+def client():
+    """Manage OAuth client registrations (RFC 7592)."""
+    pass
+
+
+@client.command("register")
+@click.argument("mcp_server_url")
+@click.option(
+    "--force",
+    is_flag=True,
+    help="Force new registration even if client already exists",
+)
+@click.option(
+    "--no-ssl-verify",
+    is_flag=True,
+    help="Disable SSL certificate verification",
+)
+@click.option(
+    "--validate-rfc7592",
+    is_flag=True,
+    help="Also validate RFC 7592 management protocol support",
+)
+def register(
+    mcp_server_url: str,
+    force: bool,
+    no_ssl_verify: bool,
+    validate_rfc7592: bool,
+):
+    """Register OAuth client for an MCP server.
+    
+    Discovers the OAuth server from MCP metadata and registers a new client.
+    Saves credentials to .env for future use.
+    
+    Example:
+        mcp-validate client register https://mcp.example.com
+    """
+    async def run_register():
+        env_manager = EnvManager()
+        
+        # Check existing credentials
+        existing_creds = env_manager.get_oauth_credentials(mcp_server_url)
+        if existing_creds["client_id"] and not force:
+            console.print(f"[yellow]OAuth client already registered: {existing_creds['client_id']}[/yellow]")
+            console.print("Use --force to register a new client")
+            return
+        
+        # Create validator to discover OAuth server
+        async with MCPValidator(
+            mcp_server_url,
+            verify_ssl=not no_ssl_verify,
+            auto_register=False,  # We'll handle registration manually
+        ) as validator:
+            # Discover OAuth server
+            console.print("[bold]Discovering OAuth server...[/bold]")
+            auth_server_url = await validator.discover_oauth_server()
+            
+            if not auth_server_url:
+                console.print("[red]✗[/red] Failed to discover OAuth server from MCP metadata")
+                return
+            
+            console.print(f"[green]✓[/green] Found OAuth server: {auth_server_url}")
+            
+            # Create OAuth client
+            async with OAuthTestClient(
+                auth_server_url,
+                verify_ssl=not no_ssl_verify,
+            ) as client:
+                # Discover metadata
+                console.print("[bold]Checking OAuth server metadata...[/bold]")
+                try:
+                    metadata = await client.discover_metadata()
+                    console.print("[green]✓[/green] OAuth server metadata valid")
+                    
+                    # Check for dynamic registration support
+                    if not metadata.registration_endpoint:
+                        console.print("[red]✗[/red] OAuth server does not support dynamic client registration")
+                        console.print("Please register a client manually and add credentials to .env")
+                        return
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Failed to get OAuth metadata: {e}")
+                    return
+                
+                # Prepare registration request
+                console.print("[bold]Preparing client registration...[/bold]")
+                
+                registration_data = {
+                    "client_name": f"MCP Validator for {mcp_server_url}",
+                    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"],
+                    "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
+                    "response_types": ["code"],
+                    "scope": "mcp:read mcp:write",
+                    "software_id": "mcp-http-validator",
+                    "software_version": "0.1.0",
+                    "application_type": "native",
+                    "token_endpoint_auth_method": "client_secret_post",
+                }
+                
+                # Validate request per RFC 7591
+                console.print("\n[bold]RFC 7591 Request Validation:[/bold]")
+                request_validation = RFC7591Validator.validate_registration_request(registration_data)
+                
+                if request_validation.errors:
+                    console.print("[red]Request Errors:[/red]")
+                    for error in request_validation.errors:
+                        console.print(f"  ✗ {error}")
+                
+                if request_validation.warnings:
+                    console.print("[yellow]Request Warnings:[/yellow]")
+                    for warning in request_validation.warnings:
+                        console.print(f"  ⚠ {warning}")
+                
+                if request_validation.info:
+                    console.print("[blue]Request Info:[/blue]")
+                    for info in request_validation.info:
+                        console.print(f"  ℹ {info}")
+                
+                if not request_validation.valid:
+                    console.print("\n[red]✗[/red] Registration request invalid per RFC 7591")
+                    return
+                else:
+                    console.print("[green]✓[/green] Registration request valid per RFC 7591")
+                
+                # Register new client
+                console.print("\n[bold]Registering OAuth client...[/bold]")
+                try:
+                    # Send registration request manually to capture full response
+                    response = await client.client.post(
+                        str(metadata.registration_endpoint),
+                        json=registration_data,
+                        headers={"Content-Type": "application/json"},
+                    )
+                    response.raise_for_status()
+                    
+                    response_data = response.json()
+                    
+                    # Validate response per RFC 7591
+                    console.print("\n[bold]RFC 7591 Response Validation:[/bold]")
+                    response_validation = RFC7591Validator.validate_registration_response(
+                        response_data,
+                        registration_data
+                    )
+                    
+                    if response_validation.errors:
+                        console.print("[red]Response Errors:[/red]")
+                        for error in response_validation.errors:
+                            console.print(f"  ✗ {error}")
+                    
+                    if response_validation.warnings:
+                        console.print("[yellow]Response Warnings:[/yellow]")
+                        for warning in response_validation.warnings:
+                            console.print(f"  ⚠ {warning}")
+                    
+                    if response_validation.info:
+                        console.print("[blue]Response Info:[/blue]")
+                        for info in response_validation.info:
+                            console.print(f"  ℹ {info}")
+                    
+                    if not response_validation.valid:
+                        console.print("\n[red]✗[/red] Registration response invalid per RFC 7591")
+                    else:
+                        console.print("[green]✓[/green] Registration response valid per RFC 7591")
+                    
+                    # Extract credentials
+                    client_id = response_data.get("client_id")
+                    client_secret = response_data.get("client_secret")
+                    reg_token = response_data.get("registration_access_token")
+                    reg_uri = response_data.get("registration_client_uri")
+                    
+                    # Save credentials
+                    env_manager.save_oauth_credentials(
+                        mcp_server_url,
+                        client_id,
+                        client_secret,
+                        reg_token,
+                    )
+                    
+                    console.print("\n[green]✓[/green] Client registered successfully")
+                    console.print(f"  Client ID: {client_id}")
+                    console.print(f"  Client Secret: {'*' * 20}...")
+                    if reg_token:
+                        console.print(f"  Registration Token: {'*' * 20}...")
+                    if reg_uri:
+                        console.print(f"  Management URI: {reg_uri}")
+                    
+                    # Show response details
+                    console.print("\n[bold]Registration Response:[/bold]")
+                    for key, value in response_data.items():
+                        if key in ["client_secret", "registration_access_token"]:
+                            console.print(f"  {key}: {'*' * 20}...")
+                        else:
+                            console.print(f"  {key}: {value}")
+                    
+                    # Test RFC 7592 if requested and supported
+                    if validate_rfc7592 and reg_token and reg_uri:
+                        console.print("\n[bold]RFC 7592 Management Protocol Validation:[/bold]")
+                        
+                        rfc7592_result = await RFC7592Validator.validate_management_support(
+                            client.client,
+                            reg_uri,
+                            reg_token,
+                            client_id
+                        )
+                        
+                        if rfc7592_result.errors:
+                            console.print("[red]Management Errors:[/red]")
+                            for error in rfc7592_result.errors:
+                                console.print(f"  ✗ {error}")
+                        
+                        if rfc7592_result.warnings:
+                            console.print("[yellow]Management Warnings:[/yellow]")
+                            for warning in rfc7592_result.warnings:
+                                console.print(f"  ⚠ {warning}")
+                        
+                        if rfc7592_result.info:
+                            console.print("[blue]Management Info:[/blue]")
+                            for info in rfc7592_result.info:
+                                console.print(f"  ℹ {info}")
+                        
+                        console.print("\n[bold]RFC 7592 Support:[/bold]")
+                        console.print(f"  Read (GET): {'✓' if rfc7592_result.read_supported else '✗'}")
+                        console.print(f"  Update (PUT): {'✓' if rfc7592_result.update_supported else '✗'}")
+                        console.print(f"  Delete (DELETE): Not tested")
+                        
+                        if rfc7592_result.valid:
+                            console.print("\n[green]✓[/green] RFC 7592 compliant")
+                        else:
+                            console.print("\n[red]✗[/red] RFC 7592 non-compliant")
+                    
+                    console.print("\n[green]✓[/green] Credentials saved to .env")
+                    console.print("\nYou can now use:")
+                    console.print(f"  • [cyan]mcp-validate flow {mcp_server_url}[/cyan] - Get access token")
+                    console.print(f"  • [cyan]mcp-validate validate {mcp_server_url}[/cyan] - Run validation tests")
+                    
+                except httpx.HTTPStatusError as e:
+                    console.print(f"[red]✗[/red] Registration failed with status {e.response.status_code}")
+                    try:
+                        error_data = e.response.json()
+                        console.print(f"  Error: {error_data.get('error', 'Unknown')}")
+                        if 'error_description' in error_data:
+                            console.print(f"  Description: {error_data['error_description']}")
+                    except:
+                        console.print(f"  Response: {e.response.text}")
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Failed to register client: {e}")
+    
+    try:
+        asyncio.run(run_register())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.group()
+def tokens():
+    """Manage OAuth access and refresh tokens."""
+    pass
+
+
+@client.command("list")
+def client_list():
+    """List all saved OAuth client credentials."""
+    env_manager = EnvManager()
+    credentials = env_manager.list_credentials()
+    
+    if not credentials:
+        console.print("[yellow]No OAuth clients found in .env[/yellow]")
+        return
+    
+    table = Table(title="OAuth Client Credentials & Tokens")
+    table.add_column("Server", style="cyan")
+    table.add_column("Client ID", style="green")
+    table.add_column("Has Secret", style="yellow")
+    table.add_column("Access Token", style="blue")
+    table.add_column("Refresh Token", style="magenta")
+    
+    for server_key, creds in credentials.items():
+        # Format access token status
+        if creds.get("token_valid"):
+            token_status = "✓ Valid"
+        elif creds.get("has_access_token"):
+            token_status = "⚠ Expired"
+        else:
+            token_status = "✗"
+            
+        table.add_row(
+            server_key,
+            creds.get("client_id", "")[:20] + "..." if len(creds.get("client_id", "")) > 20 else creds.get("client_id", ""),
+            "✓" if creds.get("client_secret") else "✗",
+            token_status,
+            "✓" if creds.get("has_refresh_token") else "✗",
+        )
+    
+    console.print(table)
+
+
+@client.command("update")
+@click.argument("mcp_server_url")
+@click.option("--client-name", help="New client name")
+@click.option("--redirect-uri", help="New redirect URI")
+@click.option("--scope", help="New scope")
+def client_update(
+    mcp_server_url: str,
+    client_name: Optional[str],
+    redirect_uri: Optional[str],
+    scope: Optional[str],
+):
+    """Update OAuth client configuration (RFC 7592)."""
+    async def run_update():
+        env_manager = EnvManager()
+        credentials = env_manager.get_oauth_credentials(mcp_server_url)
+        
+        if not credentials["registration_token"]:
+            console.print("[red]No registration token found for client management[/red]")
+            return
+        
+        # Discover OAuth server
+        async with MCPValidator(mcp_server_url) as validator:
+            auth_server_url = await validator.discover_oauth_server()
+            
+            if not auth_server_url:
+                console.print("[red]Failed to discover OAuth server[/red]")
+                return
+            
+            # Create OAuth client with registration token
+            async with OAuthTestClient(
+                auth_server_url,
+                client_id=credentials["client_id"],
+                client_secret=credentials["client_secret"],
+                registration_access_token=credentials["registration_token"],
+            ) as client:
+                # Build updates
+                updates = {}
+                if client_name:
+                    updates["client_name"] = client_name
+                if redirect_uri:
+                    updates["redirect_uris"] = [redirect_uri]
+                if scope:
+                    updates["scope"] = scope
+                
+                if not updates:
+                    console.print("[yellow]No updates specified[/yellow]")
+                    return
+                
+                try:
+                    updated_config = await client.update_client_configuration(updates)
+                    console.print("[green]✓[/green] Client configuration updated")
+                    
+                    # Save new credentials if changed
+                    if updated_config.get("registration_access_token") != credentials["registration_token"]:
+                        env_manager.save_oauth_credentials(
+                            mcp_server_url,
+                            updated_config["client_id"],
+                            updated_config.get("client_secret"),
+                            updated_config.get("registration_access_token"),
+                        )
+                        console.print("[yellow]New credentials saved to .env[/yellow]")
+                        
+                except Exception as e:
+                    console.print(f"[red]Update failed: {e}[/red]")
+    
+    try:
+        asyncio.run(run_update())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@client.command("delete")
+@click.argument("mcp_server_url")
+@click.confirmation_option(prompt="Are you sure you want to delete this client?")
+def client_delete(mcp_server_url: str):
+    """Delete OAuth client registration (RFC 7592)."""
+    async def run_delete():
+        env_manager = EnvManager()
+        credentials = env_manager.get_oauth_credentials(mcp_server_url)
+        
+        if not credentials["client_id"]:
+            console.print("[red]No client found for this server[/red]")
+            return
+        
+        if not credentials["registration_token"]:
+            console.print("[yellow]No registration token - removing local credentials only[/yellow]")
+            env_manager.remove_oauth_credentials(mcp_server_url)
+            console.print("[green]✓[/green] Local credentials removed")
+            return
+        
+        # Discover OAuth server
+        async with MCPValidator(mcp_server_url) as validator:
+            auth_server_url = await validator.discover_oauth_server()
+            
+            if not auth_server_url:
+                console.print("[red]Failed to discover OAuth server[/red]")
+                return
+            
+            # Create OAuth client with registration token
+            async with OAuthTestClient(
+                auth_server_url,
+                client_id=credentials["client_id"],
+                client_secret=credentials["client_secret"],
+                registration_access_token=credentials["registration_token"],
+            ) as client:
+                try:
+                    if await client.delete_client_registration():
+                        console.print("[green]✓[/green] Client registration deleted from server")
+                        env_manager.remove_oauth_credentials(mcp_server_url)
+                        console.print("[green]✓[/green] Local credentials removed")
+                    else:
+                        console.print("[red]Failed to delete client registration[/red]")
+                        
+                except Exception as e:
+                    console.print(f"[red]Deletion failed: {e}[/red]")
+    
+    try:
+        asyncio.run(run_delete())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@tokens.command("list")
+def token_list():
+    """List all stored OAuth tokens."""
+    env_manager = EnvManager()
+    credentials = env_manager.list_credentials()
+    
+    if not credentials:
+        console.print("[yellow]No OAuth credentials or tokens found in .env[/yellow]")
+        return
+    
+    table = Table(title="OAuth Tokens Status")
+    table.add_column("Server", style="cyan", no_wrap=True)
+    table.add_column("Access Token", style="green")
+    table.add_column("Expires", style="yellow")
+    table.add_column("Refresh Token", style="blue")
+    
+    has_tokens = False
+    for server_key, creds in credentials.items():
+        if server_key == "DEFAULT":
+            continue
+            
+        # Check token details
+        server_key_upper = server_key
+        access_token = env_manager.get(f"OAUTH_ACCESS_TOKEN_{server_key_upper}")
+        expires_at = env_manager.get(f"OAUTH_TOKEN_EXPIRES_AT_{server_key_upper}")
+        refresh_token = env_manager.get(f"OAUTH_REFRESH_TOKEN_{server_key_upper}")
+        
+        if not access_token and not refresh_token:
+            continue
+            
+        has_tokens = True
+        
+        # Format expiration
+        if expires_at:
+            try:
+                exp_time = int(expires_at)
+                remaining = exp_time - time.time()
+                if remaining > 0:
+                    if remaining > 3600:
+                        expires_display = f"[green]{int(remaining/3600)}h {int((remaining%3600)/60)}m[/green]"
+                    else:
+                        expires_display = f"[yellow]{int(remaining/60)}m[/yellow]"
+                else:
+                    expires_display = "[red]Expired[/red]"
+            except:
+                expires_display = "[dim]Unknown[/dim]"
+        else:
+            expires_display = "[dim]N/A[/dim]"
+            
+        # Format tokens for display
+        access_display = f"{access_token[:20]}..." if access_token else "[red]None[/red]"
+        refresh_display = "✓" if refresh_token else "✗"
+        
+        # Format server name
+        server_display = server_key.replace("_", ".").lower()
+        if server_display.endswith(".mcp"):
+            server_display = server_display[:-4] + "/mcp"
+        
+        table.add_row(
+            server_display,
+            access_display,
+            expires_display,
+            refresh_display,
+        )
+    
+    if has_tokens:
+        console.print(table)
+        console.print()
+        console.print("[dim]Use 'mcp-validate token refresh <server>' to refresh expired tokens[/dim]")
+        console.print("[dim]Use 'mcp-validate flow <server>' to obtain new tokens[/dim]")
+    else:
+        console.print("[yellow]No tokens found. Use 'mcp-validate flow <server>' to obtain tokens.[/yellow]")
+
+
+@tokens.command("show")
+@click.argument("mcp_server_url")
+def token_show(mcp_server_url: str):
+    """Show token status for a specific server."""
+    env_manager = EnvManager()
+    
+    # Check for valid access token
+    valid_token = env_manager.get_valid_access_token(mcp_server_url)
+    refresh_token = env_manager.get_refresh_token(mcp_server_url)
+    
+    console.print(f"[bold]Token Status for {mcp_server_url}[/bold]")
+    console.print()
+    
+    if valid_token:
+        console.print("[green]✓[/green] Valid access token found")
+        console.print(f"  Token: {valid_token[:20]}...")
+    else:
+        # Check if expired token exists
+        server_key = mcp_server_url.replace("https://", "").replace("http://", "").replace("/", "_").replace(".", "_").upper()
+        expired_token = env_manager.get(f"OAUTH_ACCESS_TOKEN_{server_key}")
+        if expired_token:
+            console.print("[yellow]⚠[/yellow] Access token expired")
+        else:
+            console.print("[red]✗[/red] No access token")
+    
+    if refresh_token:
+        console.print("[green]✓[/green] Refresh token available")
+        console.print(f"  Token: {refresh_token[:20]}...")
+    else:
+        console.print("[red]✗[/red] No refresh token")
+    
+    console.print()
+    console.print("Use 'mcp-validate flow' to obtain new tokens")
+
+
+@tokens.command("clear")
+@click.argument("mcp_server_url")
+@click.confirmation_option(prompt="Are you sure you want to clear tokens?")
+def token_clear(mcp_server_url: str):
+    """Clear stored tokens for a specific server (keeps client credentials)."""
+    env_manager = EnvManager()
+    
+    server_key = mcp_server_url.replace("https://", "").replace("http://", "").replace("/", "_").replace(".", "_").upper()
+    
+    # Clear token-related keys
+    token_keys = [
+        f"OAUTH_ACCESS_TOKEN_{server_key}",
+        f"OAUTH_TOKEN_EXPIRES_AT_{server_key}",
+        f"OAUTH_REFRESH_TOKEN_{server_key}",
+    ]
+    
+    success = True
+    for key in token_keys:
+        if env_manager.get(key):
+            env_manager.set(key, "")
+    
+    if success:
+        console.print(f"[green]✓[/green] Tokens cleared for {mcp_server_url}")
+    else:
+        console.print(f"[red]✗[/red] Failed to clear some tokens")
+
+
+@tokens.command("refresh")
+@click.argument("mcp_server_url")
+def token_refresh(mcp_server_url: str):
+    """Refresh access token using stored refresh token."""
+    async def run_refresh():
+        env_manager = EnvManager()
+        refresh_token = env_manager.get_refresh_token(mcp_server_url)
+        
+        if not refresh_token:
+            console.print("[red]No refresh token found[/red]")
+            return
+        
+        # Create validator to get OAuth client
+        async with MCPValidator(mcp_server_url) as validator:
+            auth_server = await validator.discover_oauth_server()
+            if not auth_server:
+                console.print("[red]Failed to discover OAuth server[/red]")
+                return
+            
+            credentials = env_manager.get_oauth_credentials(mcp_server_url)
+            
+            async with OAuthTestClient(
+                auth_server,
+                client_id=credentials["client_id"],
+                client_secret=credentials["client_secret"],
+            ) as client:
+                await client.discover_metadata()
+                
+                try:
+                    console.print("Refreshing token...")
+                    token_response = await client.refresh_token(refresh_token)
+                    
+                    # Save new tokens
+                    env_manager.save_tokens(
+                        mcp_server_url,
+                        token_response.access_token,
+                        token_response.expires_in,
+                        token_response.refresh_token or refresh_token
+                    )
+                    
+                    console.print("[green]✓[/green] Token refreshed successfully")
+                    console.print(f"  New access token: {token_response.access_token[:20]}...")
+                    console.print(f"  Expires in: {token_response.expires_in} seconds")
+                    
+                except Exception as e:
+                    console.print(f"[red]✗[/red] Token refresh failed: {e}")
+    
+    try:
+        asyncio.run(run_refresh())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+@cli.command()
+@click.argument("mcp_server_url")
+@click.option(
+    "--test-destructive",
+    is_flag=True,
+    help="Also test destructive tools (use with caution)",
+)
+@click.option(
+    "--tool-name",
+    help="Test only a specific tool by name",
+)
+@click.option(
+    "--list-only",
+    is_flag=True,
+    help="Only list available tools without testing",
+)
+def tools(
+    mcp_server_url: str,
+    test_destructive: bool,
+    tool_name: Optional[str],
+    list_only: bool,
+):
+    """Test MCP server tools.
+    
+    Discovers and tests all tools exposed by an MCP server.
+    
+    Example:
+        mcp-validate tools https://mcp.example.com
+        mcp-validate tools https://mcp.example.com --list-only
+        mcp-validate tools https://mcp.example.com --tool-name "search"
+    """
+    async def run_tools_test():
+        env_manager = EnvManager()
+        
+        async with MCPValidator(mcp_server_url) as validator:
+            # Get access token if available
+            validator.access_token = validator.env_manager.get_valid_access_token(mcp_server_url)
+            
+            if not validator.access_token:
+                console.print("[yellow]No access token found. Some servers may require authentication.[/yellow]")
+                console.print("Run 'mcp-validate flow' to authenticate if needed.")
+                console.print()
+            
+            # Try to initialize session
+            console.print("[bold]Initializing MCP session...[/bold]")
+            success, error, init_details = await validator.initialize_mcp_session()
+            
+            if success:
+                console.print("[green]✓[/green] Session initialized")
+                server_info = init_details.get("server_info", {})
+                if server_info:
+                    console.print(f"  Server: {server_info.get('name', 'Unknown')}")
+                    console.print(f"  Version: {server_info.get('version', 'Unknown')}")
+            else:
+                console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error}")
+                console.print("  Continuing anyway - some servers may not require initialization")
+            
+            # List tools
+            console.print()
+            console.print("[bold]Discovering tools...[/bold]")
+            success, error, tools = await validator.list_mcp_tools()
+            
+            if not success:
+                console.print(f"[red]✗[/red] Failed to list tools: {error}")
+                return
+            
+            if not tools:
+                console.print("[yellow]No tools found on this server[/yellow]")
+                return
+            
+            console.print(f"[green]✓[/green] Found {len(tools)} tool(s)")
+            
+            # Create tools table
+            tools_table = Table(title="Available Tools")
+            tools_table.add_column("Name", style="cyan")
+            tools_table.add_column("Description")
+            tools_table.add_column("Type", style="yellow")
+            
+            for tool in tools:
+                tool_type = []
+                if tool.get("annotations", {}).get("destructiveHint"):
+                    tool_type.append("destructive")
+                if tool.get("annotations", {}).get("readOnlyHint"):
+                    tool_type.append("read-only")
+                
+                tools_table.add_row(
+                    tool.get("name", "unknown"),
+                    tool.get("description", ""),
+                    ", ".join(tool_type) if tool_type else "standard"
+                )
+            
+            console.print()
+            console.print(tools_table)
+            
+            if list_only:
+                return
+            
+            # Filter tools if specific tool requested
+            if tool_name:
+                tools = [t for t in tools if t.get("name") == tool_name]
+                if not tools:
+                    console.print(f"[red]Tool '{tool_name}' not found[/red]")
+                    return
+            
+            # Test tools
+            console.print()
+            console.print("[bold]Testing tools...[/bold]")
+            
+            passed = 0
+            failed = 0
+            skipped = 0
+            
+            for tool in tools:
+                # Show message for destructive tools
+                if test_destructive and tool.get("annotations", {}).get("destructiveHint"):
+                    console.print(f"\n[yellow]Testing destructive tool: {tool['name']}[/yellow]")
+                
+                result = await validator.test_mcp_tool(tool, test_destructive=test_destructive)
+                
+                status_icons = {
+                    "success": "[green]✓[/green]",
+                    "failed": "[red]✗[/red]",
+                    "error": "[red]✗[/red]",
+                    "tool_error": "[yellow]⚠[/yellow]",
+                    "skipped": "[yellow]⊘[/yellow]",
+                    "exception": "[red]⚠[/red]",
+                    "invalid": "[red]✗[/red]"
+                }
+                
+                icon = status_icons.get(result["status"], "?")
+                console.print(f"\n{icon} {result['tool_name']}")
+                
+                if result.get("error"):
+                    console.print(f"  Error: {result['error']}")
+                
+                if result["status"] == "success":
+                    passed += 1
+                    console.print("  Response received successfully")
+                elif result["status"] == "skipped":
+                    skipped += 1
+                else:
+                    failed += 1
+                
+                # Show test parameters used
+                if result.get("test_params") and result["status"] != "skipped":
+                    console.print(f"  Test params: {json.dumps(result['test_params'])}")
+            
+            # Summary
+            console.print()
+            console.print("[bold]Summary:[/bold]")
+            console.print(f"  Total: {len(tools)}")
+            console.print(f"  Passed: [green]{passed}[/green]")
+            console.print(f"  Failed: [red]{failed}[/red]")
+            console.print(f"  Skipped: [yellow]{skipped}[/yellow]")
+    
+    try:
+        asyncio.run(run_tools_test())
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
+
+
+def main():
+    """Main entry point."""
+    cli()
+
+
+if __name__ == "__main__":
+    main()
