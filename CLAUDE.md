@@ -72,9 +72,16 @@ just token-show-certs [n]                # Show certificates by token
 just token-email-update <n> <email>      # Update token cert email
 ```
 
-## Unified Multi-Instance Dispatcher
+## Service Architecture
 
-### Core Architecture
+### Docker Services
+- **proxy**: HTTP/HTTPS gateway and certificate manager  
+- **auth**: OAuth 2.1 authorization server
+- **redis**: State storage for all services
+- **echo-stateful**: Stateful MCP echo server
+- **echo-stateless**: Stateless MCP echo server
+
+### Unified Multi-Instance Dispatcher
 **CRITICAL**: UnifiedDispatcher is THE server - FastAPI is just another instance!
 
 #### Server Configuration
@@ -317,6 +324,10 @@ just route-update <route-id> <token> [options]
 just route-delete <route-id> <token>
 just route-enable <route-id> <token>
 just route-disable <route-id> <token>
+
+# Service setup shortcuts
+just mcp-echo-setup [token]      # Setup both echo servers
+just migrate-service-names       # Migrate old service names
 
 # Per-proxy route control
 just proxy-routes-show <hostname>
@@ -619,7 +630,7 @@ just up                      # Start all services
 just down                    # Stop all services
 just rebuild <service>       # Rebuild specific service
 just logs                    # View service logs
-just shell                   # Shell into certmanager container
+just shell                   # Shell into proxy container
 just redis-cli               # Access Redis CLI
 ```
 
