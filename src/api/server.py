@@ -101,12 +101,13 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             raise HTTPException(status_code=404, detail="Challenge not found")
     
     # Import and register endpoint routers
-    from .endpoints import certificates, proxies, tokens, routes
+    from .endpoints import certificates, proxies, tokens, routes, instances
     
     app.include_router(certificates.create_router(storage, cert_manager))
     app.include_router(proxies.create_router(storage, cert_manager))
     app.include_router(tokens.create_router(storage))
     app.include_router(routes.create_router(storage))
+    app.include_router(instances.create_router(storage))
     
     # OAuth endpoints (if available)
     try:

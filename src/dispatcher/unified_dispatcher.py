@@ -11,7 +11,8 @@ import os
 import tempfile
 import struct
 import json
-from typing import Dict, Optional, List, Tuple, Set
+import httpx
+from typing import Dict, Optional, List, Tuple, Set, Union
 from datetime import datetime
 
 from hypercorn.asyncio import serve
@@ -204,6 +205,12 @@ class UnifiedDispatcher:
         self.routes: List[Route] = []
         # Named instances for routing targets
         self.named_instances: Dict[str, int] = {}  # name -> port
+        # HTTP client for URL route forwarding
+        self.http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0),
+            follow_redirects=False,
+            verify=False  # Since we're forwarding internal requests
+        )
         
     def get_applicable_routes(self, proxy_config: Optional[ProxyTarget]) -> List[Route]:
         """Get routes applicable to a specific proxy based on its configuration."""
@@ -239,6 +246,14 @@ class UnifiedDispatcher:
         """Register a named instance for routing targets."""
         self.named_instances[name] = port
         logger.info(f"Registered named instance: {name} -> port {port}")
+        
+        # Store in Redis so proxies can access it
+        if self.storage:
+            try:
+                self.storage.redis.set(f"instance:{name}", str(port))
+                logger.debug(f"Stored instance {name} in Redis")
+            except Exception as e:
+                logger.error(f"Failed to store instance in Redis: {e}")
     
     def load_routes_from_storage(self):
         """Load routes from Redis storage."""
@@ -277,15 +292,92 @@ class UnifiedDispatcher:
             logger.debug(f"Error parsing HTTP request: {e}")
             return None, None
     
-    def resolve_route_target(self, route: Route) -> Optional[int]:
-        """Resolve a route to a target port."""
+    def resolve_route_target(self, route: Route) -> Optional[Union[int, str]]:
+        """Resolve a route to a target port or URL."""
         if route.target_type == RouteTargetType.PORT:
             return route.target_value if isinstance(route.target_value, int) else int(route.target_value)
         elif route.target_type == RouteTargetType.INSTANCE:
             return self.named_instances.get(route.target_value)
         elif route.target_type == RouteTargetType.HOSTNAME:
             return self.hostname_to_http_port.get(route.target_value)
+        elif route.target_type == RouteTargetType.URL:
+            return route.target_value  # Return URL as-is
         return None
+    
+    async def _forward_http_request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, 
+                                     request_data: bytes, target_url: str, path: str, method: str):
+        """Forward an HTTP request to a URL target and stream the response back."""
+        try:
+            # Parse the HTTP request
+            request_str = request_data.decode('utf-8', errors='ignore')
+            lines = request_str.split('\r\n')
+            
+            # Extract headers from the request
+            headers = {}
+            body_start = -1
+            for i, line in enumerate(lines[1:], 1):  # Skip request line
+                if line == '':  # Empty line marks end of headers
+                    body_start = i + 1
+                    break
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    headers[key.strip()] = value.strip()
+            
+            # Get request body if present
+            body = None
+            if body_start > 0 and body_start < len(lines):
+                body = '\r\n'.join(lines[body_start:]).encode('utf-8')
+            
+            # Construct target URL
+            if not target_url.endswith('/'):
+                full_url = target_url + path
+            else:
+                full_url = target_url.rstrip('/') + path
+            
+            logger.info(f"Forwarding {method} {path} to {full_url}")
+            
+            # Make the HTTP request
+            response = await self.http_client.request(
+                method=method,
+                url=full_url,
+                headers=headers,
+                content=body
+            )
+            
+            # Build response to send back
+            response_lines = [f"HTTP/1.1 {response.status_code} {response.reason_phrase}"]
+            
+            # Add response headers
+            for name, value in response.headers.items():
+                # Skip some headers that might cause issues
+                if name.lower() not in ['connection', 'transfer-encoding']:
+                    response_lines.append(f"{name}: {value}")
+            
+            # Add content length if not present
+            if 'content-length' not in response.headers:
+                response_lines.append(f"Content-Length: {len(response.content)}")
+            
+            response_lines.append("")  # Empty line between headers and body
+            
+            # Send response headers
+            response_header = '\r\n'.join(response_lines) + '\r\n'
+            writer.write(response_header.encode('utf-8'))
+            
+            # Send response body
+            if response.content:
+                writer.write(response.content)
+            
+            await writer.drain()
+            
+        except Exception as e:
+            logger.error(f"Error forwarding HTTP request to {target_url}: {e}")
+            # Send error response
+            error_response = b"HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain\r\nContent-Length: 30\r\n\r\nError forwarding HTTP request"
+            writer.write(error_response)
+            await writer.drain()
+        finally:
+            writer.close()
+            await writer.wait_closed()
     
     def get_hostname_from_http_request(self, data: bytes) -> Optional[str]:
         """Extract hostname from HTTP request headers."""
@@ -426,11 +518,17 @@ class UnifiedDispatcher:
             if request_path and applicable_routes:
                 for route in applicable_routes:
                     if route.matches(request_path, method):
-                        target_port = self.resolve_route_target(route)
-                        if target_port:
-                            logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target_port}")
-                            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port)
-                            return
+                        target = self.resolve_route_target(route)
+                        if target:
+                            if route.target_type == RouteTargetType.URL:
+                                # For URL routes, forward the HTTP request
+                                await self._forward_http_request(reader, writer, data, str(target), request_path, method)
+                                return
+                            else:
+                                # Regular port-based forwarding
+                                logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target}")
+                                await self._forward_connection(reader, writer, data, '127.0.0.1', target)
+                                return
                         else:
                             logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
             
@@ -478,7 +576,37 @@ class UnifiedDispatcher:
             
             logger.debug(f"SNI hostname: {hostname}")
             
-            # Find the appropriate port
+            # Get proxy config if this is a proxy domain
+            proxy_config = None
+            if self.storage and hostname not in ['localhost', '127.0.0.1']:
+                try:
+                    proxy_config = self.storage.get_proxy_target(hostname)
+                except Exception as e:
+                    logger.debug(f"Could not get proxy config for {hostname}: {e}")
+            
+            # Get applicable routes with filtering
+            applicable_routes = self.get_applicable_routes(proxy_config)
+            
+            # Check generic routes with filtering
+            method, request_path = self.get_request_info(data)
+            if request_path and applicable_routes:
+                for route in applicable_routes:
+                    if route.matches(request_path, method):
+                        target = self.resolve_route_target(route)
+                        if target:
+                            if route.target_type == RouteTargetType.URL:
+                                # For URL routes, forward the HTTP request
+                                await self._forward_http_request(reader, writer, data, str(target), request_path, method)
+                                return
+                            else:
+                                # Regular port-based forwarding
+                                logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target}")
+                                await self._forward_connection(reader, writer, data, '127.0.0.1', target)
+                                return
+                        else:
+                            logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
+            
+            # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_https_port.get(hostname)
             if not target_port:
                 # Try wildcard match

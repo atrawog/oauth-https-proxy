@@ -14,6 +14,7 @@ from fastapi.responses import StreamingResponse, RedirectResponse
 from starlette.background import BackgroundTask
 import asyncio
 from .models import ProxyTarget
+from .auth_exclusions import merge_exclusions
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,33 @@ class EnhancedProxyHandler:
         if not target.enabled:
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
         
+        # Check routes FIRST - routes bypass proxy auth!
+        from ..proxy.routes import get_applicable_routes, RouteTargetType
+        applicable_routes = get_applicable_routes(self.storage, target)
+        
+        # Check if request matches any route
+        request_path = request.url.path
+        request_method = request.method
+        
+        logger.info(f"Checking {len(applicable_routes)} routes for {request_method} {request_path}")
+        for route in applicable_routes:
+            logger.info(f"  Checking route: {route.path_pattern} (priority {route.priority}) methods={route.methods}")
+            match_result = route.matches(request_path, request_method)
+            logger.info(f"    Match result for {route.path_pattern}: {match_result}")
+            if match_result:
+                logger.info(f"Request {request_method} {request_path} matched route '{route.description or route.path_pattern}'")
+                
+                # Routes bypass proxy authentication entirely!
+                # Handle different route types
+                if route.target_type == RouteTargetType.URL:
+                    return await self._handle_url_route(request, route)
+                elif route.target_type == RouteTargetType.INSTANCE:
+                    return await self._handle_instance_route(request, route)
+                else:
+                    # For other route types, we can't handle them here
+                    logger.warning(f"Proxy cannot handle route type {route.target_type}")
+                    break
+        
         # Check protocol-specific enable flags
         is_https = request.url.scheme == "https"
         if is_https and not target.enable_https:
@@ -68,12 +96,27 @@ class EnhancedProxyHandler:
         
         # Check if auth is required
         if target.auth_enabled and target.auth_proxy:
-            auth_result = await self._check_unified_auth(request, target)
-            if isinstance(auth_result, Response):
-                # Auth check returned a response (redirect or error)
-                return auth_result
-            # auth_result contains user info to add as headers
-            request.state.auth_user = auth_result
+            # Check if this path is excluded from authentication
+            path_excluded = False
+            request_path = request.url.path
+            
+            # Get combined exclusions (defaults + custom)
+            all_exclusions = merge_exclusions(target.auth_excluded_paths)
+            
+            for excluded_path in all_exclusions:
+                if request_path.startswith(excluded_path):
+                    path_excluded = True
+                    logger.debug(f"Path {request_path} excluded from auth by rule: {excluded_path}")
+                    break
+            
+            # Only perform auth check if path is not excluded
+            if not path_excluded:
+                auth_result = await self._check_unified_auth(request, target)
+                if isinstance(auth_result, Response):
+                    # Auth check returned a response (redirect or error)
+                    return auth_result
+                # auth_result contains user info to add as headers
+                request.state.auth_user = auth_result
         
         # Handle OPTIONS (preflight) requests
         if request.method == "OPTIONS":
@@ -328,6 +371,84 @@ class EnhancedProxyHandler:
                 filtered[name] = value
         
         return filtered
+    
+    async def _handle_instance_route(self, request: Request, route) -> Response:
+        """Handle instance route by looking up the instance target."""
+        instance_name = route.target_value
+        
+        # Look up instance target from Redis
+        instance_target = None
+        try:
+            # First try to get it as a port (for localhost instances)
+            port = self.storage.redis_client.get(f"instance:{instance_name}")
+            if port:
+                instance_target = f"http://localhost:{port}"
+            else:
+                # Try to get it as a service URL
+                service_url = self.storage.redis_client.get(f"instance_url:{instance_name}")
+                if service_url:
+                    instance_target = service_url
+        except Exception as e:
+            logger.error(f"Failed to lookup instance {instance_name}: {e}")
+        
+        if not instance_target:
+            logger.error(f"Instance {instance_name} not found in registry")
+            raise HTTPException(503, f"Instance {instance_name} not available")
+        
+        # Forward to the instance using the same logic as URL routes
+        route.target_value = instance_target
+        return await self._handle_url_route(request, route)
+    
+    async def _handle_url_route(self, request: Request, route) -> Response:
+        """Handle URL route by forwarding to the specified URL."""
+        target_url = route.target_value
+        if not target_url.startswith(('http://', 'https://')):
+            target_url = f'http://{target_url}'
+        
+        # Build full URL
+        path = request.url.path
+        query = request.url.query
+        full_url = f"{target_url}{path}"
+        if query:
+            full_url += f"?{query}"
+        
+        logger.info(f"Forwarding URL route to {full_url}")
+        
+        try:
+            # Prepare headers
+            headers = dict(request.headers)
+            # Remove hop-by-hop headers
+            for header in ['host', 'connection', 'keep-alive', 'transfer-encoding']:
+                headers.pop(header, None)
+            
+            # Get request body
+            body = await request.body()
+            
+            # Forward the request
+            response = await self.client.request(
+                method=request.method,
+                url=full_url,
+                headers=headers,
+                content=body if body else None,
+                cookies=request.cookies
+            )
+            
+            # Return the response
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=dict(response.headers)
+            )
+            
+        except httpx.ConnectError:
+            logger.error(f"Failed to connect to URL route {full_url}")
+            raise HTTPException(502, "Bad Gateway - Unable to connect to route target")
+        except httpx.TimeoutException:
+            logger.error(f"Timeout connecting to URL route {full_url}")
+            raise HTTPException(504, "Gateway Timeout - Route target timeout")
+        except Exception as e:
+            logger.error(f"URL route error: {e}")
+            raise HTTPException(500, f"Route error: {str(e)}")
     
     async def close(self):
         """Close the HTTP client."""

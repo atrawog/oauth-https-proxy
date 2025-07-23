@@ -11,6 +11,7 @@ set dotenv-load := true
 set dotenv-required
 set positional-arguments := true
 set allow-duplicate-recipes
+# Export all variables as environment variables
 set export := true
 set quiet
 
@@ -862,6 +863,118 @@ mcp-test-all:
     echo ""
     echo "✅ All MCP client tests completed!"
 
+# Instance Management Commands
+# List all registered instances
+instance-list:
+    #!/usr/bin/env bash
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    echo "=== Named Instances ==="
+    curl -s "${BASE_URL}/instances" | \
+        jq -r '.[] | [.name, .target_url, .description, .created_by] | @tsv' | \
+        column -t -s $'\t' -N "Name,Target URL,Description,Created By"
+
+# Show instance details
+instance-show name:
+    #!/usr/bin/env bash
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    curl -s "${BASE_URL}/instances/{{name}}" | jq '.'
+
+# Register a new named instance
+instance-register name target-url token="" description="":
+    #!/usr/bin/env bash
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    TOKEN="{{token}}"
+    if [ -z "$TOKEN" ]; then
+        TOKEN="$ADMIN_TOKEN"
+    fi
+    if [ -z "$TOKEN" ]; then
+        echo "Error: No token provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${BASE_URL}/instances" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "name": "{{name}}",
+            "target_url": "{{target-url}}",
+            "description": "{{description}}"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+    
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "$BODY" | jq '.'
+        echo "✓ Instance '{{name}}' registered successfully"
+    else
+        echo "$BODY" | jq '.' || echo "$BODY"
+        exit 1
+    fi
+
+# Update an existing instance
+instance-update name target-url token="" description="":
+    #!/usr/bin/env bash
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    TOKEN="{{token}}"
+    if [ -z "$TOKEN" ]; then
+        TOKEN="$ADMIN_TOKEN"
+    fi
+    if [ -z "$TOKEN" ]; then
+        echo "Error: No token provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT "${BASE_URL}/instances/{{name}}" \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "name": "{{name}}",
+            "target_url": "{{target-url}}",
+            "description": "{{description}}"
+        }')
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+    
+    if [ "$HTTP_CODE" = "200" ]; then
+        echo "$BODY" | jq '.'
+        echo "✓ Instance '{{name}}' updated successfully"
+    else
+        echo "$BODY" | jq '.' || echo "$BODY"
+        exit 1
+    fi
+
+# Delete a named instance
+instance-delete name token="":
+    #!/usr/bin/env bash
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    TOKEN="{{token}}"
+    if [ -z "$TOKEN" ]; then
+        TOKEN="$ADMIN_TOKEN"
+    fi
+    if [ -z "$TOKEN" ]; then
+        echo "Error: No token provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/instances/{{name}}" \
+        -H "Authorization: Bearer $TOKEN")
+    
+    HTTP_CODE=$(echo "$RESPONSE" | tail -1)
+    BODY=$(echo "$RESPONSE" | head -n -1)
+    
+    if [ "$HTTP_CODE" = "204" ]; then
+        echo "✓ Instance '{{name}}' deleted successfully"
+    else
+        echo "$BODY" | jq '.' || echo "$BODY"
+        exit 1
+    fi
+
+# Register OAuth server instance (convenience command)
+instance-register-oauth token="":
+    just instance-register "oauth-server" "http://mcp-oauth-dynamicclient:8000" "{{token}}" "OAuth 2.0 Authorization Server"
+
 # Route Management Commands
 # List all routes
 route-list:
@@ -894,14 +1007,14 @@ route-create path target-type target-value token="" priority="50" methods="*" is
     fi
     
     docker exec {{container_name}} pixi run python scripts/route_create.py \
-        --path "{{path}}" \
-        --target-type "{{target-type}}" \
-        --target-value "{{target-value}}" \
-        --token "$token_value" \
-        --priority {{priority}} \
-        --methods "{{methods}}" \
-        --is-regex {{is-regex}} \
-        --description "{{description}}"
+        "{{path}}" \
+        "{{target-type}}" \
+        "{{target-value}}" \
+        "$token_value" \
+        "{{priority}}" \
+        "{{methods}}" \
+        "{{is-regex}}" \
+        "{{description}}"
 
 # Delete a route
 route-delete route-id token="":
@@ -926,8 +1039,8 @@ route-delete route-id token="":
     fi
     
     docker exec {{container_name}} pixi run python scripts/route_delete.py \
-        --route-id "{{route-id}}" \
-        --token "$token_value"
+        "{{route-id}}" \
+        "$token_value"
 
 # Setup MCP client development environment
 mcp-setup:
@@ -972,3 +1085,173 @@ mcp-setup:
     echo "2. Add credentials to .env"
     echo "3. Test authentication: just mcp-test-auth"
     echo "4. Run tests: just mcp-test-all"
+
+# ============================================================================
+# MCP STREAMABLEHTTP CLIENT TOKEN GENERATION
+# ============================================================================
+
+# Generate OAuth tokens for MCP client testing (uses env vars from parent .env)
+@mcp-client-token-generate server-url="${MCP_SERVER_URL}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    cd mcp-streamablehttp-client
+    just token-generate {{server-url}}
+
+# Quick setup for MCP client with echo server
+@mcp-client-test-setup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Ensure echo servers are running
+    echo "Ensuring echo servers are running..."
+    just mcp-echo-start
+    
+    # Setup OAuth if needed
+    if ! just route-list | grep -q "/authorize"; then
+        echo "Setting up OAuth routes..."
+        just oauth-routes-setup "auth.${BASE_DOMAIN}" ADMIN
+    fi
+    
+    # Generate token for stateless echo server
+    echo "Generating token for stateless echo server..."
+    cd mcp-streamablehttp-client
+    just token-generate "https://echo-stateless.${BASE_DOMAIN}/mcp"
+    
+    # Test the connection
+    echo "Testing connection..."
+    just token-test
+
+# Generate tokens for both echo servers
+@mcp-client-tokens-all:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Generating tokens for all test servers..."
+    
+    # Stateless echo server
+    echo ""
+    echo "1. Stateless echo server (https://echo-stateless.${BASE_DOMAIN}/mcp):"
+    just mcp-client-token-generate "https://echo-stateless.${BASE_DOMAIN}/mcp"
+    
+    echo ""
+    echo "2. Stateful echo server (https://echo-stateful.${BASE_DOMAIN}/mcp):"
+    echo "To test with stateful server, run:"
+    echo "  MCP_SERVER_URL=https://echo-stateful.${BASE_DOMAIN}/mcp just mcp-client-run"
+
+# Test MCP client with current token
+@mcp-client-test:
+    cd mcp-streamablehttp-client && just token-test
+
+# Show MCP client token status
+@mcp-client-status:
+    cd mcp-streamablehttp-client && just token-status
+
+# Reset MCP client tokens
+@mcp-client-reset:
+    cd mcp-streamablehttp-client && just token-reset
+
+# Run MCP client in proxy mode
+@mcp-client-run:
+    cd mcp-streamablehttp-client && just run
+
+# Execute command via MCP client
+@mcp-client-exec command:
+    cd mcp-streamablehttp-client && just exec "{{command}}"
+
+# Run comprehensive MCP client tests
+@mcp-client-test-all:
+    ./scripts/test-mcp-client.sh
+
+# Save OAuth client credentials to .env from MCP client registration
+mcp-client-save-credentials client-id client-secret registration-token="" registration-uri="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    echo "Saving OAuth client credentials to .env..."
+    
+    # Update or add client credentials
+    if grep -q "^MCP_CLIENT_ID=" .env; then
+        sed -i "s|^MCP_CLIENT_ID=.*|MCP_CLIENT_ID={{client-id}}|" .env
+    else
+        echo "MCP_CLIENT_ID={{client-id}}" >> .env
+    fi
+    
+    if grep -q "^MCP_CLIENT_SECRET=" .env; then
+        sed -i "s|^MCP_CLIENT_SECRET=.*|MCP_CLIENT_SECRET={{client-secret}}|" .env
+    else
+        echo "MCP_CLIENT_SECRET={{client-secret}}" >> .env
+    fi
+    
+    if [ -n "{{registration-token}}" ]; then
+        if grep -q "^MCP_CLIENT_REGISTRATION_TOKEN=" .env; then
+            sed -i "s|^MCP_CLIENT_REGISTRATION_TOKEN=.*|MCP_CLIENT_REGISTRATION_TOKEN={{registration-token}}|" .env
+        else
+            echo "MCP_CLIENT_REGISTRATION_TOKEN={{registration-token}}" >> .env
+        fi
+    fi
+    
+    if [ -n "{{registration-uri}}" ]; then
+        if grep -q "^MCP_CLIENT_REGISTRATION_URI=" .env; then
+            sed -i "s|^MCP_CLIENT_REGISTRATION_URI=.*|MCP_CLIENT_REGISTRATION_URI={{registration-uri}}|" .env
+        else
+            echo "MCP_CLIENT_REGISTRATION_URI={{registration-uri}}" >> .env
+        fi
+    fi
+    
+    echo "✓ OAuth client credentials saved to .env"
+
+# Register OAuth client for MCP testing (auto-saves to .env)
+mcp-client-register-auto server-url="${MCP_SERVER_URL}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Registering OAuth client for {{server-url}}..."
+    
+    # Extract base domain from server URL
+    DOMAIN=$(echo "{{server-url}}" | sed -E 's|https?://([^/]+).*|\1|')
+    
+    # Discover OAuth configuration
+    echo "Discovering OAuth configuration from $DOMAIN..."
+    OAUTH_METADATA=$(curl -sf "https://$DOMAIN/.well-known/oauth-authorization-server" || echo "")
+    if [ -z "$OAUTH_METADATA" ]; then
+        echo "Error: Failed to discover OAuth configuration from $DOMAIN"
+        exit 1
+    fi
+    
+    # Extract registration endpoint
+    REG_ENDPOINT=$(echo "$OAUTH_METADATA" | jq -r '.registration_endpoint // empty')
+    if [ -z "$REG_ENDPOINT" ]; then
+        echo "Error: No registration endpoint found in OAuth metadata"
+        exit 1
+    fi
+    
+    # Register client
+    echo "Registering client at $REG_ENDPOINT..."
+    RESPONSE=$(curl -sf -X POST "$REG_ENDPOINT" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "software_id": "mcp-streamablehttp-client",
+            "software_version": "1.0.0",
+            "client_name": "MCP StreamableHTTP Client",
+            "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"],
+            "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
+            "response_types": ["code"],
+            "scope": "read write"
+        }')
+    
+    if [ -z "$RESPONSE" ]; then
+        echo "Error: Failed to register client"
+        exit 1
+    fi
+    
+    # Extract credentials
+    CLIENT_ID=$(echo "$RESPONSE" | jq -r '.client_id')
+    CLIENT_SECRET=$(echo "$RESPONSE" | jq -r '.client_secret')
+    REG_TOKEN=$(echo "$RESPONSE" | jq -r '.registration_access_token // empty')
+    REG_URI=$(echo "$RESPONSE" | jq -r '.registration_client_uri // empty')
+    
+    echo "Client registered successfully!"
+    echo "Client ID: $CLIENT_ID"
+    echo "Client Secret: ${CLIENT_SECRET:0:12}..."
+    
+    # Save to .env
+    just mcp-client-save-credentials "$CLIENT_ID" "$CLIENT_SECRET" "$REG_TOKEN" "$REG_URI"

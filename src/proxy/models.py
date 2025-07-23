@@ -29,6 +29,7 @@ class ProxyTarget(BaseModel):
     auth_pass_headers: bool = True
     auth_cookie_name: str = "unified_auth_token"
     auth_header_prefix: str = "X-Auth-"
+    auth_excluded_paths: Optional[List[str]] = None  # Paths to exclude from authentication
     
     # Route control fields
     route_mode: str = "all"  # all, selective, none
@@ -109,6 +110,7 @@ class ProxyTargetUpdate(BaseModel):
     auth_pass_headers: Optional[bool] = None
     auth_cookie_name: Optional[str] = None
     auth_header_prefix: Optional[str] = None
+    auth_excluded_paths: Optional[List[str]] = None
     # Route control fields
     route_mode: Optional[str] = None
     enabled_routes: Optional[List[str]] = None
@@ -170,6 +172,7 @@ class ProxyAuthConfig(BaseModel):
     pass_headers: bool = True
     cookie_name: str = "unified_auth_token"
     header_prefix: str = "X-Auth-"
+    excluded_paths: Optional[List[str]] = None
     
     @validator('auth_proxy')
     def validate_auth_proxy(cls, v):

@@ -234,6 +234,7 @@ def create_router(storage, cert_manager):
         target.auth_pass_headers = config.pass_headers
         target.auth_cookie_name = config.cookie_name
         target.auth_header_prefix = config.header_prefix
+        target.auth_excluded_paths = config.excluded_paths
         
         # Store updated target
         if not storage.store_proxy_target(hostname, target):
@@ -285,7 +286,8 @@ def create_router(storage, cert_manager):
             "auth_required_groups": target.auth_required_groups,
             "auth_pass_headers": target.auth_pass_headers,
             "auth_cookie_name": target.auth_cookie_name,
-            "auth_header_prefix": target.auth_header_prefix
+            "auth_header_prefix": target.auth_header_prefix,
+            "auth_excluded_paths": target.auth_excluded_paths
         }
     
     # Proxy-specific route management endpoints

@@ -2,10 +2,13 @@
 
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union
+from typing import Dict, List, Optional, Union, TYPE_CHECKING
 from enum import Enum
 from pydantic import BaseModel, Field, validator
 import re
+
+if TYPE_CHECKING:
+    from .models import ProxyTarget
 
 
 class RouteTargetType(str, Enum):
@@ -13,6 +16,7 @@ class RouteTargetType(str, Enum):
     PORT = "port"  # Forward to localhost:port
     INSTANCE = "instance"  # Forward to named instance (e.g., 'localhost', 'api')
     HOSTNAME = "hostname"  # Forward to instance handling specific hostname
+    URL = "url"  # Forward to any URL (http://service:port or https://example.com)
 
 
 class Route(BaseModel):
@@ -47,6 +51,36 @@ class Route(BaseModel):
                 raise ValueError(f"Invalid regex pattern: {e}")
         return v
     
+    @validator('target_value')
+    def validate_target_value(cls, v, values):
+        """Validate target value based on target type."""
+        target_type = values.get('target_type')
+        if target_type == RouteTargetType.PORT:
+            if isinstance(v, str):
+                try:
+                    port = int(v)
+                    if not (1 <= port <= 65535):
+                        raise ValueError("Port must be between 1 and 65535")
+                    return port
+                except ValueError:
+                    raise ValueError("Port must be a valid integer")
+            elif isinstance(v, int):
+                if not (1 <= v <= 65535):
+                    raise ValueError("Port must be between 1 and 65535")
+                return v
+            else:
+                raise ValueError("Port must be an integer or string")
+        elif target_type == RouteTargetType.URL:
+            # Validate URL format
+            if not isinstance(v, str):
+                raise ValueError("URL must be a string")
+            # Allow both internal service names and full URLs
+            if not (v.startswith('http://') or v.startswith('https://')):
+                # For internal services, prepend http://
+                return f"http://{v}"
+            return v
+        return v
+    
     def matches(self, path: str, method: Optional[str] = None) -> bool:
         """Check if this route matches the given path and method."""
         if not self.enabled:
@@ -58,9 +92,17 @@ class Route(BaseModel):
         
         # Check path
         if self.is_regex:
-            return bool(re.match(self.path_pattern, path))
+            result = bool(re.match(self.path_pattern, path))
         else:
-            return path.startswith(self.path_pattern)
+            result = path.startswith(self.path_pattern)
+        
+        # Log for debugging
+        import logging
+        logger = logging.getLogger(__name__)
+        if self.path_pattern == "/.well-known/oauth-authorization-server":
+            logger.info(f"Route match check: path='{path}' pattern='{self.path_pattern}' result={result}")
+        
+        return result
     
     def to_redis(self) -> str:
         """Convert to JSON for Redis storage."""
@@ -175,3 +217,35 @@ OAUTH_ROUTES = [
         "description": "Token introspection"
     }
 ]
+
+
+def get_applicable_routes(storage, proxy_config: 'ProxyTarget') -> List[Route]:
+    """Get routes applicable to a specific proxy based on its configuration."""
+    # Load all routes from storage
+    routes = []
+    for key in storage.redis_client.scan_iter(match="route:*"):
+        # Skip priority and unique index keys
+        if key.startswith("route:priority:") or key.startswith("route:unique:"):
+            continue
+        route_data = storage.redis_client.get(key)
+        if route_data:
+            try:
+                route = Route.from_redis(route_data)
+                if route.enabled:
+                    routes.append(route)
+            except Exception:
+                pass
+    
+    # Sort by priority (higher first)
+    routes.sort(key=lambda r: r.priority, reverse=True)
+    
+    # Apply route filtering based on route_mode
+    if proxy_config.route_mode == "none":
+        # No routes apply
+        return []
+    elif proxy_config.route_mode == "selective":
+        # Only enabled routes apply
+        return [r for r in routes if r.route_id in proxy_config.enabled_routes]
+    else:  # route_mode == "all" (default)
+        # All routes except disabled ones
+        return [r for r in routes if r.route_id not in proxy_config.disabled_routes]
