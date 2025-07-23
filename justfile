@@ -299,12 +299,19 @@ cert-list token="":
     fi
     
     # Get certificates with auth
-    response=$(curl -sL "${BASE_URL}/certificates" -H "Authorization: Bearer $token_value")
+    response=$(curl -sL "${BASE_URL}/certificates/" -H "Authorization: Bearer $token_value")
     
     # Format as table
     echo "=== Certificates ==="
-    echo "$response" | jq -r '.[] | [.cert_name, (.domains | join(",")), .status, .expires_at[0:10]] | @tsv' | \
-        column -t -s $'\t' -N "Name,Domains,Status,Expires"
+    echo "$response" | jq -r '.[] | [
+        .cert_name, 
+        (.domains | join(",")), 
+        .status, 
+        .expires_at[0:10], 
+        (if .acme_directory_url | contains("staging") then "Staging" else "Production" end)
+    ] | @tsv' | \
+        column -t -s $'\t' -N "Name,Domains,Status,Expires,Environment" | \
+        awk 'NR==1 {print $0} NR>1 {if ($NF == "Staging") {print "\033[33m" $0 "\033[0m"} else if ($NF == "Production") {print "\033[32m" $0 "\033[0m"} else {print $0}}'
 
 # Show certificate details
 cert-show name token="" pem="false":
@@ -1140,6 +1147,24 @@ mcp-setup:
     echo "Testing connection..."
     just token-test
 
+# Show available echo server URLs
+@mcp-client-servers:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Available MCP test servers:"
+    echo ""
+    echo "1. Stateless echo server:"
+    echo "   URL: https://echo-stateless.${BASE_DOMAIN}/mcp"
+    echo "   Command: just mcp-client-token-generate \"https://echo-stateless.${BASE_DOMAIN}/mcp\""
+    echo ""
+    echo "2. Stateful echo server:"
+    echo "   URL: https://echo-stateful.${BASE_DOMAIN}/mcp"
+    echo "   Command: just mcp-client-token-generate \"https://echo-stateful.${BASE_DOMAIN}/mcp\""
+    echo ""
+    echo "To use a specific server:"
+    echo "  MCP_SERVER_URL=<server-url> just mcp-client-run"
+
 # Generate tokens for both echo servers
 @mcp-client-tokens-all:
     #!/usr/bin/env bash
@@ -1150,10 +1175,17 @@ mcp-setup:
     # Stateless echo server
     echo ""
     echo "1. Stateless echo server (https://echo-stateless.${BASE_DOMAIN}/mcp):"
+    echo "   Server URL: https://echo-stateless.${BASE_DOMAIN}/mcp"
+    echo ""
     just mcp-client-token-generate "https://echo-stateless.${BASE_DOMAIN}/mcp"
     
+    # Add a separator and wait to ensure output is complete
+    echo ""
+    echo "---"
     echo ""
     echo "2. Stateful echo server (https://echo-stateful.${BASE_DOMAIN}/mcp):"
+    echo "   Server URL: https://echo-stateful.${BASE_DOMAIN}/mcp"
+    echo ""
     echo "To test with stateful server, run:"
     echo "  MCP_SERVER_URL=https://echo-stateful.${BASE_DOMAIN}/mcp just mcp-client-run"
 
@@ -1169,9 +1201,16 @@ mcp-setup:
 @mcp-client-reset:
     cd mcp-streamablehttp-client && just token-reset
 
-# Run MCP client in proxy mode
+# Show available MCP tools
 @mcp-client-run:
-    cd mcp-streamablehttp-client && just run
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "Fetching available MCP tools from ${MCP_SERVER_URL:-configured server}..."
+    echo ""
+    
+    # Just use the built-in list-tools command
+    cd mcp-streamablehttp-client && pixi run mcp-streamablehttp-client --list-tools
 
 # Execute command via MCP client
 @mcp-client-exec command:
