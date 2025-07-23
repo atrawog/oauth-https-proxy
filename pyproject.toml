@@ -82,3 +82,16 @@ python_files = ["test_*.py"]
 python_classes = ["Test*"]
 python_functions = ["test_*"]
 asyncio_mode = "auto"
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "docker: marks tests that require Docker services",
+    "slow: marks tests as slow running",
+    "basic: marks basic functionality tests",
+    "certificates: marks certificate management tests",
+    "proxy: marks proxy management tests", 
+    "tokens: marks token management tests",
+    "oauth: marks OAuth authentication tests",
+    "routes: marks route management tests",
+    "instances: marks instance management tests",
+    "requires_auth: marks tests that require authentication token"
+]

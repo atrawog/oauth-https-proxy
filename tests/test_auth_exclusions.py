@@ -3,8 +3,7 @@
 import pytest
 import httpx
 import os
-from ..src.proxy.auth_exclusions import DEFAULT_AUTH_EXCLUSIONS, merge_exclusions
-
+from src.proxy.auth_exclusions import DEFAULT_AUTH_EXCLUSIONS, merge_exclusions
 
 def test_default_exclusions():
     """Test that default exclusions include all required OAuth/MCP endpoints."""
@@ -20,7 +19,6 @@ def test_default_exclusions():
     
     for endpoint in required_endpoints:
         assert endpoint in DEFAULT_AUTH_EXCLUSIONS, f"{endpoint} should be in default exclusions"
-
 
 def test_merge_exclusions():
     """Test merging custom exclusions with defaults."""
@@ -43,7 +41,6 @@ def test_merge_exclusions():
     merged_dup = merge_exclusions(custom_with_dup)
     assert merged_dup.count("/jwks") == 1
 
-
 @pytest.mark.asyncio
 async def test_oauth_discovery_endpoint_accessible():
     """Test that OAuth discovery endpoint is accessible without authentication."""
@@ -51,7 +48,7 @@ async def test_oauth_discovery_endpoint_accessible():
     test_domain = os.getenv("TEST_DOMAIN", "echo-stateful.atradev.org")
     
     if "localhost" in base_url:
-        pytest.skip("Test requires real domain setup")
+        assert False, "FAILURE: Test requires real domain setup"
     
     # Test OAuth authorization server metadata endpoint
     async with httpx.AsyncClient() as client:
@@ -78,7 +75,6 @@ async def test_oauth_discovery_endpoint_accessible():
         assert response.status_code != 401, \
             f"MCP metadata endpoint should not require authentication, got {response.status_code}"
 
-
 @pytest.mark.asyncio
 async def test_protected_endpoint_requires_auth():
     """Test that non-excluded endpoints still require authentication."""
@@ -86,7 +82,7 @@ async def test_protected_endpoint_requires_auth():
     test_domain = os.getenv("TEST_DOMAIN", "echo-stateful.atradev.org")
     
     if "localhost" in base_url:
-        pytest.skip("Test requires real domain setup")
+        assert False, "FAILURE: Test requires real domain setup"
     
     async with httpx.AsyncClient() as client:
         # Regular endpoints should still require auth

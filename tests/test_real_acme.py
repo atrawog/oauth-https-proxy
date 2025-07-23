@@ -18,7 +18,6 @@ assert TEST_EMAIL, "TEST_EMAIL not set - must be loaded from .env via just"
 assert ACME_STAGING_URL, "ACME_STAGING_URL not set - must be loaded from .env via just"
 assert TEST_BASE_URL, "TEST_BASE_URL not set - must be loaded from .env via just"
 
-
 class TestRealACMEIntegration:
     """REAL tests against Let's Encrypt staging - NO MOCKS!"""
     
@@ -28,8 +27,12 @@ class TestRealACMEIntegration:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
         return f"test-cert-{timestamp}"
     
-    def test_real_certificate_generation(self, http_client: httpx.Client, cert_name: str):
-        """Test REAL certificate generation with Let's Encrypt staging."""
+    @pytest.fixture(scope="class")
+    def real_certificate(self, http_client: httpx.Client, cert_name: str, auth_token):
+        """Create a real certificate and clean up after all tests."""
+        # Get auth token from fixture
+        token = auth_token()  # Call it since it's not in the fixture params
+        
         # Request real certificate
         request_data = {
             "domain": TEST_DOMAIN,
@@ -39,10 +42,30 @@ class TestRealACMEIntegration:
         }
         
         print(f"\nRequesting REAL certificate for {TEST_DOMAIN}...")
-        response = http_client.post("/certificates", json=request_data, timeout=120.0)
+        response = http_client.post(
+            "/certificates", 
+            json=request_data, 
+            headers={"Authorization": f"Bearer {token}"},
+            timeout=120.0
+        )
         
-        # This should succeed if DNS is properly configured
-        assert response.status_code == 200, f"Failed to create certificate: {response.text}"
+        # FAIL HARD if creation doesn't work
+        assert response.status_code == 200, f"Failed to create real certificate: {response.status_code} - {response.text}"
+        
+        yield cert_name
+        
+        # Cleanup after all tests - FAIL HARD on cleanup errors
+        cleanup_response = http_client.delete(
+            f"/certificates/{cert_name}",
+            headers={"Authorization": f"Bearer {token}"}
+        )
+        assert cleanup_response.status_code in [200, 204], f"Cleanup failed: {cleanup_response.status_code}"
+    
+    def test_real_certificate_generation(self, http_client: httpx.Client, real_certificate: str):
+        """Test REAL certificate generation with Let's Encrypt staging."""
+        # Certificate is already created by fixture, just verify it
+        response = http_client.get(f"/certificates/{real_certificate}")
+        assert response.status_code == 200
         
         cert_data = response.json()
         assert cert_data["domains"] == [TEST_DOMAIN]
@@ -53,11 +76,9 @@ class TestRealACMEIntegration:
         assert cert_data["fullchain_pem"].startswith("-----BEGIN CERTIFICATE-----")
         assert cert_data["private_key_pem"].startswith("-----BEGIN PRIVATE KEY-----")
         
-        print(f"✓ Certificate successfully generated!")
+        print(f"✓ Certificate successfully verified!")
         print(f"  Expires: {cert_data['expires_at']}")
         print(f"  Fingerprint: {cert_data['fingerprint']}")
-        
-        return cert_name
     
     def test_challenge_endpoint_during_generation(self, http_client: httpx.Client):
         """Test that challenge endpoint works during real ACME flow."""
@@ -66,27 +87,21 @@ class TestRealACMEIntegration:
         response = http_client.get("/.well-known/acme-challenge/test-token")
         assert response.status_code == 404
     
-    def test_certificate_retrieval(self, http_client: httpx.Client, cert_name: str):
+    def test_certificate_retrieval(self, http_client: httpx.Client, real_certificate: str):
         """Test retrieving the generated certificate."""
-        # First generate a certificate
-        cert_name = self.test_real_certificate_generation(http_client, cert_name)
-        
-        # Now retrieve it
-        response = http_client.get(f"/certificates/{cert_name}")
+        # Certificate is already created by fixture
+        response = http_client.get(f"/certificates/{real_certificate}")
         assert response.status_code == 200
         
         cert_data = response.json()
         assert cert_data["domains"] == [TEST_DOMAIN]
         assert cert_data["status"] == "active"
     
-    def test_certificate_renewal(self, http_client: httpx.Client, cert_name: str):
+    def test_certificate_renewal(self, http_client: httpx.Client, real_certificate: str):
         """Test renewing a real certificate."""
-        # First generate a certificate
-        cert_name = self.test_real_certificate_generation(http_client, cert_name)
-        
-        # Now renew it
-        print(f"\nRenewing certificate {cert_name}...")
-        response = http_client.post(f"/certificates/{cert_name}/renew", timeout=120.0)
+        # Certificate is already created by fixture
+        print(f"\nRenewing certificate {real_certificate}...")
+        response = http_client.post(f"/certificates/{real_certificate}/renew", timeout=120.0)
         
         assert response.status_code == 200
         renewed_cert = response.json()
@@ -95,10 +110,9 @@ class TestRealACMEIntegration:
         
         print(f"✓ Certificate successfully renewed!")
     
-    def test_list_certificates_includes_real_cert(self, http_client: httpx.Client, cert_name: str):
+    def test_list_certificates_includes_real_cert(self, http_client: httpx.Client, real_certificate: str):
         """Test that real certificate appears in list."""
-        # First generate a certificate
-        cert_name = self.test_real_certificate_generation(http_client, cert_name)
+        # Certificate is already created by fixture
         
         # List all certificates
         response = http_client.get("/certificates")
@@ -116,7 +130,6 @@ class TestRealACMEIntegration:
                 assert cert["status"] == "active"
                 break
     
-
 
 class TestRealDomainValidation:
     """Test with multiple real subdomains."""
@@ -148,7 +161,6 @@ class TestRealDomainValidation:
                 print(f"✗ Failed for {subdomain}: {response.text}")
                 # Continue testing other domains
     
-
 
 class TestRealProduction:
     """Tests against real Let's Encrypt production (use sparingly!)."""

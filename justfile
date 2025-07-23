@@ -603,10 +603,16 @@ proxy-delete hostname token="" delete-cert="false" force="false":
 # TESTING COMMANDS
 # ============================================================================
 
-# Run basic tests
-test:
-    @echo "Running basic API tests..."
-    @just health
+# Run tests (optionally specify test files)
+test *files="tests/test_health.py":
+    #!/usr/bin/env bash
+    if [ "$#" -eq 0 ]; then
+        echo "Running basic API tests..."
+        docker exec {{container_name}} pixi run pytest tests/test_health.py -v
+    else
+        echo "Running specified tests: $@"
+        docker exec {{container_name}} pixi run pytest "$@" -v
+    fi
 
 # Run comprehensive test suite
 test-all:
@@ -623,6 +629,76 @@ test-proxy-basic:
 # Run sidecar tests with coverage
 test-sidecar-coverage:
     docker exec {{container_name}} pixi run pytest tests/test_sidecar_coverage.py::test_all_with_json_report -v
+
+# Test token management
+test-tokens:
+    docker exec {{container_name}} pixi run pytest tests/test_tokens.py -v
+
+# Test all proxy operations
+test-proxy-all:
+    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v
+
+# Test proxy authentication
+test-proxy-auth:
+    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "TestProxyAuthentication"
+
+# Test OAuth functionality
+test-auth token="${ADMIN_TOKEN}":
+    docker exec {{container_name}} pixi run pytest tests/test_oauth.py -v
+
+# Test OAuth flow for a specific hostname
+test-auth-flow hostname:
+    @echo "Testing OAuth flow for {{hostname}}..."
+    @echo "This test would validate the complete OAuth flow"
+    docker exec {{container_name}} pixi run pytest tests/test_oauth.py::TestOAuthFlow::test_complete_flow -v --hostname={{hostname}}
+
+# Test route management
+test-routes:
+    docker exec {{container_name}} pixi run pytest tests/test_routes.py -v
+
+# Test instance management
+test-instances:
+    docker exec {{container_name}} pixi run pytest tests/test_instances.py -v
+
+# Test with specific marks
+test-mark mark:
+    docker exec {{container_name}} pixi run pytest tests/ -v -m {{mark}}
+
+# Test MCP functionality
+test-mcp:
+    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py -v
+
+# Test OAuth status API
+test-oauth-status-api:
+    docker exec {{container_name}} pixi run pytest tests/test_oauth.py::TestOAuthStatus -v
+
+# Test WebSocket proxy
+test-websocket-proxy:
+    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "websocket"
+
+# Test streaming proxy
+test-streaming-proxy:
+    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "streaming"
+
+# Test multi-domain certificates
+test-multi-domain:
+    docker exec {{container_name}} pixi run pytest tests/test_certificates.py::TestMultiDomainCertificates -v
+
+# Test proxy routes
+test-proxy-routes:
+    docker exec {{container_name}} pixi run pytest tests/test_routes.py::TestProxyRouteControl -v
+
+# Test MCP compliance
+test-mcp-compliance:
+    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py::TestMCPProtocolCompliance -v
+
+# Test resource indicators
+test-resource-indicators:
+    docker exec {{container_name}} pixi run pytest tests/test_oauth.py::TestMCPResourceManagement -v
+
+# Test audience validation  
+test-audience-validation:
+    docker exec {{container_name}} pixi run pytest tests/test_oauth.py -v -k "audience"
 
 # ============================================================================
 # UTILITY COMMANDS
@@ -811,12 +887,8 @@ oauth-test-tokens server-url:
 
 # Test MCP client authentication
 mcp-test-auth:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    cd mcp-streamablehttp-client
-    
-    echo "Testing MCP client authentication..."
-    pixi run mcp-streamablehttp-client --test-auth
+    @echo "Testing MCP client authentication..."
+    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py::TestMCPClient::test_oauth_client_registration -v
 
 # List tools available on MCP server
 mcp-list-tools:
@@ -872,22 +944,8 @@ mcp-test-echo type="stateful":
 
 # Run full MCP client test suite
 mcp-test-all:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "Running full MCP client test suite..."
-    echo ""
-    
-    # Test stateful echo server
-    echo "1. Testing stateful echo server..."
-    just mcp-test-echo stateful
-    
-    echo ""
-    echo "2. Testing stateless echo server..."
-    just mcp-test-echo stateless
-    
-    echo ""
-    echo "✅ All MCP client tests completed!"
+    @echo "Running full MCP client test suite..."
+    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py -v -m integration
 
 # Instance Management Commands
 # List all registered instances

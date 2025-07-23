@@ -84,3 +84,11 @@ def cert_request_data(test_domain, test_email):
         "cert_name": "test-cert",
         "acme_directory_url": ACME_STAGING_URL
     }
+
+
+@pytest.fixture
+def auth_token():
+    """Provide authentication token for API requests."""
+    token = os.getenv("ADMIN_TOKEN")
+    assert token, "ADMIN_TOKEN not set - must be loaded from .env via just"
+    return token

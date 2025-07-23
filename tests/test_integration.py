@@ -5,7 +5,6 @@ import time
 import pytest
 import httpx
 
-
 class TestHealthCheck:
     """Test health check functionality."""
     
@@ -25,7 +24,6 @@ class TestHealthCheck:
         assert data["redis"] == "healthy"
         assert isinstance(data["scheduler"], bool)
         assert isinstance(data["certificates_loaded"], int)
-
 
 class TestCertificateAPI:
     """Test certificate management API."""
@@ -63,7 +61,6 @@ class TestCertificateAPI:
             assert "fullchain_pem" in data
             assert "private_key_pem" in data
 
-
 class TestACMEChallenge:
     """Test ACME challenge endpoint."""
     
@@ -89,43 +86,8 @@ class TestACMEChallenge:
         # Should return 404 for non-existent challenge
         assert response.status_code == 404
 
-
-class TestRedisStorage:
-    """Test Redis storage functionality."""
-    
-    def test_redis_connectivity(self, redis_client):
-        """Test Redis is accessible."""
-        assert redis_client.ping() is True
-    
-    def test_certificate_storage(self, redis_client):
-        """Test storing and retrieving certificate data."""
-        import json
-        from datetime import datetime, timezone
-        
-        cert_data = {
-            "domains": ["test.example.com"],
-            "email": "test@example.com",
-            "acme_directory_url": "https://acme-staging-v02.api.letsencrypt.org/directory",
-            "status": "active",
-            "expires_at": datetime.now(timezone.utc).isoformat(),
-            "issued_at": datetime.now(timezone.utc).isoformat(),
-            "fingerprint": "sha256:test",
-            "fullchain_pem": "-----BEGIN CERTIFICATE-----\ntest\n-----END CERTIFICATE-----",
-            "private_key_pem": "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----"
-        }
-        
-        # Store
-        key = "cert:test-cert"
-        redis_client.set(key, json.dumps(cert_data))
-        
-        # Retrieve
-        stored = redis_client.get(key)
-        assert stored is not None
-        
-        retrieved = json.loads(stored)
-        assert retrieved["domains"] == cert_data["domains"]
-        assert retrieved["email"] == cert_data["email"]
-
+# REMOVED TestRedisStorage class - we should NEVER test internal storage directly!
+# All tests must go through the API endpoints only.
 
 class TestDockerServices:
     """Test Docker service health."""

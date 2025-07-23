@@ -107,6 +107,9 @@ class RedisStorage:
         try:
             certificates = []
             for key in self.redis_client.scan_iter(match="cert:*"):
+                # Skip domain mappings (cert:domain:*)
+                if key.startswith("cert:domain:"):
+                    continue
                 cert_name = key.split(":", 1)[1]
                 cert = self.get_certificate(cert_name)
                 if cert:
@@ -158,6 +161,9 @@ class RedisStorage:
             threshold = datetime.now(timezone.utc) + timedelta(days=days)
             
             for key in self.redis_client.scan_iter(match="cert:*"):
+                # Skip domain mappings (cert:domain:*)
+                if key.startswith("cert:domain:"):
+                    continue
                 cert_name = key.split(":", 1)[1]
                 cert = self.get_certificate(cert_name)
                 
@@ -247,7 +253,14 @@ class RedisStorage:
             
             # Store by hash (for auth)
             auth_key = f"auth:token:{token_hash}"
-            result1 = self.redis_client.set(auth_key, json.dumps(data))
+            try:
+                json_data = json.dumps(data)
+                logger.debug(f"Storing auth key {auth_key} with data length: {len(json_data)}")
+                result1 = self.redis_client.set(auth_key, json_data)
+                logger.debug(f"Stored auth key {auth_key}: {result1}")
+            except Exception as e:
+                logger.error(f"Failed to store auth key {auth_key}: {e}")
+                raise
             
             # Store by name (for management)
             name_key = f"token:{name}"
@@ -258,8 +271,18 @@ class RedisStorage:
                 "cert_email": cert_email or "",
                 "created_at": data["created_at"]
             })
+            logger.debug(f"Stored name key {name_key}: {result2}")
             
-            return result1 and result2
+            # Verify storage
+            auth_check = self.redis_client.get(auth_key)
+            name_check = self.redis_client.hgetall(name_key)
+            logger.debug(f"Auth key verification: {auth_check is not None}")
+            logger.debug(f"Name key verification: {bool(name_check)}")
+            
+            # Both operations should succeed
+            success = bool(result1) and (result2 >= 0)
+            logger.info(f"Token storage for '{name}' success: {success}")
+            return success
         except RedisError as e:
             logger.error(f"Failed to store API token: {e}")
             return False
@@ -352,6 +375,9 @@ class RedisStorage:
                     cert_cursor, match="cert:*", count=100
                 )
                 for cert_key in cert_keys:
+                    # Skip domain mappings (cert:domain:*)
+                    if cert_key.startswith("cert:domain:"):
+                        continue
                     cert_json = self.redis_client.get(cert_key)
                     if cert_json:
                         cert = json.loads(cert_json)
@@ -665,6 +691,9 @@ class RedisStorage:
         try:
             count = 0
             for key in self.redis_client.scan_iter(match="cert:*"):
+                # Skip domain mappings (cert:domain:*)
+                if key.startswith("cert:domain:"):
+                    continue
                 cert_data = self.redis_client.get(key)
                 if cert_data:
                     cert_dict = json.loads(cert_data)
@@ -695,6 +724,9 @@ class RedisStorage:
         try:
             names = []
             for key in self.redis_client.scan_iter(match="cert:*"):
+                # Skip domain mappings (cert:domain:*)
+                if key.startswith("cert:domain:"):
+                    continue
                 cert_data = self.redis_client.get(key)
                 if cert_data:
                     cert_dict = json.loads(cert_data)

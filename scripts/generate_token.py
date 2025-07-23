@@ -30,7 +30,7 @@ def main():
     
     # Store in Redis with full token
     storage = RedisStorage(redis_url)
-    if storage.store_api_token(token_hash, name, token, cert_email):
+    if storage.store_api_token(name, token, cert_email):
         print(f"Token generated successfully!")
         print(f"Name: {name}")
         print(f"Token: {token}")

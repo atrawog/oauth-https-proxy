@@ -33,9 +33,24 @@ class InstanceCreateRequest(BaseModel):
     @validator('target_url')
     def validate_target_url(cls, v):
         """Validate target URL."""
+        from urllib.parse import urlparse
+        
+        # If it doesn't start with http:// or https://, prepend http://
         if not v.startswith(('http://', 'https://')):
-            # For internal services, prepend http://
-            return f"http://{v}"
+            v = f"http://{v}"
+        
+        # Validate the URL
+        try:
+            result = urlparse(v)
+            # Check if scheme and netloc are present
+            if not all([result.scheme, result.netloc]):
+                raise ValueError("Invalid URL format")
+            # Check for spaces in the URL
+            if ' ' in v:
+                raise ValueError("URL cannot contain spaces")
+        except Exception:
+            raise ValueError("Invalid URL format")
+        
         return v
 
 
@@ -62,7 +77,7 @@ def create_router(storage) -> APIRouter:
             # Check if instance already exists
             existing = storage.redis_client.get(f"instance_url:{request.name}")
             if existing:
-                raise HTTPException(400, f"Instance '{request.name}' already exists")
+                raise HTTPException(409, f"Instance '{request.name}' already exists")
             
             # Create instance info
             instance_info = {

@@ -26,26 +26,32 @@ def create_router(storage, cert_manager):
             cert_request = CertificateRequest(**request)
             cert_request.cert_name = f"proxy-{cert_request.domain.replace('.', '-')}"
             
-            # Store token ownership
+            # Check if certificate with this name already exists
             cert = cert_manager.get_certificate(cert_request.cert_name)
-            if not cert:
-                from ...certmanager.models import Certificate
-                cert = Certificate(
-                    cert_name=cert_request.cert_name,
-                    domains=[cert_request.domain],
-                    email=cert_request.email,
-                    acme_directory_url=cert_request.acme_directory_url,
-                    status="pending",
-                    owner_token_hash=token_info['hash'],
-                    created_by=token_info['name']
+            if cert:
+                raise HTTPException(
+                    409,
+                    f"Certificate '{cert_request.cert_name}' already exists"
                 )
-                if not storage.store_certificate(cert_request.cert_name, cert):
-                    # Storage rejected due to domain conflict
-                    raise HTTPException(
-                        409,
-                        f"A certificate already exists for domain '{cert_request.domain}'. "
-                        f"Each domain can only have one active certificate."
-                    )
+            
+            # Create new certificate
+            from ...certmanager.models import Certificate
+            cert = Certificate(
+                cert_name=cert_request.cert_name,
+                domains=[cert_request.domain],
+                email=cert_request.email,
+                acme_directory_url=cert_request.acme_directory_url,
+                status="pending",
+                owner_token_hash=token_info['hash'],
+                created_by=token_info['name']
+            )
+            if not storage.store_certificate(cert_request.cert_name, cert):
+                # Storage rejected due to domain conflict
+                raise HTTPException(
+                    409,
+                    f"A certificate already exists for domain '{cert_request.domain}'. "
+                    f"Each domain can only have one active certificate."
+                )
             
             # Start async generation
             from ...certmanager.async_acme import generate_certificate_async
@@ -60,6 +66,9 @@ def create_router(storage, cert_manager):
                 "cert_name": cert_request.cert_name,
                 "status": "pending"
             }
+        except HTTPException:
+            # Re-raise HTTPException without modification
+            raise
         except Exception as e:
             logger.error(f"Failed to create certificate: {e}")
             raise HTTPException(status_code=400, detail=str(e))
@@ -111,8 +120,10 @@ def create_router(storage, cert_manager):
                 )
             
             # Start async generation
+            from ...certmanager.async_acme import generate_certificate_async
             background_tasks.add_task(
-                cert_manager.generate_multi_domain_certificate_async,
+                generate_certificate_async,
+                cert_manager,
                 cert_request
             )
             
@@ -122,6 +133,9 @@ def create_router(storage, cert_manager):
                 "domains": cert_request.domains,
                 "status": "pending"
             }
+        except HTTPException:
+            # Re-raise HTTPException without modification
+            raise
         except Exception as e:
             logger.error(f"Failed to create multi-domain certificate: {e}")
             raise HTTPException(status_code=400, detail=str(e))

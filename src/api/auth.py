@@ -15,7 +15,7 @@ ADMIN_TOKEN = os.environ.get("ADMIN_TOKEN")
 
 def hash_token(token: str) -> str:
     """SHA256 hash of token for secure storage."""
-    return hashlib.sha256(token.encode()).hexdigest()
+    return f"sha256:{hashlib.sha256(token.encode()).hexdigest()}"
 
 
 def generate_token() -> str:

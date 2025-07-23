@@ -72,8 +72,15 @@ def create_router(storage):
         token_value = f"acm_{secrets.token_urlsafe(32)}"
         
         # Store token
-        if not storage.store_api_token(request.name, token_value, cert_email=request.cert_email):
+        result = storage.store_api_token(request.name, token_value, cert_email=request.cert_email)
+        logger.info(f"Token storage result for '{request.name}': {result}")
+        
+        if not result:
             raise HTTPException(500, "Failed to create token")
+        
+        # Verify token was stored correctly
+        token_data = storage.get_api_token_by_name(request.name)
+        logger.info(f"Token verification for '{request.name}': {token_data}")
         
         logger.info(f"Created token '{request.name}' with email {request.cert_email}")
         
@@ -92,8 +99,16 @@ def create_router(storage):
         tokens = []
         
         # Get all token keys by scanning for name keys
-        for key in storage.redis_client.scan_iter(match="token:name:*"):
-            token_name = key.split(":")[-1]
+        for key in storage.redis_client.scan_iter(match="token:*"):
+            # Decode byte string if needed
+            if isinstance(key, bytes):
+                key = key.decode('utf-8')
+            
+            # Skip if it's not a direct token key (e.g., skip token:foo:bar patterns)
+            parts = key.split(":")
+            if len(parts) != 2:
+                continue
+            token_name = parts[1]
             token_data = storage.get_api_token_by_name(token_name)
             
             if token_data:
@@ -121,6 +136,55 @@ def create_router(storage):
         # Sort by name
         tokens.sort(key=lambda t: t.name)
         return tokens
+    
+    # Keep existing endpoints for backward compatibility
+    # These must be defined BEFORE /{name} to avoid route conflicts
+    class EmailUpdateRequest(BaseModel):
+        """Request model for updating token email."""
+        email: EmailStr
+
+    @router.put("/email")
+    async def update_token_email(
+        request: EmailUpdateRequest,
+        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    ):
+        """Update the certificate email for the current token."""
+        token_hash, token_name, current_email = token_info
+        
+        new_email = request.email
+        
+        # Get full token info
+        token_data = storage.get_api_token(token_hash)
+        if not token_data:
+            raise HTTPException(404, "Token not found")
+        
+        # Update cert_email
+        token_data['cert_email'] = new_email
+        
+        # Store both by hash and name
+        if not storage.store_api_token(token_data['name'], token_data['token'], cert_email=new_email):
+            raise HTTPException(500, "Failed to update token email")
+        
+        logger.info(f"Updated cert_email for token {token_name} to {new_email}")
+        
+        return {
+            "message": "Certificate email updated successfully",
+            "name": token_name,
+            "cert_email": new_email
+        }
+    
+    @router.get("/info")
+    async def get_token_info(
+        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    ):
+        """Get information about the current token."""
+        token_hash, token_name, cert_email = token_info
+        
+        return {
+            "name": token_name,
+            "cert_email": cert_email,
+            "hash_preview": token_hash[:16] + "..."
+        }
     
     @router.get("/{name}", response_model=TokenDetail)
     async def get_token(
@@ -253,57 +317,6 @@ def create_router(storage):
                 })
         
         return proxies
-    
-    # Keep existing endpoints for backward compatibility
-    @router.put("/email")
-    async def update_token_email(
-        request: Request,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
-    ):
-        """Update the certificate email for the current token."""
-        token_hash, token_name, current_email = token_info
-        
-        # Parse request body
-        try:
-            body = await request.json()
-            new_email = body.get("email")
-            if not new_email:
-                raise HTTPException(400, "Email field is required")
-        except Exception as e:
-            raise HTTPException(400, f"Invalid request body: {e}")
-        
-        # Get full token info
-        token_data = storage.get_api_token(token_hash)
-        if not token_data:
-            raise HTTPException(404, "Token not found")
-        
-        # Update cert_email
-        token_data['cert_email'] = new_email
-        
-        # Store both by hash and name
-        if not storage.store_api_token(token_data['name'], token_data['token'], cert_email=new_email):
-            raise HTTPException(500, "Failed to update token email")
-        
-        logger.info(f"Updated cert_email for token {token_name} to {new_email}")
-        
-        return {
-            "message": "Certificate email updated successfully",
-            "name": token_name,
-            "cert_email": new_email
-        }
-    
-    @router.get("/info")
-    async def get_token_info(
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
-    ):
-        """Get information about the current token."""
-        token_hash, token_name, cert_email = token_info
-        
-        return {
-            "name": token_name,
-            "cert_email": cert_email,
-            "hash_preview": token_hash[:16] + "..."
-        }
     
     # Special endpoint for admin token generation/update
     @router.post("/admin")

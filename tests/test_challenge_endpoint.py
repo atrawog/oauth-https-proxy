@@ -2,9 +2,7 @@
 
 import httpx
 import pytest
-from acme_certmanager.storage import RedisStorage
-from acme_certmanager.models import ChallengeToken
-
+from src.storage.redis_storage import RedisStorage, ChallengeToken
 
 def test_challenge_storage_and_retrieval(http_client: httpx.Client):
     """Test that challenges can be stored and retrieved."""
@@ -28,20 +26,17 @@ def test_challenge_storage_and_retrieval(http_client: httpx.Client):
     # Clean up
     storage.delete_challenge(test_token)
 
-
 def test_challenge_not_found(http_client: httpx.Client):
     """Test that non-existent challenges return 404."""
     response = http_client.get("/.well-known/acme-challenge/non-existent-token")
     assert response.status_code == 404
     assert response.json() == {"detail": "Challenge not found"}
 
-
 def test_certificate_list_endpoint(http_client: httpx.Client):
     """Test certificate list endpoint."""
     response = http_client.get("/certificates")
     assert response.status_code == 200
     assert isinstance(response.json(), list)
-
 
 def test_health_endpoint(http_client: httpx.Client):
     """Test health check endpoint."""
