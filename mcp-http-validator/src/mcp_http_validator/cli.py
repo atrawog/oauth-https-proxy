@@ -173,49 +173,51 @@ def validate(
         sys.exit(1)
 
 
-def display_terminal_report(report, verbose=False):
+def display_terminal_report(report, verbose=False, show_summary=True):
     """Display compliance report in terminal."""
     # Summary statistics
     result = report.validation_result
-    console.print()
-    console.print("[bold]Test Summary:[/bold]")
-    
-    summary_table = Table(show_header=False, box=None)
-    summary_table.add_column(style="dim")
-    summary_table.add_column()
-    
-    # Determine compliance level color
-    level_colors = {
-        "FULLY_COMPLIANT": "green",
-        "MOSTLY_COMPLIANT": "yellow", 
-        "PARTIALLY_COMPLIANT": "yellow",
-        "MINIMALLY_COMPLIANT": "red",
-        "NON_COMPLIANT": "red",
-        "UNKNOWN": "dim"
-    }
-    level_color = level_colors.get(report.compliance_level, "white")
-    
-    summary_table.add_row("Server:", f"[cyan]{report.server_info.url}[/cyan]")
-    summary_table.add_row("Compliance:", f"[bold {level_color}]{report.compliance_level}[/bold {level_color}]")
-    summary_table.add_row("Total Tests:", str(result.total_tests))
-    summary_table.add_row("Passed:", f"[green]{result.passed_tests}[/green]")
-    summary_table.add_row("Failed:", f"[red]{result.failed_tests}[/red]")
-    if result.skipped_tests > 0:
-        summary_table.add_row("Skipped:", f"[yellow]{result.skipped_tests}[/yellow]")
-    summary_table.add_row("Success Rate:", f"{result.success_rate:.1f}%")
-    summary_table.add_row("Duration:", f"{report.validation_result.duration:.2f}s")
-    
-    # Check for OAuth server discovery
-    oauth_test = next((r for r in result.test_results if r.test_case.id == "oauth-server-discovery"), None)
-    if oauth_test and oauth_test.details:
-        oauth_server = oauth_test.details.get("oauth_server_found")
-        if oauth_server:
-            summary_table.add_row("OAuth Server:", f"[cyan]{oauth_server}[/cyan]")
-    
-    console.print(summary_table)
+    if show_summary:
+        console.print()
+        console.print("[bold]Test Summary:[/bold]")
+        
+        summary_table = Table(show_header=False, box=None)
+        summary_table.add_column(style="dim")
+        summary_table.add_column()
+        
+        # Determine compliance level color
+        level_colors = {
+            "FULLY_COMPLIANT": "green",
+            "MOSTLY_COMPLIANT": "yellow", 
+            "PARTIALLY_COMPLIANT": "yellow",
+            "MINIMALLY_COMPLIANT": "red",
+            "NON_COMPLIANT": "red",
+            "UNKNOWN": "dim"
+        }
+        level_color = level_colors.get(report.compliance_level, "white")
+        
+        summary_table.add_row("Server:", f"[cyan]{report.server_info.url}[/cyan]")
+        summary_table.add_row("Compliance:", f"[bold {level_color}]{report.compliance_level}[/bold {level_color}]")
+        summary_table.add_row("Total Tests:", str(result.total_tests))
+        summary_table.add_row("Passed:", f"[green]{result.passed_tests}[/green]")
+        summary_table.add_row("Failed:", f"[red]{result.failed_tests}[/red]")
+        if result.skipped_tests > 0:
+            summary_table.add_row("Skipped:", f"[yellow]{result.skipped_tests}[/yellow]")
+        summary_table.add_row("Success Rate:", f"{result.success_rate:.1f}%")
+        summary_table.add_row("Duration:", f"{report.validation_result.duration:.2f}s")
+        
+        # Check for OAuth server discovery
+        oauth_test = next((r for r in result.test_results if r.test_case.id == "oauth-server-discovery"), None)
+        if oauth_test and oauth_test.details:
+            oauth_server = oauth_test.details.get("oauth_server_found")
+            if oauth_server:
+                summary_table.add_row("OAuth Server:", f"[cyan]{oauth_server}[/cyan]")
+        
+        console.print(summary_table)
     
     # Test results - show as individual panels for clarity
-    console.print()
+    if show_summary:
+        console.print()
     console.print("[bold]Test Results:[/bold]")
     
     # Show message if OAuth tests were skipped for public server
@@ -685,17 +687,16 @@ def flow(
             # Get credentials for this server
             credentials = env_manager.get_oauth_credentials(mcp_server_url)
             
-            # If force flag is set, clear existing credentials to force re-registration
-            if force and credentials["client_id"]:
-                console.print("[yellow]Force flag set: Clearing existing client credentials[/yellow]")
-                # Clear the credentials so generic flow will register new client
-                env_manager.save_oauth_credentials(
-                    server_url=mcp_server_url,
-                    client_id="",
-                    client_secret="",
-                    registration_token="",
-                )
-                credentials = {"client_id": None, "client_secret": None}
+            # If force flag is set, clear existing tokens (NOT client registration)
+            if force:
+                console.print("[yellow]Force flag set: Clearing existing access tokens[/yellow]")
+                # Clear tokens only, keep client registration
+                server_key = mcp_server_url.replace("https://", "").replace("http://", "").replace("/", "_").replace(".", "_").upper()
+                env_manager.delete(f"OAUTH_ACCESS_TOKEN_{server_key}")
+                env_manager.delete(f"OAUTH_REFRESH_TOKEN_{server_key}")
+                env_manager.delete(f"OAUTH_TOKEN_EXPIRES_AT_{server_key}")
+                # Reload credentials to ensure we don't use cached values
+                credentials = env_manager.get_oauth_credentials(mcp_server_url)
             
             # Check for existing valid token
             if not force:
@@ -798,9 +799,22 @@ def flow(
             config.grant_preference = GrantPreference.CLI  # Try non-interactive grants first
             config.auto_open_browser = True  # Open browser automatically
             
-            # Force public IP strategy when on a server with public IP
-            # This avoids the Chrome "install app" issue with OOB redirect
-            config.redirect_strategy = RedirectStrategy.PUBLIC_IP
+            # Determine redirect strategy based on existing client registration
+            if credentials.get("redirect_uri"):
+                # We have an existing client with a registered redirect URI
+                redirect_uri = credentials["redirect_uri"]
+                if redirect_uri == "urn:ietf:wg:oauth:2.0:oob":
+                    config.redirect_strategy = RedirectStrategy.OOB
+                    console.print("[dim]Using OOB redirect to match existing client registration[/dim]")
+                else:
+                    # Use custom redirect to match the exact registered URI
+                    config.redirect_strategy = RedirectStrategy.CUSTOM
+                    config.custom_redirect_uri = redirect_uri
+                    console.print(f"[dim]Using registered redirect URI: {redirect_uri}[/dim]")
+            else:
+                # No existing client, use public IP strategy for better UX
+                # The generic flow will automatically fall back to OOB if registration fails
+                config.redirect_strategy = RedirectStrategy.PUBLIC_IP
             
             # Create flow handler
             flow = GenericOAuthFlow(
@@ -824,29 +838,11 @@ def flow(
                 console.print("[green]✓[/green] Authentication successful!")
                 console.print(f"  Access token: {access_token[:20]}...")
                 
-                # The generic flow already saved tokens, but let's validate RFC 8707
-                # RFC 8707 validation - Step 2: Token Response
-                console.print()
-                console.print("[bold]RFC 8707 Token Validation:[/bold]")
-                
+                # RFC 8707 validation - concise output
                 token_compliant, token_validation = RFC8707Validator.validate_token_response(
                     access_token,
                     [mcp_server_url]
                 )
-                
-                if token_compliant:
-                    console.print("[green]✓[/green] RFC 8707 compliant: Token includes requested resources in audience")
-                else:
-                    console.print("[red]✗[/red] RFC 8707 VIOLATION: OAuth server did not include requested resources in token")
-                    for error in token_validation["errors"]:
-                        console.print(f"  • {error}")
-                
-                console.print(f"  Token audience: {token_validation['token_audience']}")
-                console.print(f"  Requested: {token_validation['requested_resources']}")
-                
-                # Test MCP server access
-                console.print()
-                console.print("[bold]Testing MCP Server Access:[/bold]")
                 
                 # Create a client to test the token
                 async with OAuthTestClient(
@@ -860,13 +856,6 @@ def flow(
                         access_token,
                     )
                     
-                    if success:
-                        console.print("[green]✓[/green] MCP server accepted the token")
-                    else:
-                        console.print(f"[red]✗[/red] MCP server rejected the token: {error}")
-                        if details.get("www_authenticate"):
-                            console.print(f"  WWW-Authenticate: {details['www_authenticate']}")
-                    
                     # RFC 8707 validation - Step 3: Resource Server Check
                     server_compliant, server_validation = RFC8707Validator.validate_resource_server_check(
                         mcp_server_url,
@@ -874,32 +863,14 @@ def flow(
                         token_validation.get("token_audience", [])
                     )
                     
+                    # Display concise RFC 8707 status
                     console.print()
-                    console.print("[bold]RFC 8707 Resource Server Validation:[/bold]")
-                    
-                    if server_compliant:
-                        console.print("[green]✓[/green] Server properly validates token audience")
+                    if not token_compliant:
+                        console.print(f"[red]✗[/red] RFC 8707 violation: OAuth server didn't include {mcp_server_url} in token audience")
+                    elif not server_compliant:
+                        console.print(f"[red]✗[/red] RFC 8707 violation: MCP server didn't validate audience - {server_validation['errors'][0] if server_validation.get('errors') else 'validation failure'}")
                     else:
-                        console.print("[red]✗[/red] RFC 8707 VIOLATION: Server audience validation failure")
-                        for error in server_validation["errors"]:
-                            console.print(f"  • {error}")
-                        
-                        if server_validation.get("security_risk"):
-                            console.print()
-                            console.print(f"[red bold]  ⚠️  {server_validation['security_risk']}[/red bold]")
-                    
-                    # Generate RFC 8707 compliance report
-                    console.print()
-                    console.print("─" * 60)
-                    # Since we used generic flow, we don't have auth request details
-                    # Just assume the auth request was valid since we got a token
-                    report = RFC8707Validator.generate_report(
-                        True,  # auth_request_valid - we got a token, so it was valid
-                        [mcp_server_url],  # auth_resources - we requested this resource
-                        token_validation,
-                        server_validation
-                    )
-                    console.print(report)
+                        console.print(f"[green]✓[/green] RFC 8707 compliant: Token and server properly validate resource indicators")
                 
             except Exception as e:
                 console.print(f"[red]✗[/red] Authentication error: {e}")
@@ -1572,7 +1543,6 @@ def full(
     all_passed = True
     oauth_passed = None
     validation_passed = None
-    tools_passed = None
     
     # 0. First check if server requires authentication
     async def check_auth_required():
@@ -1781,8 +1751,8 @@ def full(
             checker = ComplianceChecker(validation_result, server_info)
             report = checker.check_compliance()
             
-            # Display report
-            display_terminal_report(report, verbose=verbose)
+            # Display report with full summary
+            display_terminal_report(report, verbose=verbose, show_summary=True)
             
             return report
     
@@ -1793,125 +1763,10 @@ def full(
     
     # OAuth server testing already done above, no need to repeat
     
-    # 6. Run tools testing (skip if already tested in main validation)
-    # Check if tools were already tested in main validation
-    tools_already_tested = False
-    if validation_report and hasattr(validation_report.validation_result, 'test_results'):
-        tools_test = next((r for r in validation_report.validation_result.test_results if r.test_case.id == "mcp-tools"), None)
-        if tools_test and tools_test.status == TestStatus.PASSED:
-            tools_already_tested = True
+    # Tools testing is already included in main validation, no need for separate section
     
-    if tools_already_tested:
-        console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
-        console.print("[green]✓[/green] Tools already tested successfully in main validation")
-        console.print("[dim]Use 'mcp-validate tools' for detailed tool testing[/dim]")
-        tools_passed = True
-    else:
-        console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
-        
-        async def run_tools_validation():
-            async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify) as validator:
-                # Get access token if available
-                validator.access_token = validator.env_manager.get_valid_access_token(mcp_server_url)
-                
-                if not validator.access_token:
-                    console.print("[yellow]No access token found. Some servers may require authentication.[/yellow]")
-                    console.print("Run 'mcp-validate flow' to authenticate if needed.")
-                    console.print()
-                
-                # Try to initialize session
-                console.print("[bold]Initializing MCP session...[/bold]")
-                success, error, init_details = await validator.initialize_mcp_session()
-                
-                if success:
-                    console.print("[green]✓[/green] Session initialized")
-                    server_info = init_details.get("server_info", {})
-                    if server_info:
-                        console.print(f"  Server: {server_info.get('name', 'Unknown')}")
-                        console.print(f"  Version: {server_info.get('version', 'Unknown')}")
-                else:
-                    # Check if this is a protocol version spec violation
-                    if isinstance(init_details, dict) and init_details.get("spec_violation"):
-                        console.print(f"[yellow]⚠[/yellow] Session initialization failed: Server spec violation")
-                        err_msg = init_details.get('error', {}).get('message', '') if isinstance(init_details.get('error'), dict) else ''
-                        if err_msg:
-                            console.print(f"  Server error: {err_msg}")
-                        console.print(f"  [dim]Issue: {init_details.get('spec_violation')}[/dim]")
-                        console.print("  Continuing anyway - some servers may not require initialization")
-                    else:
-                        # Show shortened error for readability
-                        error_msg = str(error)
-                        if len(error_msg) > 200:
-                            error_msg = error_msg[:197] + "..."
-                        console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error_msg}")
-                        console.print("  Continuing anyway - some servers may not require initialization")
-                
-                # List tools
-                console.print()
-                console.print("[bold]Discovering tools...[/bold]")
-                success, error, tools = await validator.list_mcp_tools()
-                
-                if not success:
-                    console.print(f"[red]✗[/red] Failed to list tools: {error}")
-                    return False
-                
-                if not tools:
-                    console.print("[yellow]No tools found on this server[/yellow]")
-                    return True  # Not an error
-                
-                console.print(f"[green]✓[/green] Found {len(tools)} tool(s)")
-                
-                # For full command, just list tools, don't test them
-                console.print("[dim]Run 'mcp-validate tools' to test individual tools[/dim]")
-                
-                return True
-        
-        tools_passed = asyncio.run(run_tools_validation())
-        if not tools_passed:
-            all_passed = False
-    
-    # Test Summary
-    console.print("\n[bold]═══ Test Summary ═══[/bold]")
-    
-    # OAuth Server Status
-    if auth_required:
-        if oauth_server_url:
-            if oauth_passed is not None:
-                if oauth_passed:
-                    console.print("[green]✓[/green] OAuth Server: Compliant with MCP specification")
-                else:
-                    console.print("[red]✗[/red] OAuth Server: Non-compliant with MCP specification")
-            else:
-                console.print("[yellow]⚠[/yellow] OAuth Server: Discovered but not tested")
-        else:
-            console.print("[yellow]⚠[/yellow] OAuth Server: Not discovered (may use different auth method)")
-    else:
-        console.print("[dim]- OAuth Server: Not required (public server)[/dim]")
-    
-    # MCP Validation Status
-    if validation_passed:
-        console.print("[green]✓[/green] MCP Validation: All tests passed")
-    else:
-        console.print("[red]✗[/red] MCP Validation: Some tests failed")
-    
-    # Tools Testing Status
-    if tools_already_tested:
-        console.print("[green]✓[/green] MCP Tools: Tested successfully in main validation")
-    elif tools_passed is not None:
-        if tools_passed:
-            console.print("[green]✓[/green] MCP Tools: Discovery successful")
-        else:
-            console.print("[red]✗[/red] MCP Tools: Testing failed")
-    else:
-        console.print("[dim]- MCP Tools: Not tested[/dim]")
-    
-    # Overall Result
-    console.print()
-    if all_passed:
-        console.print("[bold green]✅ Overall Result: All tests passed![/bold green]")
-    else:
-        console.print("[bold red]❌ Overall Result: Some tests failed[/bold red]")
-        console.print("[dim]Review the detailed results above for more information[/dim]")
+    # Exit with error code if tests failed
+    if not all_passed:
         sys.exit(1)
 
 

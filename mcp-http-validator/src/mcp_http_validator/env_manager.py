@@ -77,6 +77,25 @@ class EnvManager:
                 success = False
         return success
     
+    def delete(self, key: str) -> bool:
+        """Delete a key from .env file.
+        
+        Args:
+            key: Environment variable key to delete
+        
+        Returns:
+            True if successful
+        """
+        try:
+            # set_key with empty value removes the key
+            set_key(str(self.env_file), key, "")
+            # Also remove from current environment
+            if key in os.environ:
+                del os.environ[key]
+            return True
+        except Exception:
+            return False
+    
     def get_oauth_credentials(self, server_url: str) -> Dict[str, Optional[str]]:
         """Get OAuth credentials for a specific server.
         
@@ -93,6 +112,7 @@ class EnvManager:
             "client_id": self.get(f"OAUTH_CLIENT_ID_{server_key}"),
             "client_secret": self.get(f"OAUTH_CLIENT_SECRET_{server_key}"),
             "registration_token": self.get(f"OAUTH_REGISTRATION_TOKEN_{server_key}"),
+            "redirect_uri": self.get(f"OAUTH_REDIRECT_URI_{server_key}"),
         }
     
     def save_oauth_credentials(
@@ -101,6 +121,7 @@ class EnvManager:
         client_id: str,
         client_secret: Optional[str] = None,
         registration_token: Optional[str] = None,
+        redirect_uri: Optional[str] = None,
     ) -> bool:
         """Save OAuth credentials for a specific server.
         
@@ -109,6 +130,7 @@ class EnvManager:
             client_id: OAuth client ID
             client_secret: OAuth client secret
             registration_token: Client registration access token
+            redirect_uri: OAuth redirect URI used during registration
         
         Returns:
             True if successful
@@ -125,6 +147,9 @@ class EnvManager:
         
         if registration_token:
             values[f"OAUTH_REGISTRATION_TOKEN_{server_key}"] = registration_token
+            
+        if redirect_uri:
+            values[f"OAUTH_REDIRECT_URI_{server_key}"] = redirect_uri
         
         return self.update(values)
     
@@ -215,6 +240,7 @@ class EnvManager:
             f"OAUTH_CLIENT_ID_{server_key}",
             f"OAUTH_CLIENT_SECRET_{server_key}",
             f"OAUTH_REGISTRATION_TOKEN_{server_key}",
+            f"OAUTH_REDIRECT_URI_{server_key}",
             f"OAUTH_ACCESS_TOKEN_{server_key}",
             f"OAUTH_TOKEN_EXPIRES_AT_{server_key}",
             f"OAUTH_REFRESH_TOKEN_{server_key}",

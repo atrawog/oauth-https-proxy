@@ -69,6 +69,7 @@ class GenericOAuthFlow:
             self.auth_server_url,
             client_id=credentials.get("client_id"),
             client_secret=credentials.get("client_secret"),
+            redirect_uri=credentials.get("redirect_uri"),
             verify_ssl=verify_ssl,
         ) as client:
             # Ensure client is registered
@@ -124,7 +125,7 @@ class GenericOAuthFlow:
         scope: str
     ) -> bool:
         """Register OAuth client with appropriate redirect URI."""
-        # Determine redirect URI
+        # First try with preferred redirect strategy
         redirect_uri = await self._determine_redirect_uri()
         
         if not self.config.suppress_console:
@@ -137,12 +138,13 @@ class GenericOAuthFlow:
                 scope=scope,
             )
             
-            # Save credentials
+            # Save credentials including redirect URI
             self.env_manager.save_oauth_credentials(
                 server_url=self.mcp_server_url,
                 client_id=client_id,
                 client_secret=client_secret,
                 registration_token=reg_token,
+                redirect_uri=redirect_uri,
             )
             
             # Update client
@@ -150,12 +152,55 @@ class GenericOAuthFlow:
             client.client_secret = client_secret
             client.redirect_uri = redirect_uri
             
+            if not self.config.suppress_console:
+                console.print(f"[green]✓[/green] Client registered with {redirect_uri}")
+            
             return True
             
         except Exception as e:
             if not self.config.suppress_console:
-                console.print(f"[red]Registration failed: {e}[/red]")
-            return False
+                console.print(f"[yellow]Registration failed: {e}[/yellow]")
+            
+            # If we weren't already using OOB, try falling back to it
+            if not redirect_uri.startswith("urn:"):
+                if not self.config.suppress_console:
+                    console.print("[dim]Falling back to out-of-band redirect...[/dim]")
+                
+                redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+                
+                try:
+                    client_id, client_secret, reg_token = await client.register_client(
+                        client_name=f"MCP Validator ({self.mcp_server_url})",
+                        redirect_uris=[redirect_uri],
+                        scope=scope,
+                    )
+                    
+                    # Save credentials including OOB redirect URI
+                    self.env_manager.save_oauth_credentials(
+                        server_url=self.mcp_server_url,
+                        client_id=client_id,
+                        client_secret=client_secret,
+                        registration_token=reg_token,
+                        redirect_uri=redirect_uri,
+                    )
+                    
+                    # Update client
+                    client.client_id = client_id
+                    client.client_secret = client_secret
+                    client.redirect_uri = redirect_uri
+                    
+                    if not self.config.suppress_console:
+                        console.print(f"[green]✓[/green] Client registered with OOB fallback")
+                    
+                    return True
+                    
+                except Exception as e2:
+                    if not self.config.suppress_console:
+                        console.print(f"[red]OOB registration also failed: {e2}[/red]")
+                    return False
+            else:
+                # Already was OOB, can't fall back further
+                return False
     
     async def _determine_redirect_uri(self) -> str:
         """Determine the best redirect URI based on configuration."""
@@ -278,12 +323,29 @@ class GenericOAuthFlow:
         scope: str
     ) -> Optional[OAuthTokenResponse]:
         """Try authorization code grant."""
-        # Update redirect URI
-        redirect_uri = await self._determine_redirect_uri()
-        client.redirect_uri = redirect_uri
+        # Use existing redirect URI from registration, or determine new one
+        if client.redirect_uri:
+            redirect_uri = client.redirect_uri
+        else:
+            redirect_uri = await self._determine_redirect_uri()
+            client.redirect_uri = redirect_uri
         
         # Start callback server if needed
-        if self.callback_server:
+        if redirect_uri and redirect_uri.startswith("http://") and "/callback" in redirect_uri:
+            # Extract host and port from redirect URI
+            from urllib.parse import urlparse
+            parsed = urlparse(redirect_uri)
+            if parsed.hostname and parsed.port:
+                # Create callback server with the exact host/port from registration
+                self.callback_server = OAuthCallbackServer(parsed.hostname, parsed.port)
+                callback_url = self.callback_server.start()
+                if not self.config.suppress_console:
+                    console.print(f"[dim]Callback server: {callback_url}[/dim]")
+            elif self.callback_server:
+                callback_url = self.callback_server.start()
+                if not self.config.suppress_console:
+                    console.print(f"[dim]Callback server: {callback_url}[/dim]")
+        elif self.callback_server:
             callback_url = self.callback_server.start()
             if not self.config.suppress_console:
                 console.print(f"[dim]Callback server: {callback_url}[/dim]")
