@@ -1857,12 +1857,113 @@ def full(
     
     # Run validation directly
     async def run_validation_test():
+        # Track results for building report at the end
+        test_results = []
+        
+        async def display_detailed_test_result(result: TestResult):
+            """Display detailed test result as it completes."""
+            test_results.append(result)
+            
+            # Build detailed test display - same logic as display_terminal_report
+            status_icons = {
+                TestStatus.PASSED: "✓",
+                TestStatus.FAILED: "✗",
+                TestStatus.SKIPPED: "⊘",
+                TestStatus.ERROR: "⚠",
+            }
+            
+            status_colors = {
+                TestStatus.PASSED: "green",
+                TestStatus.FAILED: "red",
+                TestStatus.SKIPPED: "yellow",
+                TestStatus.ERROR: "red",
+            }
+            
+            icon = status_icons.get(result.status, "?")
+            color = status_colors.get(result.status, "white")
+            
+            # Build test display
+            test_info = []
+            
+            # Test name and status on same line
+            test_info.append(f"[bold {color}]{icon} {result.test_case.name}[/bold {color}] [{result.test_case.category}]")
+            
+            # Test description if available
+            if result.details and result.details.get("test_description"):
+                desc = result.details["test_description"]
+                test_info.append(f"   [dim]Testing: {desc}[/dim]")
+            
+            # Add URL tested if available
+            if result.details and result.details.get("url_tested"):
+                test_info.append(f"   [dim]URL: {result.details['url_tested']}[/dim]")
+        
+            # Show details for all tests (not just failures) but vary by status
+            if result.status == TestStatus.PASSED:
+                # For passed tests, show the success message if available
+                if result.message:
+                    # Success messages are now in message field
+                    import textwrap
+                    wrapped = textwrap.fill(result.message, width=80, initial_indent="   ", subsequent_indent="   ")
+                    test_info.append(f"\n[green]{wrapped}[/green]")
+                
+                # Add any additional details
+                if result.details:
+                    details = result.details
+                    
+                    # Special handling for specific successful tests
+                    if result.test_case.id == "http-transport" and "content_type" in details:
+                        test_info.append(f"   [dim]Transport type: {details.get('transport_type', 'json')}[/dim]")
+            
+            else:  # Failed, Error, or Skipped
+                # Primary error message with context
+                if result.message:
+                    # Make error messages more specific
+                    error_msg = result.message
+                    
+                    # Add URL context to error messages
+                    if result.details and "url_tested" in result.details:
+                        url = result.details["url_tested"]
+                        if "requires authentication" in error_msg and url not in error_msg:
+                            error_msg = f"{error_msg} (endpoint: {url})"
+                        elif "failed with status" in error_msg and url not in error_msg:
+                            error_msg = error_msg.replace("failed with status", f"endpoint {url} returned status")
+                    
+                    # Split long messages into readable chunks
+                    import textwrap
+                    wrapped = textwrap.fill(error_msg, width=80, initial_indent="   ", subsequent_indent="   ")
+                    test_info.append(f"\n[yellow]{wrapped}[/yellow]")
+                
+                # Detailed failure information
+                if result.details:
+                    details = result.details
+                    
+                    # Show what was expected vs what happened with full context
+                    if "expected_status" in details and "status_code" in details:
+                        url = details.get('url_tested', 'endpoint')
+                        test_info.append(f"\n   Expected: HTTP {details['expected_status']} → Got: HTTP {details['status_code']} from {url}")
+                    
+                    # Add fix recommendation if available
+                    if details.get("fix"):
+                        test_info.append(f"\n   [cyan]Fix: {details['fix']}[/cyan]")
+                    
+                    # Add spec reference recommendation if available
+                    if details.get("spec_reference"):
+                        test_info.append(f"\n   [yellow]→ {details['spec_reference']}[/yellow]")
+            
+            # Print test result
+            for line in test_info:
+                console.print(line)
+            
+            # Add spacing between tests
+            console.print()
+        
         async with MCPValidator(
             mcp_server_url,
             access_token=None,  # Let it use env token
             timeout=30.0,
             verify_ssl=not no_ssl_verify,
             auto_register=False,
+            progress_callback=display_detailed_test_result,  # Stream detailed results
         ) as validator:
             # Check if we have a token
             validator.access_token = validator.env_manager.get_valid_access_token(mcp_server_url)
@@ -1871,6 +1972,10 @@ def full(
             else:
                 console.print("[yellow]Some tests may be skipped without authentication[/yellow]")
             
+            console.print()
+            console.print("[bold]Test Results:[/bold]")
+            console.print()
+            
             validation_result = await validator.validate()
             server_info = validator.server_info
             
@@ -1878,8 +1983,43 @@ def full(
             checker = ComplianceChecker(validation_result, server_info)
             report = checker.check_compliance()
             
-            # Display report with full summary
-            display_terminal_report(report, verbose=verbose, show_summary=True)
+            # Display only the summary since we already showed detailed results
+            if verbose:
+                # Show additional technical details
+                console.print()
+                console.print("[bold]Additional Technical Details:[/bold]")
+                console.print()
+                
+                for test_result in validation_result.test_results:
+                    # Only show tests with interesting technical details
+                    if test_result.details and test_result.status != TestStatus.PASSED:
+                        # Skip if no technical details beyond what was already shown
+                        tech_keys = set(test_result.details.keys()) - {
+                            "test_description", "requirement", "purpose", "fix", 
+                            "expected_status", "status_code", "url_tested", "spec_reference",
+                            "missing_params", "found_params", "spec_requirement", "example_header",
+                            "diagnosis", "likely_cause", "note", "violation", "auth_status_code",
+                            "www_authenticate", "protocol_version_sent", "header_name", "body"
+                        }
+                        
+                        # Skip tests without additional technical details
+                        if not tech_keys or all(k in {"error", "errors", "warnings"} for k in tech_keys):
+                            continue
+                            
+                        console.print(f"[cyan]{test_result.test_case.name}:[/cyan]")
+                        
+                        # Show additional details based on test type
+                        for key, value in test_result.details.items():
+                            if key not in {"test_description", "requirement", "purpose", "fix", 
+                                          "expected_status", "status_code", "url_tested", "spec_reference"}:
+                                if isinstance(value, (dict, list)):
+                                    console.print(f"  {key}: {json.dumps(value, indent=2)}")
+                                else:
+                                    console.print(f"  {key}: {value}")
+                        console.print()
+            
+            # Show summary
+            display_terminal_summary(report)
             
             return report
     
