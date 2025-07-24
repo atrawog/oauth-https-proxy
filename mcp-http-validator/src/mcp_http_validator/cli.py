@@ -217,6 +217,13 @@ def display_terminal_report(report, verbose=False):
     # Test results - show as individual panels for clarity
     console.print()
     console.print("[bold]Test Results:[/bold]")
+    
+    # Show message if OAuth tests were skipped for public server
+    if report.server_info and not report.server_info.requires_auth:
+        console.print()
+        console.print("[green]ℹ️  This is a public MCP server (no authentication required)[/green]")
+        console.print("[green]   OAuth tests were skipped as they are not applicable[/green]")
+    
     console.print()
     
     # Display each test result in a clear, structured way
@@ -1549,35 +1556,109 @@ def full(
     # Track overall results
     all_passed = True
     
-    # 0. Check if we need OAuth setup
-    credentials = env_manager.get_oauth_credentials(mcp_server_url)
-    has_valid_token = env_manager.get_valid_access_token(mcp_server_url) is not None
-    
-    # 1. Check OAuth discovery first
-    console.print("[bold blue]═══ OAuth Discovery ═══[/bold blue]")
-    
-    async def check_oauth_discovery():
+    # 0. First check if server requires authentication
+    async def check_auth_required():
         async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify) as validator:
-            oauth_server = await validator.discover_oauth_server()
-            if oauth_server:
-                console.print(f"[green]✓[/green] OAuth server discovered: {oauth_server}")
-                return oauth_server
-            else:
-                console.print("[yellow]No OAuth server discovered - MCP server doesn't implement OAuth discovery[/yellow]")
-                console.print("[dim]This server may use a different authentication method[/dim]")
-                return None
+            return await validator._check_auth_required()
     
-    oauth_server_url = asyncio.run(check_oauth_discovery())
-    console.print()
+    auth_required = asyncio.run(check_auth_required())
     
-    # Only proceed with OAuth if server supports it
-    if oauth_server_url:
+    if not auth_required:
+        console.print("[green]ℹ️  This is a public MCP server (no authentication required)[/green]")
+        console.print("[green]   Skipping OAuth discovery and authentication steps[/green]")
+        console.print()
+    
+    # Only check OAuth if authentication is required
+    oauth_server_url = None
+    if auth_required:
+        # Check if we need OAuth setup
+        credentials = env_manager.get_oauth_credentials(mcp_server_url)
+        has_valid_token = env_manager.get_valid_access_token(mcp_server_url) is not None
+        
+        # 1. Check OAuth discovery first
+        console.print("[bold blue]═══ OAuth Discovery ═══[/bold blue]")
+        
+        async def check_oauth_discovery():
+            async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify) as validator:
+                oauth_server = await validator.discover_oauth_server()
+                if oauth_server:
+                    console.print(f"[green]✓[/green] OAuth server discovered: {oauth_server}")
+                    return oauth_server
+                else:
+                    console.print("[yellow]No OAuth server discovered - MCP server doesn't implement OAuth discovery[/yellow]")
+                    console.print("[dim]This server may use a different authentication method[/dim]")
+                    return None
+        
+        oauth_server_url = asyncio.run(check_oauth_discovery())
+        console.print()
+    
+    # Only proceed with OAuth if server supports it AND requires auth
+    if oauth_server_url and auth_required:
         # 2. Register OAuth client if needed
         console.print("[bold blue]═══ OAuth Client Registration ═══[/bold blue]")
         if not credentials["client_id"]:
             console.print("[yellow]No OAuth client registered for this server[/yellow]")
-            console.print(f"[dim]Would register client with: mcp-validate client register {mcp_server_url}[/dim]")
-            console.print("[red]Skipping - OAuth client registration not yet implemented in full command[/red]")
+            console.print("[dim]Attempting automatic client registration...[/dim]")
+            
+            # Run client registration
+            async def register_client():
+                async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify, auto_register=False) as validator:
+                    auth_server_url = await validator.discover_oauth_server()
+                    if not auth_server_url:
+                        return False
+                    
+                    async with OAuthTestClient(auth_server_url, verify_ssl=not no_ssl_verify) as client:
+                        try:
+                            # Get metadata
+                            metadata = await client.discover_metadata()
+                            if not metadata.registration_endpoint:
+                                console.print("[red]✗[/red] OAuth server doesn't support dynamic client registration")
+                                return False
+                            
+                            # Register client
+                            registration_data = {
+                                "client_name": "MCP HTTP Validator (Full Test)",
+                                "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"],
+                                "grant_types": ["authorization_code", "refresh_token"],
+                                "response_types": ["code"],
+                                "scope": "mcp:read mcp:write",
+                                "software_id": "mcp-http-validator",
+                                "software_version": "0.1.0",
+                            }
+                            
+                            response = await client.client.post(
+                                str(metadata.registration_endpoint),
+                                json=registration_data,
+                                headers={"Content-Type": "application/json"},
+                            )
+                            response.raise_for_status()
+                            
+                            response_data = response.json()
+                            client_id = response_data.get("client_id")
+                            client_secret = response_data.get("client_secret")
+                            reg_token = response_data.get("registration_access_token")
+                            
+                            # Save credentials
+                            env_manager.save_oauth_credentials(
+                                mcp_server_url,
+                                client_id,
+                                client_secret,
+                                reg_token,
+                            )
+                            
+                            console.print(f"[green]✓[/green] Client registered successfully: {client_id}")
+                            return True
+                            
+                        except Exception as e:
+                            console.print(f"[red]✗[/red] Registration failed: {e}")
+                            return False
+            
+            registration_success = asyncio.run(register_client())
+            if registration_success:
+                # Reload credentials
+                credentials = env_manager.get_oauth_credentials(mcp_server_url)
+            else:
+                console.print("[yellow]Continuing without OAuth client...[/yellow]")
         else:
             console.print(f"[green]✓[/green] OAuth client already registered: {credentials['client_id']}")
         console.print()
@@ -1589,9 +1670,6 @@ def full(
             console.print(f"[dim]Would obtain token with: mcp-validate flow {mcp_server_url}[/dim]")
             console.print("[red]Skipping - OAuth flow not yet implemented in full command[/red]")
             console.print()
-    else:
-        console.print("[dim]Skipping OAuth client registration and authentication - not applicable[/dim]")
-        console.print()
     
     # 4. Run main validation
     console.print("[bold blue]═══ Main MCP Validation ═══[/bold blue]")
@@ -1622,14 +1700,15 @@ def full(
             # Display report
             display_terminal_report(report, verbose=verbose)
             
-            return report.validation_result.failed_tests == 0
+            return report
     
-    validation_passed = asyncio.run(run_validation_test())
+    validation_report = asyncio.run(run_validation_test())
+    validation_passed = validation_report.validation_result.failed_tests == 0
     if not validation_passed:
         all_passed = False
     
-    # 5. Run OAuth server testing (if OAuth server was discovered)
-    if oauth_server_url:
+    # 5. Run OAuth server testing (if OAuth server was discovered AND auth is required)
+    if oauth_server_url and auth_required:
         console.print("\n[bold blue]═══ OAuth Server Compliance ═══[/bold blue]")
         console.print(f"Testing OAuth server: [cyan]{oauth_server_url}[/cyan]")
         
@@ -1669,60 +1748,72 @@ def full(
         oauth_passed = asyncio.run(run_oauth_compliance())
         if not oauth_passed:
             all_passed = False
-    else:
+    elif auth_required:
         console.print("\n[bold blue]═══ OAuth Server Compliance ═══[/bold blue]")
         console.print("[yellow]No OAuth server discovered - skipping OAuth compliance tests[/yellow]")
     
-    # 6. Run tools testing
-    console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
+    # 6. Run tools testing (skip if already tested in main validation)
+    # Check if tools were already tested in main validation
+    tools_already_tested = False
+    if validation_report and hasattr(validation_report.validation_result, 'test_results'):
+        tools_test = next((r for r in validation_report.validation_result.test_results if r.test_case.id == "mcp-tools"), None)
+        if tools_test and tools_test.status == TestStatus.PASSED:
+            tools_already_tested = True
     
-    async def run_tools_validation():
-        async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify) as validator:
-            # Get access token if available
-            validator.access_token = validator.env_manager.get_valid_access_token(mcp_server_url)
-            
-            if not validator.access_token:
-                console.print("[yellow]No access token found. Some servers may require authentication.[/yellow]")
-                console.print("Run 'mcp-validate flow' to authenticate if needed.")
+    if tools_already_tested:
+        console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
+        console.print("[green]✓[/green] Tools already tested successfully in main validation")
+        console.print("[dim]Use 'mcp-validate tools' for detailed tool testing[/dim]")
+    else:
+        console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
+        
+        async def run_tools_validation():
+            async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify) as validator:
+                # Get access token if available
+                validator.access_token = validator.env_manager.get_valid_access_token(mcp_server_url)
+                
+                if not validator.access_token:
+                    console.print("[yellow]No access token found. Some servers may require authentication.[/yellow]")
+                    console.print("Run 'mcp-validate flow' to authenticate if needed.")
+                    console.print()
+                
+                # Try to initialize session
+                console.print("[bold]Initializing MCP session...[/bold]")
+                success, error, init_details = await validator.initialize_mcp_session()
+                
+                if success:
+                    console.print("[green]✓[/green] Session initialized")
+                    server_info = init_details.get("server_info", {})
+                    if server_info:
+                        console.print(f"  Server: {server_info.get('name', 'Unknown')}")
+                        console.print(f"  Version: {server_info.get('version', 'Unknown')}")
+                else:
+                    console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error}")
+                    console.print("  Continuing anyway - some servers may not require initialization")
+                
+                # List tools
                 console.print()
-            
-            # Try to initialize session
-            console.print("[bold]Initializing MCP session...[/bold]")
-            success, error, init_details = await validator.initialize_mcp_session()
-            
-            if success:
-                console.print("[green]✓[/green] Session initialized")
-                server_info = init_details.get("server_info", {})
-                if server_info:
-                    console.print(f"  Server: {server_info.get('name', 'Unknown')}")
-                    console.print(f"  Version: {server_info.get('version', 'Unknown')}")
-            else:
-                console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error}")
-                console.print("  Continuing anyway - some servers may not require initialization")
-            
-            # List tools
-            console.print()
-            console.print("[bold]Discovering tools...[/bold]")
-            success, error, tools = await validator.list_mcp_tools()
-            
-            if not success:
-                console.print(f"[red]✗[/red] Failed to list tools: {error}")
-                return False
-            
-            if not tools:
-                console.print("[yellow]No tools found on this server[/yellow]")
-                return True  # Not an error
-            
-            console.print(f"[green]✓[/green] Found {len(tools)} tool(s)")
-            
-            # For full command, just list tools, don't test them
-            console.print("[dim]Run 'mcp-validate tools' to test individual tools[/dim]")
-            
-            return True
-    
-    tools_passed = asyncio.run(run_tools_validation())
-    if not tools_passed:
-        all_passed = False
+                console.print("[bold]Discovering tools...[/bold]")
+                success, error, tools = await validator.list_mcp_tools()
+                
+                if not success:
+                    console.print(f"[red]✗[/red] Failed to list tools: {error}")
+                    return False
+                
+                if not tools:
+                    console.print("[yellow]No tools found on this server[/yellow]")
+                    return True  # Not an error
+                
+                console.print(f"[green]✓[/green] Found {len(tools)} tool(s)")
+                
+                # For full command, just list tools, don't test them
+                console.print("[dim]Run 'mcp-validate tools' to test individual tools[/dim]")
+                
+                return True
+        
+        tools_passed = asyncio.run(run_tools_validation())
+        if not tools_passed:
+            all_passed = False
     
     # Final summary
     console.print("\n[bold]═══ Full Validation Complete ═══[/bold]")
