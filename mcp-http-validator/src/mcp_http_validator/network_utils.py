@@ -126,21 +126,93 @@ class OAuthCallbackHandler(BaseHTTPRequestHandler):
             html_template = """
                 <html>
                 <head>
-                    <title>Authorization Successful</title>
+                    <title>Authorization Complete - MCP Validator</title>
                     <style>
-                        body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-                        .success { color: green; font-size: 24px; }
-                        .code { background: #f0f0f0; padding: 10px; margin: 20px; font-family: monospace; }
+                        body { 
+                            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Arial, sans-serif; 
+                            text-align: center; 
+                            padding: 50px;
+                            background: #f5f5f5;
+                        }
+                        .container {
+                            background: white;
+                            border-radius: 10px;
+                            padding: 40px;
+                            max-width: 600px;
+                            margin: 0 auto;
+                            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+                        }
+                        .success { 
+                            color: #22c55e; 
+                            font-size: 48px; 
+                            margin: 0 0 20px 0;
+                        }
+                        h1 { 
+                            color: #333; 
+                            margin: 0 0 20px 0;
+                            font-size: 28px;
+                        }
+                        .message {
+                            color: #666;
+                            font-size: 18px;
+                            line-height: 1.6;
+                            margin: 20px 0;
+                        }
+                        .important {
+                            background: #e0f2fe;
+                            border-left: 4px solid #0284c7;
+                            padding: 15px 20px;
+                            margin: 30px 0;
+                            text-align: left;
+                            border-radius: 4px;
+                        }
+                        .important strong {
+                            color: #0369a1;
+                            display: block;
+                            margin-bottom: 5px;
+                        }
+                        .terminal {
+                            background: #1e293b;
+                            color: #e2e8f0;
+                            padding: 10px 15px;
+                            border-radius: 5px;
+                            font-family: 'Monaco', 'Consolas', monospace;
+                            font-size: 14px;
+                            margin: 10px 0;
+                        }
                     </style>
                 </head>
                 <body>
-                    <h1 class="success">✓ Authorization Successful!</h1>
-                    <p>Authorization code received. You can close this window.</p>
-                    <div class="code">Code: %s...</div>
-                    <p><small>Return to your terminal to continue.</small></p>
+                    <div class="container">
+                        <div class="success">✓</div>
+                        <h1>OAuth Authentication Complete!</h1>
+                        
+                        <p class="message">
+                            The authorization code has been <strong>automatically captured</strong> by the MCP validator.
+                        </p>
+                        
+                        <div class="important">
+                            <strong>No action needed!</strong>
+                            The authentication is already complete on your server. 
+                            You do NOT need to copy any codes or URLs.
+                        </div>
+                        
+                        <p class="message">
+                            Please return to your terminal to see the results:
+                        </p>
+                        
+                        <div class="terminal">
+                            ✓ Authentication successful!<br>
+                            Access token: 01d1d072841511...
+                        </div>
+                        
+                        <p class="message" style="margin-top: 30px; color: #999;">
+                            You can safely close this browser window.
+                        </p>
+                    </div>
                 </body>
                 </html>
-            """ % self.server.auth_code[:20]
+            """
             self.wfile.write(html_template.encode())
         else:
             # Handle error

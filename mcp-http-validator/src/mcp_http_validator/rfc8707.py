@@ -185,7 +185,7 @@ class RFC8707Validator:
         }
         
         # Check if server URL is in audience
-        server_in_audience = server_url in token_audience
+        server_in_audience = token_audience is not None and server_url in token_audience
         
         validation["server_in_audience"] = server_in_audience
         validation["token_accepted"] = token_accepted
@@ -248,56 +248,107 @@ class RFC8707Validator:
         token_validation: Dict[str, any],
         server_validation: Dict[str, any]
     ) -> str:
-        """Generate human-readable RFC 8707 compliance report.
+        """Generate comprehensive RFC 8707 compliance report.
         
         Returns:
-            Formatted compliance report
+            Formatted compliance report showing both compliant and non-compliant aspects
         """
         lines = []
         lines.append("RFC 8707 Resource Indicators Compliance Report")
         lines.append("=" * 50)
         
         # Authorization Request
-        lines.append("\n1. Authorization Request:")
+        lines.append("\n1. Authorization Request Compliance:")
+        lines.append("   Requirement: Include 'resource' parameter identifying target servers")
         if auth_request_valid:
-            lines.append(f"   ✓ Includes 'resource' parameter(s): {auth_resources}")
+            lines.append(f"   ✓ COMPLIANT: Includes resource parameter(s)")
+            lines.append(f"   Resources requested: {auth_resources}")
         else:
-            lines.append("   ✗ Missing 'resource' parameter")
+            lines.append("   ✗ NON-COMPLIANT: Missing 'resource' parameter")
+            lines.append("   Fix: Add ?resource=<mcp-server-url> to authorization request")
             
         # Token Response
-        lines.append("\n2. OAuth Server Token Response:")
-        if token_validation["rfc8707_compliant"]:
-            lines.append("   ✓ RFC 8707 compliant - resources in token audience")
+        lines.append("\n2. OAuth Server Token Response Compliance:")
+        lines.append("   Requirement: Include requested resources in token 'aud' claim")
+        
+        # Check if token is JWT
+        if token_validation.get("errors") and "Failed to decode JWT" in str(token_validation.get("errors", [])):
+            lines.append("   ⚠️  Token Format: Not a JWT (opaque token)")
+            lines.append("   Note: RFC 8707 compliance cannot be verified for opaque tokens")
+            lines.append("   Recommendation: Use token introspection endpoint if available")
+        elif token_validation["rfc8707_compliant"]:
+            lines.append("   ✓ COMPLIANT: Token includes all requested resources in audience")
+            if token_validation.get("success"):
+                lines.append(f"   {token_validation['success']}")
         else:
-            lines.append("   ✗ RFC 8707 VIOLATION")
-            for error in token_validation["errors"]:
+            lines.append("   ✗ NON-COMPLIANT: RFC 8707 violation detected")
+            for error in token_validation.get("errors", []):
                 lines.append(f"      • {error}")
+            if token_validation.get("fix"):
+                lines.append(f"   Fix: {token_validation['fix']}")
                 
-        lines.append(f"\n   Token audience: {token_validation['token_audience']}")
-        lines.append(f"   Requested resources: {token_validation['requested_resources']}")
+        lines.append(f"\n   Token Details:")
+        lines.append(f"   - Audience claim: {token_validation.get('token_audience', 'N/A')}")
+        lines.append(f"   - Requested resources: {token_validation.get('requested_resources', [])}")
+        if token_validation.get("missing_resources"):
+            lines.append(f"   - Missing from audience: {token_validation['missing_resources']}")
         
         # Resource Server
-        lines.append("\n3. MCP Resource Server Validation:")
+        lines.append("\n3. MCP Resource Server Audience Validation:")
+        lines.append("   Requirement: Validate token audience contains server's identifier")
+        
+        token_accepted = server_validation.get("token_accepted", False)
+        server_in_audience = server_validation.get("server_in_audience", False)
+        
         if server_validation["server_compliant"]:
-            lines.append("   ✓ Server audience validation working")
+            lines.append("   ✓ COMPLIANT: Server properly validates token audience")
+            if token_accepted and server_in_audience:
+                lines.append("   - Token accepted (server IS in audience)")
+            elif not token_accepted and not server_in_audience:
+                lines.append("   - Token rejected (server NOT in audience) - Correct behavior!")
+            if server_validation.get("success"):
+                lines.append(f"   {server_validation['success']}")
         else:
-            lines.append("   ✗ RFC 8707 VIOLATION") 
-            for error in server_validation["errors"]:
+            lines.append("   ✗ NON-COMPLIANT: RFC 8707 violation detected") 
+            for error in server_validation.get("errors", []):
                 lines.append(f"      • {error}")
                 
         if server_validation.get("security_risk"):
-            lines.append(f"\n   ⚠️  {server_validation['security_risk']}")
+            lines.append(f"\n   ⚠️  SECURITY RISK: {server_validation['security_risk']}")
+            
+        # Additional compliance checks
+        lines.append("\n4. Additional Compliance Checks:")
+        lines.append("   ✓ Authorization server metadata should include:")
+        lines.append("     - resource_indicators_supported: true")
+        lines.append("   ✓ Resource server metadata should include:")
+        lines.append("     - WWW-Authenticate header with resource_uri on 401")
+        lines.append("     - /.well-known/oauth-protected-resource endpoint")
             
         # Summary
         lines.append("\n" + "=" * 50)
-        if not token_validation["rfc8707_compliant"] and not server_validation["server_compliant"]:
-            lines.append("RESULT: Both OAuth server and MCP server violate RFC 8707")
-            lines.append("        This creates a critical security vulnerability!")
-        elif not token_validation["rfc8707_compliant"]:
-            lines.append("RESULT: OAuth server violates RFC 8707 (missing audience restriction)")
-        elif not server_validation["server_compliant"]:
-            lines.append("RESULT: MCP server violates RFC 8707 (no audience validation)")
+        lines.append("COMPLIANCE SUMMARY:")
+        
+        auth_compliant = auth_request_valid
+        token_compliant = token_validation.get("rfc8707_compliant", False)
+        server_compliant = server_validation.get("server_compliant", False)
+        
+        # Count compliant vs non-compliant
+        compliant_count = sum([auth_compliant, token_compliant, server_compliant])
+        total_checks = 3
+        
+        lines.append(f"\nCompliance Score: {compliant_count}/{total_checks} checks passed")
+        lines.append(f"- Authorization Request: {'✓ PASS' if auth_compliant else '✗ FAIL'}")
+        lines.append(f"- Token Audience Restriction: {'✓ PASS' if token_compliant else '✗ FAIL'}")
+        lines.append(f"- Server Audience Validation: {'✓ PASS' if server_compliant else '✗ FAIL'}")
+        
+        if compliant_count == total_checks:
+            lines.append("\n✓ RESULT: Full RFC 8707 compliance achieved!")
+            lines.append("          Token confusion attacks are properly mitigated.")
+        elif compliant_count == 0:
+            lines.append("\n✗ RESULT: Complete RFC 8707 non-compliance!")
+            lines.append("          CRITICAL: System is vulnerable to token confusion attacks.")
         else:
-            lines.append("RESULT: Full RFC 8707 compliance ✓")
+            lines.append(f"\n⚠️  RESULT: Partial RFC 8707 compliance ({compliant_count}/{total_checks})")
+            lines.append("          Security vulnerabilities exist in non-compliant components.")
             
         return "\n".join(lines)

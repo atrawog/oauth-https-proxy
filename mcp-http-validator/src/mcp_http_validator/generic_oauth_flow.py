@@ -309,11 +309,19 @@ class GenericOAuthFlow:
             
             # Get authorization code
             if self.callback_server:
+                if not self.config.suppress_console:
+                    console.print("[dim]Waiting for authorization callback...[/dim]")
+                
                 auth_code, error = await self.callback_server.wait_for_code(
                     timeout=self.config.callback_timeout
                 )
+                
                 if error:
                     raise Exception(error)
+                    
+                if not self.config.suppress_console:
+                    console.print(f"[green]✓[/green] Authorization code automatically captured!")
+                    console.print(f"[dim]Code: {auth_code[:20]}...[/dim]")
             else:
                 # OOB flow
                 if not self.config.suppress_console:
