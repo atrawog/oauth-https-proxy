@@ -18,7 +18,7 @@ from rich.table import Table
 from rich.text import Text
 
 from .compliance import ComplianceChecker
-from .models import TestStatus
+from .models import TestStatus, TestResult
 from .oauth import OAuthTestClient
 from .validator import MCPValidator
 from .env_manager import EnvManager
@@ -101,46 +101,73 @@ def validate(
         mcp-validate validate https://mcp.example.com --token YOUR_TOKEN
     """
     async def run_validation():
-        with Progress(
-            SpinnerColumn(),
-            TextColumn("[progress.description]{task.description}"),
-            console=console,
-        ) as progress:
-            task = progress.add_task("Validating MCP server...", total=None)
+        # Display test results header immediately
+        console.print()
+        console.print("[bold]Test Results:[/bold]")
+        console.print()
+        
+        # Track results for summary
+        test_results = []
+        
+        async def display_test_result(result: TestResult):
+            """Display test result as it completes."""
+            test_results.append(result)
             
-            async with MCPValidator(
-                server_url,
-                access_token=token,
-                timeout=timeout,
-                verify_ssl=not no_ssl_verify,
-                auto_register=False,  # Never auto-register in validate command
-            ) as validator:
-                # Check if we have a token
-                if not token:
-                    # Try to get from env
-                    validator.access_token = validator.env_manager.get_valid_access_token(server_url)
-                    if validator.access_token:
-                        console.print("[dim]Using stored access token from .env[/dim]")
-                    else:
-                        # Check if we need auth
-                        auth_server = await validator.discover_oauth_server()
-                        if auth_server:
-                            console.print("[yellow]⚠️  This MCP server requires authentication[/yellow]")
-                            console.print()
-                            console.print("To authenticate:")
-                            console.print(f"  1. Register OAuth client: [cyan]mcp-validate client register {server_url}[/cyan]")
-                            console.print(f"  2. Get access token: [cyan]mcp-validate flow {server_url}[/cyan]")
-                            console.print(f"  3. Run validation: [cyan]mcp-validate validate {server_url}[/cyan]")
-                            console.print()
-                            console.print("Or run all tests: [cyan]mcp-validate full {server_url}[/cyan]")
-                            console.print()
-                        console.print("[yellow]Some tests may be skipped without authentication[/yellow]")
-                
-                progress.update(task, description="Running validation tests...")
-                validation_result = await validator.validate()
-                server_info = validator.server_info
+            # Display the test result immediately
+            status_icons = {
+                TestStatus.PASSED: "✓",
+                TestStatus.FAILED: "✗",
+                TestStatus.SKIPPED: "⊘",
+                TestStatus.ERROR: "⚠",
+            }
             
-            progress.update(task, completed=True)
+            status_colors = {
+                TestStatus.PASSED: "green",
+                TestStatus.FAILED: "red",
+                TestStatus.SKIPPED: "yellow",
+                TestStatus.ERROR: "red",
+            }
+            
+            icon = status_icons.get(result.status, "?")
+            color = status_colors.get(result.status, "white")
+            
+            # Simple one-line output for each test
+            console.print(f"[{color}]{icon}[/{color}] {result.test_case.name}")
+        
+        async with MCPValidator(
+            server_url,
+            access_token=token,
+            timeout=timeout,
+            verify_ssl=not no_ssl_verify,
+            auto_register=False,  # Never auto-register in validate command
+            progress_callback=display_test_result,  # Stream results
+        ) as validator:
+            # Check if we have a token
+            if not token:
+                # Try to get from env
+                validator.access_token = validator.env_manager.get_valid_access_token(server_url)
+                if validator.access_token:
+                    console.print("[dim]Using stored access token from .env[/dim]")
+                    console.print()
+                else:
+                    # Check if we need auth
+                    auth_server = await validator.discover_oauth_server()
+                    if auth_server:
+                        console.print("[yellow]⚠️  This MCP server requires authentication[/yellow]")
+                        console.print()
+                        console.print("To authenticate:")
+                        console.print(f"  1. Register OAuth client: [cyan]mcp-validate client register {server_url}[/cyan]")
+                        console.print(f"  2. Get access token: [cyan]mcp-validate flow {server_url}[/cyan]")
+                        console.print(f"  3. Run validation: [cyan]mcp-validate validate {server_url}[/cyan]")
+                        console.print()
+                        console.print("Or run all tests: [cyan]mcp-validate full {server_url}[/cyan]")
+                        console.print()
+                    console.print("[yellow]Some tests may be skipped without authentication[/yellow]")
+                    console.print()
+            
+            # Run validation tests (results will be displayed via callback)
+            validation_result = await validator.validate()
+            server_info = validator.server_info
         
         # Generate compliance report
         checker = ComplianceChecker(validation_result, server_info)
@@ -148,7 +175,8 @@ def validate(
         
         # Output results
         if output == "terminal":
-            display_terminal_report(report, verbose=verbose)
+            # Only show summary since we already displayed test results
+            display_terminal_summary(report)
         elif output == "json":
             output_data = json.dumps(report.model_dump(), indent=2, default=str)
             if output_file:
@@ -176,51 +204,54 @@ def validate(
         sys.exit(1)
 
 
+def display_terminal_summary(report):
+    """Display only the summary of compliance report."""
+    result = report.validation_result
+    
+    console.print()
+    console.print("[bold]Test Summary:[/bold]")
+    
+    summary_table = Table(show_header=False, box=None)
+    summary_table.add_column(style="dim")
+    summary_table.add_column()
+    
+    # Determine compliance level color
+    level_colors = {
+        "FULLY_COMPLIANT": "green",
+        "MOSTLY_COMPLIANT": "yellow", 
+        "PARTIALLY_COMPLIANT": "yellow",
+        "MINIMALLY_COMPLIANT": "red",
+        "NON_COMPLIANT": "red",
+        "UNKNOWN": "dim"
+    }
+    level_color = level_colors.get(report.compliance_level, "white")
+    
+    summary_table.add_row("Server:", f"[cyan]{report.server_info.url}[/cyan]")
+    summary_table.add_row("Compliance:", f"[bold {level_color}]{report.compliance_level}[/bold {level_color}]")
+    summary_table.add_row("Total Tests:", str(result.total_tests))
+    summary_table.add_row("Passed:", f"[green]{result.passed_tests}[/green]")
+    summary_table.add_row("Failed:", f"[red]{result.failed_tests}[/red]")
+    if result.skipped_tests > 0:
+        summary_table.add_row("Skipped:", f"[yellow]{result.skipped_tests}[/yellow]")
+    summary_table.add_row("Success Rate:", f"{result.success_rate:.1f}%")
+    summary_table.add_row("Duration:", f"{report.validation_result.duration:.2f}s")
+    
+    # Check for OAuth server discovery
+    oauth_test = next((r for r in result.test_results if r.test_case.id == "oauth-server-discovery"), None)
+    if oauth_test and oauth_test.details:
+        oauth_server = oauth_test.details.get("oauth_server_found")
+        if oauth_server:
+            summary_table.add_row("OAuth Server:", f"[cyan]{oauth_server}[/cyan]")
+    
+    console.print(summary_table)
+
+
 def display_terminal_report(report, verbose=False, show_summary=True):
     """Display compliance report in terminal."""
-    # Summary statistics
     result = report.validation_result
-    if show_summary:
-        console.print()
-        console.print("[bold]Test Summary:[/bold]")
-        
-        summary_table = Table(show_header=False, box=None)
-        summary_table.add_column(style="dim")
-        summary_table.add_column()
-        
-        # Determine compliance level color
-        level_colors = {
-            "FULLY_COMPLIANT": "green",
-            "MOSTLY_COMPLIANT": "yellow", 
-            "PARTIALLY_COMPLIANT": "yellow",
-            "MINIMALLY_COMPLIANT": "red",
-            "NON_COMPLIANT": "red",
-            "UNKNOWN": "dim"
-        }
-        level_color = level_colors.get(report.compliance_level, "white")
-        
-        summary_table.add_row("Server:", f"[cyan]{report.server_info.url}[/cyan]")
-        summary_table.add_row("Compliance:", f"[bold {level_color}]{report.compliance_level}[/bold {level_color}]")
-        summary_table.add_row("Total Tests:", str(result.total_tests))
-        summary_table.add_row("Passed:", f"[green]{result.passed_tests}[/green]")
-        summary_table.add_row("Failed:", f"[red]{result.failed_tests}[/red]")
-        if result.skipped_tests > 0:
-            summary_table.add_row("Skipped:", f"[yellow]{result.skipped_tests}[/yellow]")
-        summary_table.add_row("Success Rate:", f"{result.success_rate:.1f}%")
-        summary_table.add_row("Duration:", f"{report.validation_result.duration:.2f}s")
-        
-        # Check for OAuth server discovery
-        oauth_test = next((r for r in result.test_results if r.test_case.id == "oauth-server-discovery"), None)
-        if oauth_test and oauth_test.details:
-            oauth_server = oauth_test.details.get("oauth_server_found")
-            if oauth_server:
-                summary_table.add_row("OAuth Server:", f"[cyan]{oauth_server}[/cyan]")
-        
-        console.print(summary_table)
     
-    # Test results - show as individual panels for clarity
-    if show_summary:
-        console.print()
+    # Test results first
+    console.print()
     console.print("[bold]Test Results:[/bold]")
     
     # Show message if OAuth tests were skipped for public server
@@ -511,7 +542,45 @@ def display_terminal_report(report, verbose=False, show_summary=True):
                         else:
                             console.print(f"  {key}: {value}")
     
-    # End of report - no summary panel needed
+    # Summary statistics at the end
+    result = report.validation_result
+    if show_summary:
+        console.print()
+        console.print("[bold]Test Summary:[/bold]")
+        
+        summary_table = Table(show_header=False, box=None)
+        summary_table.add_column(style="dim")
+        summary_table.add_column()
+        
+        # Determine compliance level color
+        level_colors = {
+            "FULLY_COMPLIANT": "green",
+            "MOSTLY_COMPLIANT": "yellow", 
+            "PARTIALLY_COMPLIANT": "yellow",
+            "MINIMALLY_COMPLIANT": "red",
+            "NON_COMPLIANT": "red",
+            "UNKNOWN": "dim"
+        }
+        level_color = level_colors.get(report.compliance_level, "white")
+        
+        summary_table.add_row("Server:", f"[cyan]{report.server_info.url}[/cyan]")
+        summary_table.add_row("Compliance:", f"[bold {level_color}]{report.compliance_level}[/bold {level_color}]")
+        summary_table.add_row("Total Tests:", str(result.total_tests))
+        summary_table.add_row("Passed:", f"[green]{result.passed_tests}[/green]")
+        summary_table.add_row("Failed:", f"[red]{result.failed_tests}[/red]")
+        if result.skipped_tests > 0:
+            summary_table.add_row("Skipped:", f"[yellow]{result.skipped_tests}[/yellow]")
+        summary_table.add_row("Success Rate:", f"{result.success_rate:.1f}%")
+        summary_table.add_row("Duration:", f"{report.validation_result.duration:.2f}s")
+        
+        # Check for OAuth server discovery
+        oauth_test = next((r for r in result.test_results if r.test_case.id == "oauth-server-discovery"), None)
+        if oauth_test and oauth_test.details:
+            oauth_server = oauth_test.details.get("oauth_server_found")
+            if oauth_server:
+                summary_table.add_row("OAuth Server:", f"[cyan]{oauth_server}[/cyan]")
+        
+        console.print(summary_table)
 
 
 @cli.command()

@@ -28,6 +28,7 @@ class BaseMCPValidator(ABC):
         verify_ssl: bool = True,
         env_file: Optional[str] = None,
         auto_register: bool = True,
+        progress_callback: Optional[callable] = None,
     ):
         """Initialize the MCP validator.
         
@@ -38,6 +39,7 @@ class BaseMCPValidator(ABC):
             verify_ssl: Whether to verify SSL certificates
             env_file: Path to .env file for storing credentials
             auto_register: Whether to automatically register OAuth client if needed
+            progress_callback: Optional callback for streaming test results
         """
         # Store both the base server URL and the MCP endpoint URL
         # For .well-known paths, we need the base domain
@@ -56,6 +58,7 @@ class BaseMCPValidator(ABC):
         self.server_info: Optional[MCPServerInfo] = None
         self.oauth_client: Optional[OAuthTestClient] = None
         self.env_manager = EnvManager(env_file)
+        self.progress_callback = progress_callback
     
     async def __aenter__(self):
         """Async context manager entry."""
@@ -106,7 +109,7 @@ class BaseMCPValidator(ABC):
                 passed, message, details = result
                 status = TestStatus.PASSED if passed else TestStatus.FAILED
             
-            return TestResult(
+            result = TestResult(
                 test_case=test_case,
                 status=status,
                 duration_ms=(time.time() - start_time) * 1000,
@@ -114,8 +117,14 @@ class BaseMCPValidator(ABC):
                 error_message=message if status == TestStatus.FAILED else None,  # Keep for backward compatibility
                 details=details,
             )
+            
+            # Call progress callback if provided
+            if self.progress_callback:
+                await self.progress_callback(result)
+            
+            return result
         except Exception as e:
-            return TestResult(
+            result = TestResult(
                 test_case=test_case,
                 status=TestStatus.ERROR,
                 duration_ms=(time.time() - start_time) * 1000,
@@ -123,3 +132,9 @@ class BaseMCPValidator(ABC):
                 error_message=str(e),  # Keep for backward compatibility
                 details={"exception_type": type(e).__name__},
             )
+            
+            # Call progress callback if provided
+            if self.progress_callback:
+                await self.progress_callback(result)
+            
+            return result

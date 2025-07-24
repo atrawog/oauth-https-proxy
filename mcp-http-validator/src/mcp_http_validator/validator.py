@@ -31,6 +31,7 @@ class MCPValidator(OAuthTestValidator, ProtocolTests, MCPToolTests, OAuthHelpers
         verify_ssl: bool = True,
         env_file: Optional[str] = None,
         auto_register: bool = True,
+        progress_callback: Optional[callable] = None,
     ):
         """Initialize the MCP validator."""
         # Call the base class __init__ explicitly to avoid multiple inheritance issues
@@ -41,7 +42,8 @@ class MCPValidator(OAuthTestValidator, ProtocolTests, MCPToolTests, OAuthHelpers
             timeout=timeout,
             verify_ssl=verify_ssl,
             env_file=env_file,
-            auto_register=auto_register
+            auto_register=auto_register,
+            progress_callback=progress_callback
         )
     
     async def validate(self) -> ValidationResult:
