@@ -10,6 +10,7 @@ from urllib.parse import urljoin, urlparse
 import httpx
 from pydantic import HttpUrl
 
+from .transport_detector import TransportDetector, TransportType
 from .models import (
     MCPServerInfo,
     ProtectedResourceMetadata,
@@ -47,7 +48,14 @@ class MCPValidator:
             env_file: Path to .env file for storing credentials
             auto_register: Whether to automatically register OAuth client if needed
         """
+        # Store both the base server URL and the MCP endpoint URL
+        # For .well-known paths, we need the base domain
+        # For MCP protocol, we use the exact URL provided
         self.server_url = server_url.rstrip("/")
+        # Extract base URL for .well-known paths
+        parsed = urlparse(server_url)
+        self.base_url = f"{parsed.scheme}://{parsed.netloc}"
+        self.mcp_endpoint = server_url  # Use exact URL for MCP endpoint
         self.access_token = access_token
         self.timeout = timeout
         self.verify_ssl = verify_ssl
@@ -136,7 +144,7 @@ class MCPValidator:
         
         try:
             # First try WITHOUT auth - this endpoint should be publicly accessible per RFC 9728
-            response = await self.client.get(url)
+            response = await self.client.get(url, timeout=5.0)
             
             if response.status_code == 404:
                 return False, (
@@ -160,7 +168,7 @@ class MCPValidator:
             if response.status_code == 401:
                 # This is wrong per RFC 9728 - endpoint should be public
                 # But let's try with auth anyway to see what we get
-                auth_response = await self.client.get(url, headers=self._get_headers())
+                auth_response = await self.client.get(url, headers=self._get_headers(), timeout=5.0)
                 return False, (
                     "Protected resource metadata endpoint requires authentication, which violates RFC 9728. "
                     "This endpoint MUST be publicly accessible without authentication so that clients can discover "
@@ -250,7 +258,7 @@ class MCPValidator:
     async def test_unauthenticated_request(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Test that protected endpoints return proper 401 with WWW-Authenticate header."""
         # Try to access the MCP endpoint without auth
-        url = urljoin(self.server_url, "/mcp")
+        url = self.mcp_endpoint
         
         details = {
             "test_description": "Testing authentication challenge for protected MCP endpoints",
@@ -263,20 +271,33 @@ class MCPValidator:
         try:
             # Make request without Authorization header
             headers = {"Accept": "application/json", "MCP-Protocol-Version": "2025-06-18"}
-            response = await self.client.get(url, headers=headers)
+            response = await self.client.get(url, headers=headers, timeout=5.0)
             
             if response.status_code != 401:
+                # Check if endpoint is publicly accessible (no auth required)
+                if response.status_code == 200:
+                    return None, (
+                        f"MCP endpoint is publicly accessible and returned {response.status_code}. "
+                        "This server does not require authentication for access. This is valid for "
+                        "public MCP servers that don't handle sensitive data. Authentication tests "
+                        "will be skipped as they are not applicable to this server."
+                    ), {
+                        **details,
+                        "status_code": response.status_code,
+                        "auth_required": False,
+                        "content_type": response.headers.get("content-type", ""),
+                        "note": "Public MCP servers are allowed by the specification"
+                    }
+                
                 return False, (
-                    f"Protected endpoint returned {response.status_code} instead of 401 Unauthorized for unauthenticated request. "
-                    "MCP servers MUST return 401 when authentication is required. The server returned "
-                    f"{response.status_code}, which suggests either the endpoint is not protected (security issue) "
-                    "or the server is not properly implementing authentication challenges."
+                    f"Endpoint returned unexpected status {response.status_code} for unauthenticated request. "
+                    "Expected either 401 (authentication required) or 200 (public access). "
+                    f"The server returned {response.status_code}, which suggests a configuration issue."
                 ), {
                     **details,
                     "status_code": response.status_code,
-                    "expected_status": 401,
-                    "security_concern": "Endpoint may not be properly protected if it doesn't return 401",
-                    "fix": "Ensure protected endpoints return 401 Unauthorized for requests without valid bearer tokens"
+                    "expected_status": "401 or 200",
+                    "fix": "Ensure endpoint returns appropriate status codes"
                 }
             
             # Check WWW-Authenticate header
@@ -342,20 +363,21 @@ class MCPValidator:
             }
             
         except httpx.RequestError as e:
+            error_msg = str(e) or f"{type(e).__name__} occurred"
             return False, (
-                f"Failed to test authentication challenge: {str(e)}. "
+                f"Failed to test authentication challenge: {error_msg}. "
                 "Could not connect to the MCP endpoint to verify authentication requirements. "
-                "Ensure the server is accessible and the /mcp endpoint exists."
+                "This might be an SSE-only endpoint that doesn't respond to regular HTTP requests."
             ), {
                 **details,
-                "error": str(e),
+                "error": error_msg,
                 "error_type": type(e).__name__,
-                "fix": "Verify the MCP endpoint is accessible and server is running"
+                "fix": "Verify the MCP endpoint is accessible. For SSE servers, authentication may work differently."
             }
     
     async def test_authenticated_request(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Test that authenticated requests are accepted and invalid tokens are rejected."""
-        url = urljoin(self.server_url, "/mcp")
+        url = self.mcp_endpoint
         
         details = {
             "test_description": "Testing basic OAuth 2.0 bearer token validation",
@@ -394,7 +416,7 @@ class MCPValidator:
         try:
             # Test with clearly invalid token
             invalid_headers = self._get_headers({"Authorization": "Bearer invalid-token-12345"})
-            invalid_response = await self.client.get(url, headers=invalid_headers)
+            invalid_response = await self.client.get(url, headers=invalid_headers, timeout=5.0)
             
             if invalid_response.status_code in [200, 204]:
                 # CRITICAL: Server accepted an invalid token!
@@ -425,7 +447,7 @@ class MCPValidator:
         
         # Now test with valid token
         try:
-            response = await self.client.get(url, headers=self._get_headers())
+            response = await self.client.get(url, headers=self._get_headers(), timeout=5.0)
             
             # Should get 200 or 204 for successful auth
             if response.status_code not in [200, 204]:
@@ -512,13 +534,13 @@ class MCPValidator:
             }
         
         # First, check if we have protected resource metadata to know expected audience
-        expected_audience = self.server_url.rstrip('/')  # Default to server URL
+        expected_audience = self.mcp_endpoint.rstrip('/')  # Default to MCP endpoint URL
         details["expected_audience"] = expected_audience
         details["resource_metadata_found"] = False
         
         try:
-            metadata_url = urljoin(self.server_url, "/.well-known/oauth-protected-resource")
-            metadata_response = await self.client.get(metadata_url)
+            metadata_url = urljoin(self.base_url, "/.well-known/oauth-protected-resource")
+            metadata_response = await self.client.get(metadata_url, timeout=5.0)
             if metadata_response.status_code == 200:
                 metadata = metadata_response.json()
                 # Use resource from metadata if available and non-null
@@ -570,7 +592,7 @@ class MCPValidator:
             if not audience_match:
                 # Token doesn't include this server - but we need to test if server enforces this
                 # Try to use the token anyway and see if server rejects it
-                url = urljoin(self.server_url, "/mcp")
+                url = self.mcp_endpoint
                 response = await self.client.get(url, headers=self._get_headers())
                 
                 if response.status_code in [200, 204]:
@@ -661,135 +683,57 @@ class MCPValidator:
     async def test_http_transport(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Test HTTP transport implementation for MCP protocol.
         
-        Per MCP spec, servers can support either:
-        1. JSON responses to POST requests
-        2. SSE streams (optional)
+        MCP supports multiple transport types:
+        1. HTTP with SSE (GET only, SSE responses)
+        2. Streamable HTTP (POST with JSON or SSE responses)
+        3. JSON-RPC (POST with JSON responses only)
         """
-        url = urljoin(self.server_url, "/mcp")
+        url = self.mcp_endpoint
         
         details = {
             "test_description": "Testing MCP HTTP transport implementation",
-            "requirement": "MCP servers must support HTTP transport with JSON-RPC 2.0 messages",
-            "purpose": "Verifies the server can handle MCP protocol messages over HTTP",
+            "requirement": "MCP servers must support at least one HTTP transport method",
+            "purpose": "Detects and validates the server's transport capabilities",
             "url_tested": url,
-            "spec_reference": "MCP Transport Spec Section 3.1",
-            "transport_options": ["application/json (required)", "text/event-stream (optional SSE)"]
+            "spec_reference": "MCP Transport Specifications"
         }
         
         # Attempt to get access token if we don't have one
         if not self.access_token:
             self.access_token = await self.get_access_token(interactive=False)
         
-        # Per MCP spec, client should accept both JSON and SSE
-        headers = self._get_headers({
-            "Accept": "application/json, text/event-stream",
-            "Content-Type": "application/json",
-        })
-        
-        # Initialize connection request
-        init_request = {
-            "jsonrpc": "2.0",
-            "method": "initialize",
-            "params": {
-                "clientInfo": {
-                    "name": "mcp-http-validator",
-                    "version": "0.1.0"
-                }
-            },
-            "id": 1
-        }
+        # Use transport detector to determine capabilities
+        detector = TransportDetector(self.client)
+        base_headers = self._get_headers({})
         
         try:
-            # Test POST request (required)
-            response = await self.client.post(
-                url,
-                headers=headers,
-                json=init_request,
-            )
-            
-            if response.status_code == 401 and not self.access_token:
-                # Authentication required but no token available
-                return None, (
-                    "MCP protocol transport test requires authentication to access the server endpoints. "
-                    "This test validates that the server correctly implements HTTP transport per MCP Transport Specification "
-                    "with proper content negotiation (RFC 9110 Section 12) supporting both application/json and text/event-stream (Server-Sent Events per W3C specification) "
-                    "for different MCP communication patterns. The server returned HTTP 401 Unauthorized (RFC 9110 Section 15.5.2), "
-                    "indicating that authentication is required to test protocol transport. "
-                    "Transport validation is essential to ensure clients can communicate with the server using standard MCP protocols."
-                ), {
-                    "url": url,
-                    "status_code": response.status_code,
-                    "suggestion": "Run 'mcp-validate flow' for interactive OAuth flow"
-                }
-            
-            if response.status_code not in [200, 202]:
-                return False, f"HTTP request failed with status {response.status_code}", {
-                    "url": url,
-                    "status_code": response.status_code,
-                    "has_token": bool(self.access_token),
-                }
-            
-            content_type = response.headers.get("Content-Type", "").lower()
-            details = {
-                "url": url,
-                "content_type": content_type,
-                "status_code": response.status_code,
-                "transport_type": None,
+            caps = await detector.detect(url, base_headers)
+            details["transport_capabilities"] = {
+                "primary": caps.primary_transport.value,
+                "supports_get_sse": caps.supports_get_sse,
+                "supports_post_json": caps.supports_post_json,
+                "supports_post_sse": caps.supports_post_sse,
+                "description": caps.describe()
             }
             
-            # Check if server returned JSON (valid per spec)
-            if "application/json" in content_type:
-                try:
-                    json_response = response.json()
-                    details["transport_type"] = "json"
-                    details["response"] = json_response
-                    
-                    # Validate JSON-RPC response format
-                    if "jsonrpc" in json_response and json_response.get("id") == 1:
-                        return True, (
-                            f"Server responded to MCP initialize request with {content_type}. "
-                            f"The response contains 'jsonrpc' field and matching request ID ({json_response.get('id')}), "
-                            f"indicating basic JSON-RPC message structure. The server accepted the POST request and "
-                            f"returned a JSON response that can be parsed."
-                        ), details
-                    else:
-                        return False, "Invalid JSON-RPC response format", details
-                except Exception as e:
-                    return False, f"Failed to parse JSON response: {e}", details
+            if caps.primary_transport == TransportType.UNKNOWN:
+                return False, (
+                    "Failed to detect any supported MCP transport method. "
+                    "The server doesn't respond to GET with SSE or POST with JSON/SSE. "
+                    "MCP servers must support at least one transport method."
+                ), details
             
-            # Check if server returned SSE (also valid per spec)
-            elif "text/event-stream" in content_type:
-                details["transport_type"] = "sse"
-                # For SSE, we need to read the stream
-                event_data = None
-                async for line in response.aiter_lines():
-                    if line.startswith("data: "):
-                        try:
-                            event_data = json.loads(line[6:])
-                            details["first_event"] = event_data
-                            break
-                        except json.JSONDecodeError:
-                            pass
-                
-                if event_data:
-                    return True, (
-                        f"Server responded with Server-Sent Events stream ({content_type}). "
-                        f"Successfully received at least one 'data:' event that could be parsed as JSON. "
-                        f"The server established an SSE connection and sent parseable data."
-                    ), details
-                else:
-                    return False, "No valid SSE events received", details
-            
-            else:
-                # Neither JSON nor SSE - this is a failure
-                return False, f"Invalid content type: {content_type} (expected application/json or text/event-stream)", details
-            
+            # Success - describe what we found
+            return True, (
+                f"MCP transport detected: {caps.describe()}. "
+                f"The server successfully responds to "
+                f"{'GET requests' if caps.supports_get_sse else ''}"
+                f"{' and ' if caps.supports_get_sse and (caps.supports_post_json or caps.supports_post_sse) else ''}"
+                f"{'POST requests' if caps.supports_post_json or caps.supports_post_sse else ''} "
+                f"with appropriate content types for MCP message exchange."
+            ), details
         except httpx.RequestError as e:
             return False, f"HTTP transport request failed: {str(e)}", {"url": url, "error": str(e)}
-        finally:
-            # Always close streaming responses
-            if 'response' in locals():
-                await response.aclose()
     
     async def test_protocol_version(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Test MCP protocol version handling."""
@@ -797,111 +741,135 @@ class MCPValidator:
         if not self.access_token:
             self.access_token = await self.get_access_token(interactive=False)
         
-        url = urljoin(self.server_url, "/mcp")
-        
-        # Test with the current protocol version
-        headers = self._get_headers({
-            "Content-Type": "application/json",
-        })
-        
-        # Simple request to test protocol version
-        test_request = {
-            "jsonrpc": "2.0",
-            "method": "initialize",
-            "params": {
-                "clientInfo": {
-                    "name": "mcp-http-validator",
-                    "version": "0.1.0"
-                }
-            },
-            "id": 1
+        url = self.mcp_endpoint
+        details = {
+            "url": url,
+            "protocol_version": "2025-06-18"
         }
         
+        # First detect transport type
+        detector = TransportDetector(self.client)
+        base_headers = self._get_headers({})
+        
         try:
-            response = await self.client.post(url, headers=headers, json=test_request)
+            caps = await detector.detect(url, base_headers)
+            details["transport_type"] = caps.primary_transport.value
             
-            if response.status_code == 401 and not self.access_token:
-                return None, (
-                    "Protocol version header test requires authentication to validate server compatibility. "
-                    "This test ensures the MCP server correctly processes the MCP-Protocol-Version header as specified in MCP Transport Specification Section 2.4 "
-                    "which is essential for version negotiation between clients and servers. The header allows clients to indicate their supported "
-                    "protocol version and servers to respond with compatible behavior per semantic versioning (RFC 2119). "
-                    "The server returned HTTP 401 Unauthorized (RFC 9110 Section 15.5.2), preventing validation of protocol version handling. "
-                    "Proper version negotiation ensures forward and backward compatibility."
-                ), {
-                    "url": url,
-                    "status_code": response.status_code,
-                    "protocol_version_sent": "2025-06-18",
-                    "suggestion": "Run 'mcp-validate flow' for interactive OAuth flow"
-                }
-            
-            if response.status_code not in [200, 202]:
-                return False, f"Request failed with status {response.status_code}", {
-                    "url": url,
-                    "status_code": response.status_code,
-                }
-            
-            # Check response
-            try:
-                json_response = response.json()
-                
-                # Check if it's an error response about protocol version
-                if "error" in json_response:
-                    error = json_response["error"]
-                    if "protocol version" in error.get("message", "").lower():
-                        # Check if error says empty protocol version
-                        error_msg = error.get("message", "")
-                        if "protocol version: ." in error_msg or "protocol version:  " in error_msg:
-                            # Server is not reading the header
-                            details = {
-                                "url": url,
-                                "protocol_version_sent": "2025-06-18",
-                                "header_name": "MCP-Protocol-Version",
-                                "error": error,
-                                "diagnosis": "Server reports empty protocol version despite header being sent",
-                                "likely_cause": "Server bug - not reading MCP-Protocol-Version header correctly",
-                                "note": "This is a server implementation issue, not a client issue"
-                            }
-                            return False, (
-                                f"Server failed to read protocol version header. {error['message']}. "
-                                "The validator is sending the header correctly, but the server reports it as empty. "
-                                "This indicates a bug in the server's header parsing implementation."
-                            ), details
-                        else:
-                            # Normal protocol version error
-                            details = {
-                                "url": url,
-                                "protocol_version_sent": "2025-06-18",
-                                "header_name": "MCP-Protocol-Version",
-                                "error": error,
-                                "note": "Header is being sent correctly; server may have header parsing issue"
-                            }
-                            return False, f"Server rejected protocol version: {error['message']}", details
-                
-                # If we got a successful response, the protocol version is accepted
+            # For HTTP+SSE servers (GET only)
+            if caps.primary_transport == TransportType.HTTP_SSE:
+                # The MCP-Protocol-Version header was already sent in detection
+                # If we got here, the server accepted it
                 return True, (
-                    f"Server accepted MCP-Protocol-Version header with value '2025-06-18'. "
-                    f"The request completed successfully with status {response.status_code}, "
-                    f"indicating the server recognizes this protocol version. "
-                    f"Note: This test only verifies acceptance of one version, not full version negotiation capabilities."
-                ), {
-                    "url": url,
-                    "protocol_version": "2025-06-18",
-                    "response": json_response,
+                    f"Server accepted MCP-Protocol-Version header with HTTP+SSE transport. "
+                    f"The server supports protocol version '2025-06-18' for SSE connections. "
+                    f"HTTP+SSE servers validate protocol version on the initial GET connection."
+                ), details
+            
+            # For servers that support POST (Streamable HTTP or JSON-RPC)
+            if caps.supports_post_json or caps.supports_post_sse:
+                # Test with the current protocol version
+                headers = self._get_headers({
+                    "Content-Type": "application/json",
+                    "Accept": "application/json, text/event-stream" if caps.supports_post_sse else "application/json"
+                })
+                
+                # Simple request to test protocol version
+                test_request = {
+                    "jsonrpc": "2.0",
+                    "method": "initialize",
+                    "params": {
+                        "clientInfo": {
+                            "name": "mcp-http-validator",
+                            "version": "0.1.0"
+                        }
+                    },
+                    "id": 1
                 }
                 
-            except Exception as e:
-                return False, f"Failed to parse response: {e}", {
-                    "url": url,
-                    "error": str(e),
-                }
+                response = await self.client.post(url, headers=headers, json=test_request)
+                
+                if response.status_code == 401 and not self.access_token:
+                    return None, (
+                        "Protocol version header test requires authentication to validate server compatibility. "
+                        "This test ensures the MCP server correctly processes the MCP-Protocol-Version header as specified in MCP Transport Specification Section 2.4 "
+                        "which is essential for version negotiation between clients and servers. The header allows clients to indicate their supported "
+                        "protocol version and servers to respond with compatible behavior per semantic versioning (RFC 2119). "
+                        "The server returned HTTP 401 Unauthorized (RFC 9110 Section 15.5.2), preventing validation of protocol version handling. "
+                        "Proper version negotiation ensures forward and backward compatibility."
+                    ), {
+                        **details,
+                        "status_code": response.status_code,
+                        "protocol_version_sent": "2025-06-18",
+                        "suggestion": "Run 'mcp-validate flow' for interactive OAuth flow"
+                    }
+                
+                if response.status_code not in [200, 202]:
+                    return False, f"Request failed with status {response.status_code}", {
+                        **details,
+                        "status_code": response.status_code,
+                    }
+                
+                # Check response
+                try:
+                    json_response = response.json()
+                    
+                    # Check if it's an error response about protocol version
+                    if "error" in json_response:
+                        error = json_response["error"]
+                        if "protocol version" in error.get("message", "").lower():
+                            # Check if error says empty protocol version
+                            error_msg = error.get("message", "")
+                            if "protocol version: ." in error_msg or "protocol version:  " in error_msg:
+                                # Server is not reading the header
+                                details.update({
+                                    "protocol_version_sent": "2025-06-18",
+                                    "header_name": "MCP-Protocol-Version",
+                                    "error": error,
+                                    "diagnosis": "Server reports empty protocol version despite header being sent",
+                                    "likely_cause": "Server bug - not reading MCP-Protocol-Version header correctly",
+                                    "note": "This is a server implementation issue, not a client issue"
+                                })
+                                return False, (
+                                    f"Server failed to read protocol version header. {error['message']}. "
+                                    "The validator is sending the header correctly, but the server reports it as empty. "
+                                    "This indicates a bug in the server's header parsing implementation."
+                                ), details
+                            else:
+                                # Normal protocol version error
+                                details.update({
+                                    "protocol_version_sent": "2025-06-18",
+                                    "header_name": "MCP-Protocol-Version",
+                                    "error": error,
+                                    "note": "Header is being sent correctly; server may have header parsing issue"
+                                })
+                                return False, f"Server rejected protocol version: {error['message']}", details
+                    
+                    # If we got a successful response, the protocol version is accepted
+                    return True, (
+                        f"Server accepted MCP-Protocol-Version header with value '2025-06-18' via POST. "
+                        f"The request completed successfully with status {response.status_code}, "
+                        f"indicating the server recognizes this protocol version for {caps.describe()}."
+                    ), {
+                        **details,
+                        "status_code": response.status_code,
+                        "response": json_response,
+                    }
+                    
+                except Exception as e:
+                    return False, f"Failed to parse response: {e}", {
+                        **details,
+                        "error": str(e),
+                    }
+            
+            # If transport doesn't support any method we can test
+            return False, "Unable to test protocol version - server doesn't support GET SSE or POST", details
                 
         except httpx.RequestError as e:
-            return False, f"Request failed: {str(e)}", {"url": url, "error": str(e)}
+            return False, f"Request failed: {str(e)}", details
     
     async def initialize_mcp_session(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Initialize an MCP session with the server."""
-        url = urljoin(self.server_url, "/mcp")
+        url = self.mcp_endpoint
         
         headers = self._get_headers({
             "Content-Type": "application/json",
@@ -952,7 +920,7 @@ class MCPValidator:
     
     async def list_mcp_tools(self) -> Tuple[bool, Optional[str], List[Dict[str, Any]]]:
         """List all available tools from the MCP server."""
-        url = urljoin(self.server_url, "/mcp")
+        url = self.mcp_endpoint
         
         headers = self._get_headers({
             "Content-Type": "application/json",
@@ -989,7 +957,7 @@ class MCPValidator:
     
     async def test_mcp_tool(self, tool: Dict[str, Any], test_destructive: bool = False) -> Dict[str, Any]:
         """Test a specific MCP tool."""
-        url = urljoin(self.server_url, "/mcp")
+        url = self.mcp_endpoint
         tool_name = tool.get("name", "unknown")
         
         headers = self._get_headers({
@@ -1085,6 +1053,29 @@ class MCPValidator:
     
     async def test_mcp_tools(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Test MCP tool discovery and validation."""
+        # Use TransportDetector to determine server capabilities
+        detector = TransportDetector(self.client)
+        base_headers = self._get_headers({})
+        
+        try:
+            caps = await detector.detect(self.mcp_endpoint, base_headers)
+            
+            # If this is an SSE-only server
+            if caps.primary_transport == TransportType.HTTP_SSE:
+                return None, (
+                    "Server uses SSE transport (HTTP with SSE). Tool discovery and testing for SSE servers requires "
+                    "establishing an SSE connection and exchanging messages through the event stream. "
+                    "This validator currently tests tools via JSON-RPC POST requests, which SSE-only "
+                    "servers don't support. Tools functionality should be tested using an SSE client."
+                ), {
+                    "transport": caps.primary_transport.value,
+                    "transport_description": caps.describe(),
+                    "note": "SSE servers handle tools through the event stream"
+                }
+        except Exception:
+            # If transport detection fails, continue with POST-based tests
+            pass
+        
         # Attempt to get access token if we don't have one
         if not self.access_token:
             self.access_token = await self.get_access_token(interactive=False)
@@ -1198,7 +1189,7 @@ class MCPValidator:
         # Just check if metadata endpoint exists and is accessible
         try:
             metadata_url = urljoin(oauth_server, "/.well-known/oauth-authorization-server")
-            response = await self.client.get(metadata_url)
+            response = await self.client.get(metadata_url, timeout=5.0)
             
             if response.status_code != 200:
                 return False, f"OAuth authorization server metadata endpoint returned HTTP {response.status_code}. The endpoint at {metadata_url} must return HTTP 200 (RFC 9110 Section 15.3.1) with valid OAuth 2.0 Authorization Server Metadata as specified in RFC 8414. This endpoint should be publicly accessible without authentication (RFC 8414 Section 3) and return a JSON document (RFC 8259) containing at minimum: issuer, authorization_endpoint, token_endpoint, and response_types_supported fields (RFC 8414 Section 2).", {
@@ -1244,7 +1235,7 @@ class MCPValidator:
         
         try:
             metadata_url = urljoin(oauth_server, "/.well-known/oauth-authorization-server")
-            response = await self.client.get(metadata_url)
+            response = await self.client.get(metadata_url, timeout=5.0)
             
             if response.status_code != 200:
                 return None, "Cannot test OAuth server compliance - metadata endpoint not accessible", details
@@ -1309,7 +1300,7 @@ class MCPValidator:
             pass  # Continue with other methods
         
         # Method 2: Try common subdomain patterns
-        parsed_url = urlparse(self.server_url)
+        parsed_url = urlparse(self.base_url)
         base_domain = parsed_url.hostname
         if base_domain:
             # Extract base domain (e.g., atratest.org from echo-stateless.atratest.org)
@@ -1328,7 +1319,7 @@ class MCPValidator:
                 try:
                     # Check if OAuth metadata endpoint exists
                     test_url = urljoin(auth_url, "/.well-known/oauth-authorization-server")
-                    response = await self.client.get(test_url, follow_redirects=True)
+                    response = await self.client.get(test_url, follow_redirects=True, timeout=3.0)
                     if response.status_code == 200:
                         discovered_servers.append(auth_url)
                         break  # Found one
@@ -1337,10 +1328,10 @@ class MCPValidator:
         
         # Method 3: Check if the MCP server itself is also an OAuth server
         try:
-            test_url = urljoin(self.server_url, "/.well-known/oauth-authorization-server")
-            response = await self.client.get(test_url, follow_redirects=True)
+            test_url = urljoin(self.base_url, "/.well-known/oauth-authorization-server")
+            response = await self.client.get(test_url, follow_redirects=True, timeout=3.0)
             if response.status_code == 200:
-                discovered_servers.append(self.server_url)
+                discovered_servers.append(self.base_url)
         except Exception:
             pass
         
@@ -1362,7 +1353,7 @@ class MCPValidator:
             return None
         
         # Check for existing credentials
-        credentials = self.env_manager.get_oauth_credentials(self.server_url)
+        credentials = self.env_manager.get_oauth_credentials(self.mcp_endpoint)
         
         # Create OAuth client
         self.oauth_client = OAuthTestClient(
@@ -1386,14 +1377,14 @@ class MCPValidator:
                 
                 # Register new client
                 client_id, client_secret, reg_token = await self.oauth_client.register_client(
-                    client_name=f"MCP Validator for {self.server_url}",
+                    client_name=f"MCP Validator for {self.mcp_endpoint}",
                     software_id="mcp-http-validator",
                     software_version="0.1.0",
                 )
                 
                 # Save credentials to .env
                 self.env_manager.save_oauth_credentials(
-                    server_url=self.server_url,
+                    server_url=self.mcp_endpoint,
                     client_id=client_id,
                     client_secret=client_secret,
                     registration_token=reg_token,
@@ -1422,13 +1413,13 @@ class MCPValidator:
             return self.access_token
         
         # Check .env for valid access token
-        stored_token = self.env_manager.get_valid_access_token(self.server_url)
+        stored_token = self.env_manager.get_valid_access_token(self.mcp_endpoint)
         if stored_token:
             self.access_token = stored_token
             return self.access_token
         
         # Check if we have a refresh token
-        refresh_token = self.env_manager.get_refresh_token(self.server_url)
+        refresh_token = self.env_manager.get_refresh_token(self.mcp_endpoint)
         if refresh_token:
             # Try to setup OAuth client if needed
             if not self.oauth_client:
@@ -1442,7 +1433,7 @@ class MCPValidator:
                         self.access_token = token_response.access_token
                         # Save new tokens
                         self.env_manager.save_tokens(
-                            self.server_url,
+                            self.mcp_endpoint,
                             token_response.access_token,
                             token_response.expires_in,
                             token_response.refresh_token or refresh_token
@@ -1464,7 +1455,7 @@ class MCPValidator:
         try:
             token_response = await self.oauth_client.client_credentials_grant(
                 scope="mcp:read mcp:write",
-                resources=[self.server_url]
+                resources=[self.mcp_endpoint]
             )
             if token_response:
                 self.access_token = token_response.access_token
@@ -1615,7 +1606,7 @@ class MCPValidator:
         ]
         
         # Initialize server info
-        self.server_info = MCPServerInfo(url=HttpUrl(self.server_url))
+        self.server_info = MCPServerInfo(url=HttpUrl(self.mcp_endpoint))
         
         # Execute all tests
         self.test_results = []
@@ -1631,7 +1622,7 @@ class MCPValidator:
         error_tests = sum(1 for r in self.test_results if r.status == TestStatus.ERROR)
         
         return ValidationResult(
-            server_url=HttpUrl(self.server_url),
+            server_url=HttpUrl(self.mcp_endpoint),
             started_at=start_time,
             completed_at=datetime.utcnow(),
             total_tests=total_tests,
