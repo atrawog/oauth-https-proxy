@@ -34,6 +34,7 @@ websockets = ">=11.0"
 mcp-streamablehttp-client = { path = "./mcp-streamablehttp-client", editable = true }
 mcp-echo-streamablehttp-server-stateful = { path = "./mcp-echo-streamablehttp-server-stateful", editable = true }
 mcp-echo-streamablehttp-server-stateless = { path = "./mcp-echo-streamablehttp-server-stateless", editable = true }
+mcp-http-validator = { path = "./mcp-http-validator", editable = true }
 
 [tasks]
 test = "pytest tests/ -v"
