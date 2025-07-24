@@ -291,17 +291,37 @@ class OAuthTestClient:
         
         # Add client authentication
         headers = {"Content-Type": "application/x-www-form-urlencoded"}
+        
+        # Try with Basic Auth first (RFC 6749 preferred method)
         if self.client_secret:
             auth = httpx.BasicAuth(self.client_id, self.client_secret)
-        else:
-            auth = None
-            token_data["client_id"] = self.client_id
+            try:
+                response = await self.client.post(
+                    str(self.server_metadata.token_endpoint),
+                    data=token_data,
+                    headers=headers,
+                    auth=auth,
+                )
+                response.raise_for_status()
+                data = response.json()
+                return OAuthTokenResponse(**data)
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 422:
+                    # Server might require client credentials in body instead
+                    pass
+                else:
+                    raise
+        
+        # Try with client credentials in body (alternative method some servers require)
+        token_data["client_id"] = self.client_id
+        if self.client_secret:
+            token_data["client_secret"] = self.client_secret
         
         response = await self.client.post(
             str(self.server_metadata.token_endpoint),
             data=token_data,
             headers=headers,
-            auth=auth,
+            auth=None,
         )
         response.raise_for_status()
         

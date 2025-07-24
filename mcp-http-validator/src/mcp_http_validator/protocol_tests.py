@@ -101,7 +101,7 @@ class ProtocolTests(BaseMCPValidator):
         # First detect transport type WITHOUT the protocol version header
         # This helps us test the raw transport
         detector = TransportDetector(self.client)
-        base_headers = {} if self.access_token else {}
+        base_headers = {}
         if self.access_token:
             base_headers["Authorization"] = f"Bearer {self.access_token}"
         

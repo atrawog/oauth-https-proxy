@@ -99,6 +99,8 @@ class OAuthServerMetadata(BaseModel):
     resource_indicators_supported: Optional[bool] = None
     introspection_endpoint: Optional[HttpUrl] = None
     revocation_endpoint: Optional[HttpUrl] = None
+    id_token_signing_alg_values_supported: Optional[List[str]] = None
+    subject_types_supported: Optional[List[str]] = None
 
 
 class ProtectedResourceMetadata(BaseModel):

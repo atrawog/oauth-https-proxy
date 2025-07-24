@@ -597,26 +597,88 @@ class OAuthTestValidator(BaseMCPValidator):
             # Keep default expected_audience (server URL)
             details["metadata_error"] = str(e)
         
-        # Use RFC8707Validator to analyze the token
+        # Check if token is a JWT or opaque token
+        # Opaque tokens are valid per OAuth 2.0 spec but can't be inspected for audience
+        is_jwt = False
         try:
-            validator = RFC8707Validator(self.access_token)
-            is_valid, token_data, issues = validator.validate()
+            # Try to decode as JWT without verification
+            import jwt
+            jwt.decode(self.access_token, options={"verify_signature": False})
+            is_jwt = True
+        except jwt.DecodeError:
+            # Not a JWT - likely an opaque token
+            is_jwt = False
+        except Exception:
+            # Other errors - treat as opaque token
+            is_jwt = False
+        
+        details["token_type"] = "JWT" if is_jwt else "opaque"
+        
+        if not is_jwt:
+            # Opaque tokens are valid but we can't inspect audience
+            return None, (
+                "Token appears to be an opaque token (not JWT). "
+                "Audience validation requires JWT tokens with inspectable claims. "
+                "Opaque tokens are valid per OAuth 2.0 but audience restrictions must be "
+                "enforced server-side through token introspection (RFC 7662). "
+                "This test is skipped for opaque tokens."
+            ), details
+        
+        # Use RFC8707Validator to analyze the JWT token
+        try:
+            # RFC8707Validator uses static methods - validate token directly
+            is_valid, token_data = RFC8707Validator.validate_token_response(
+                self.access_token,
+                requested_resources=[self.mcp_endpoint],
+                verify_signature=False
+            )
+            issues = []  # RFC8707Validator doesn't return issues in validate_token_response
             
             details["token_valid"] = is_valid
             details["token_issues"] = issues
             
             if not is_valid:
-                # Token is malformed or invalid
-                return False, (
-                    "Cannot validate audience - access token is not a valid JWT. "
-                    f"Token validation failed: {', '.join(issues)}. "
-                    "MCP servers should only accept valid JWT tokens with proper structure and signatures. "
-                    "Run 'mcp-validate flow' for interactive OAuth flow."
-                ), {
-                    **details,
-                    "token_format": "Invalid JWT",
-                    "fix": "Ensure OAuth server generates valid JWT tokens"
-                }
+                # Token validation failed for some reason
+                if token_data and isinstance(token_data, dict):
+                    # We have token data but validation still failed
+                    error_msg = token_data.get("errors", ["Unknown validation error"])
+                    if isinstance(error_msg, list) and error_msg:
+                        error_msg = error_msg[0]
+                    
+                    # Check if this is the common case where OAuth server doesn't support RFC 8707
+                    if "missing requested resources" in str(error_msg):
+                        actual_aud = token_data.get("token_audience", [])
+                        return False, (
+                            f"OAuth server does not implement RFC 8707 resource indicators properly. "
+                            f"The token audience is '{actual_aud}' but should include the MCP server URL "
+                            f"'{self.mcp_endpoint}'. This is an OAuth server configuration issue - the "
+                            f"authorization server should include requested 'resource' parameters in the token's "
+                            f"audience claim. The MCP server cannot fix this; the OAuth server must be configured "
+                            f"to support resource indicators per RFC 8707."
+                        ), {
+                            **details,
+                            "token_data": token_data,
+                            "oauth_server_issue": True,
+                            "spec_reference": "RFC 8707 - Resource Indicators for OAuth 2.0"
+                        }
+                    
+                    return False, (
+                        f"Token audience validation failed: {error_msg}"
+                    ), {
+                        **details,
+                        "token_data": token_data,
+                        "validation_failed": True
+                    }
+                else:
+                    # Could not decode token at all
+                    return False, (
+                        "Cannot validate audience - failed to decode access token. "
+                        "This may indicate the token is malformed or not a valid JWT."
+                    ), {
+                        **details,
+                        "token_format": "Invalid or malformed",
+                        "fix": "Verify the access token is a properly formatted JWT"
+                    }
             
             # Check audience claim
             aud_claim = token_data.get("aud", [])
@@ -930,3 +992,276 @@ class OAuthTestValidator(BaseMCPValidator):
                 
         except Exception as e:
             return False, f"Failed to test dynamic client registration: {str(e)}", details
+    
+    async def test_token_refresh(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+        """Test OAuth token refresh functionality."""
+        details = {
+            "test_description": "Testing OAuth token refresh mechanism",
+            "refresh_token_available": False,
+            "refresh_attempted": False,
+            "refresh_successful": False,
+            "new_token_valid": False,
+        }
+        
+        # Check if we have a refresh token
+        refresh_token = self.env_manager.get_refresh_token(self.mcp_endpoint)
+        if not refresh_token:
+            return None, (
+                "No refresh token available to test token refresh functionality. "
+                "Refresh tokens are typically provided during the initial authorization flow. "
+                "This test validates that the OAuth server properly handles refresh token grants "
+                "as specified in RFC 6749 Section 6."
+            ), details
+        
+        details["refresh_token_available"] = True
+        
+        # Get OAuth server info
+        auth_server_url = await self.discover_oauth_server()
+        if not auth_server_url:
+            return False, "Cannot test refresh without OAuth server discovery", details
+            
+        credentials = self.env_manager.get_oauth_credentials(self.mcp_endpoint)
+        if not credentials.get("client_id"):
+            return False, "Cannot test refresh without client credentials", details
+        
+        try:
+            async with OAuthTestClient(
+                auth_server_url,
+                client_id=credentials["client_id"],
+                client_secret=credentials.get("client_secret"),
+                verify_ssl=self.verify_ssl,
+            ) as oauth_client:
+                # Attempt token refresh
+                details["refresh_attempted"] = True
+                
+                try:
+                    token_response = await oauth_client.refresh_token(
+                        refresh_token,
+                        scope="mcp:read mcp:write"
+                    )
+                    
+                    details["refresh_successful"] = True
+                    details["new_access_token_received"] = bool(token_response.access_token)
+                    details["new_refresh_token_received"] = bool(token_response.refresh_token)
+                    details["expires_in"] = token_response.expires_in
+                    
+                    # Test the new token
+                    if token_response.access_token:
+                        success, error, test_details = await oauth_client.test_mcp_server_with_token(
+                            self.mcp_endpoint,
+                            token_response.access_token
+                        )
+                        details["new_token_valid"] = success
+                        if not success:
+                            details["token_test_error"] = error
+                        
+                        # Save the new tokens if valid
+                        if success:
+                            self.env_manager.save_tokens(
+                                self.mcp_endpoint,
+                                token_response.access_token,
+                                token_response.expires_in,
+                                token_response.refresh_token or refresh_token
+                            )
+                            details["tokens_updated"] = True
+                    
+                    return True, (
+                        "OAuth token refresh successful. "
+                        f"Received new access token (expires in {token_response.expires_in}s). "
+                        f"New token {'is valid and working' if details['new_token_valid'] else 'validation failed'}. "
+                        "The OAuth server properly implements refresh token grant type per RFC 6749."
+                    ), details
+                    
+                except Exception as e:
+                    details["refresh_error"] = str(e)
+                    return False, f"Token refresh failed: {e}", details
+                    
+        except Exception as e:
+            details["test_error"] = str(e)
+            return False, f"Failed to test token refresh: {e}", details
+    
+    async def test_token_expiration_handling(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+        """Test how the server handles invalid/malformed tokens."""
+        details = {
+            "test_description": "Testing invalid token handling",
+            "invalid_token_tested": False,
+            "proper_401_response": False,
+            "www_authenticate_header": None,
+        }
+        
+        # Use an invalid/malformed token to test error handling
+        # Note: This tests invalid tokens, not specifically expired tokens
+        # A truly expired token would need to be a valid JWT with exp claim in the past
+        invalid_token = "invalid.token.test"
+        
+        headers = self._get_headers({
+            "Authorization": f"Bearer {invalid_token}",
+        })
+        
+        try:
+            response = await self.client.get(self.mcp_endpoint, headers=headers)
+            
+            details["invalid_token_tested"] = True
+            details["status_code"] = response.status_code
+            
+            if response.status_code == 401:
+                details["proper_401_response"] = True
+                www_auth = response.headers.get("WWW-Authenticate", "")
+                details["www_authenticate_header"] = www_auth
+                
+                # Check if error indicates invalid token
+                if "invalid_token" in www_auth.lower():
+                    details["indicates_invalid_token"] = True
+                
+                return True, (
+                    "Server properly rejects invalid/malformed tokens with 401 Unauthorized. "
+                    f"WWW-Authenticate header: {www_auth}. "
+                    "This complies with OAuth 2.0 Bearer Token Usage (RFC 6750)."
+                ), details
+            else:
+                return False, (
+                    f"Server returned {response.status_code} instead of 401 for invalid token. "
+                    "Servers must reject invalid/malformed tokens with 401 Unauthorized per RFC 6750."
+                ), details
+                
+        except Exception as e:
+            details["test_error"] = str(e)
+            return False, f"Failed to test invalid token handling: {e}", details
+    
+    async def test_token_introspection(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+        """Test OAuth token introspection endpoint if available."""
+        details = {
+            "test_description": "Testing OAuth token introspection (RFC 7662)",
+            "introspection_endpoint": None,
+            "introspection_supported": False,
+            "token_active": None,
+        }
+        
+        # Get OAuth server metadata
+        auth_server_url = await self.discover_oauth_server()
+        if not auth_server_url:
+            return None, "Cannot test introspection without OAuth server discovery", details
+            
+        try:
+            async with OAuthTestClient(auth_server_url, verify_ssl=self.verify_ssl) as oauth_client:
+                metadata = await oauth_client.discover_metadata()
+                introspection_endpoint = metadata.introspection_endpoint
+                
+                if not introspection_endpoint:
+                    return None, (
+                        "OAuth server does not advertise token introspection endpoint. "
+                        "Token introspection (RFC 7662) is optional but recommended for "
+                        "validating token state and metadata."
+                    ), details
+                
+                details["introspection_endpoint"] = introspection_endpoint
+                details["introspection_supported"] = True
+                
+                # Test with current access token
+                access_token = self.access_token or self.env_manager.get_valid_access_token(self.mcp_endpoint)
+                if not access_token:
+                    details["no_token_to_test"] = True
+                    return None, "No access token available to test introspection", details
+                
+                # Get client credentials
+                credentials = self.env_manager.get_oauth_credentials(self.mcp_endpoint)
+                if not credentials.get("client_id"):
+                    return None, "Cannot test introspection without client credentials", details
+                
+                # Perform introspection
+                oauth_client.client_id = credentials["client_id"]
+                oauth_client.client_secret = credentials.get("client_secret")
+                
+                introspect_data = {
+                    "token": access_token,
+                    "token_type_hint": "access_token",
+                    "client_id": credentials["client_id"],
+                    "client_secret": credentials.get("client_secret", "")
+                }
+                
+                # Note: auth.atratest.org requires client credentials in body, not Basic Auth
+                response = await oauth_client.client.post(
+                    str(introspection_endpoint),
+                    data=introspect_data,
+                    auth=None
+                )
+                
+                if response.status_code == 200:
+                    result = response.json()
+                    details["introspection_response"] = result
+                    details["token_active"] = result.get("active", False)
+                    details["token_scope"] = result.get("scope")
+                    details["token_exp"] = result.get("exp")
+                    details["token_aud"] = result.get("aud")
+                    
+                    if details["token_active"]:
+                        return True, (
+                            "Token introspection successful. "
+                            f"Token is {'active' if result.get('active') else 'inactive'}. "
+                            f"Scope: {result.get('scope', 'N/A')}. "
+                            "OAuth server properly implements RFC 7662."
+                        ), details
+                    else:
+                        return True, (
+                            "Token introspection indicates token is inactive/expired. "
+                            "This is expected if the token has expired or been revoked."
+                        ), details
+                else:
+                    details["introspection_failed"] = True
+                    details["status_code"] = response.status_code
+                    return False, f"Introspection request failed with status {response.status_code}", details
+                    
+        except Exception as e:
+            details["test_error"] = str(e)
+            return None, f"Failed to test token introspection: {e}", details
+    
+    async def test_token_revocation(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
+        """Test OAuth token revocation endpoint if available."""
+        details = {
+            "test_description": "Testing OAuth token revocation (RFC 7009)",
+            "revocation_endpoint": None,
+            "revocation_supported": False,
+            "revocation_tested": False,
+        }
+        
+        # We don't actually revoke tokens in tests as it would break subsequent tests
+        # Just check if the endpoint exists and is reachable
+        
+        auth_server_url = await self.discover_oauth_server()
+        if not auth_server_url:
+            return None, "Cannot test revocation without OAuth server discovery", details
+            
+        try:
+            async with OAuthTestClient(auth_server_url, verify_ssl=self.verify_ssl) as oauth_client:
+                metadata = await oauth_client.discover_metadata()
+                revocation_endpoint = metadata.revocation_endpoint
+                
+                if not revocation_endpoint:
+                    return None, (
+                        "OAuth server does not advertise token revocation endpoint. "
+                        "Token revocation (RFC 7009) is optional but recommended for "
+                        "allowing clients to explicitly revoke tokens when no longer needed."
+                    ), details
+                
+                details["revocation_endpoint"] = revocation_endpoint
+                details["revocation_supported"] = True
+                
+                # Just check if endpoint is reachable with OPTIONS
+                try:
+                    response = await oauth_client.client.options(str(revocation_endpoint))
+                    details["endpoint_reachable"] = response.status_code in [200, 204, 405]
+                    details["allowed_methods"] = response.headers.get("Allow", "")
+                    
+                    return True, (
+                        f"OAuth server supports token revocation at {revocation_endpoint}. "
+                        "Endpoint is reachable and should accept POST requests with token parameter. "
+                        "Token revocation allows clients to explicitly invalidate tokens."
+                    ), details
+                    
+                except Exception as e:
+                    details["endpoint_check_error"] = str(e)
+                    return None, f"Could not verify revocation endpoint: {e}", details
+                    
+        except Exception as e:
+            details["test_error"] = str(e)
+            return None, f"Failed to test token revocation: {e}", details

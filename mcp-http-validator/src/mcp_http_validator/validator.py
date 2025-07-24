@@ -141,6 +141,54 @@ class MCPValidator(OAuthTestValidator, ProtocolTests, MCPToolTests, OAuthHelpers
                     ),
                     self.test_token_audience_validation,
                 ),
+                (
+                    TestCase(
+                        id="token-refresh",
+                        name="OAuth Token Refresh",
+                        description="Test OAuth token refresh functionality",
+                        spec_reference="RFC 6749 Section 6",
+                        severity=TestSeverity.MEDIUM,
+                        required=False,
+                        category="oauth",
+                    ),
+                    self.test_token_refresh,
+                ),
+                (
+                    TestCase(
+                        id="token-validation",
+                        name="Invalid Token Handling",
+                        description="Server must properly reject invalid/malformed tokens",
+                        spec_reference="RFC 6750",
+                        severity=TestSeverity.HIGH,
+                        required=True,
+                        category="oauth",
+                    ),
+                    self.test_token_expiration_handling,
+                ),
+                (
+                    TestCase(
+                        id="token-introspection",
+                        name="Token Introspection",
+                        description="Test OAuth token introspection endpoint",
+                        spec_reference="RFC 7662",
+                        severity=TestSeverity.LOW,
+                        required=False,
+                        category="oauth",
+                    ),
+                    self.test_token_introspection,
+                ),
+                (
+                    TestCase(
+                        id="token-revocation",
+                        name="Token Revocation",
+                        description="Test OAuth token revocation endpoint",
+                        spec_reference="RFC 7009",
+                        severity=TestSeverity.LOW,
+                        required=False,
+                        category="oauth",
+                    ),
+                    self.test_token_revocation,
+                ),
             ])
         
         # Core protocol tests - always run these

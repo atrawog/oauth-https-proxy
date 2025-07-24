@@ -43,7 +43,26 @@ class MCPToolTests(BaseMCPValidator):
             
             # Check for error response
             if "error" in json_response:
-                return False, f"Server returned error: {json_response['error']['message']}", {
+                error_msg = json_response['error']['message']
+                # Check if this is the protocol version bug
+                if "Unsupported protocol version: " in error_msg and "Supported versions:" in error_msg:
+                    # Check if protocol version is in our headers
+                    sent_headers = headers.copy()
+                    if "MCP-Protocol-Version" in sent_headers:
+                        return False, (
+                            f"Server error indicates it's not reading the MCP-Protocol-Version header correctly. "
+                            f"The validator sent 'MCP-Protocol-Version: {sent_headers['MCP-Protocol-Version']}' "
+                            f"as required by the MCP specification, but the server reported: '{error_msg}'. "
+                            f"The server appears to be looking for protocolVersion in the request params instead of "
+                            f"the HTTP header, which violates the MCP transport specification."
+                        ), {
+                            "error": json_response["error"],
+                            "sent_protocol_header": sent_headers.get("MCP-Protocol-Version"),
+                            "spec_violation": "Server should read protocol version from MCP-Protocol-Version header, not params",
+                            "spec_reference": "https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#protocol-version-header"
+                        }
+                
+                return False, f"Server returned error: {error_msg}", {
                     "error": json_response["error"]
                 }
             
@@ -406,12 +425,20 @@ class MCPToolTests(BaseMCPValidator):
         """Test a single tool via SSE client."""
         tool_name = tool.get("name", "unknown")
         
-        # Skip potentially destructive tools
+        # Check MCP standard destructiveHint annotation first
+        if tool.get("annotations", {}).get("destructiveHint", False):
+            return {
+                "tool_name": tool_name,
+                "status": "skipped",
+                "reason": "Tool marked as destructive via destructiveHint annotation"
+            }
+        
+        # Also skip based on name patterns as a fallback
         if any(keyword in tool_name.lower() for keyword in ["delete", "remove", "destroy", "drop", "truncate"]):
             return {
                 "tool_name": tool_name,
                 "status": "skipped",
-                "reason": "Potentially destructive operation"
+                "reason": "Potentially destructive operation based on name"
             }
         
         try:

@@ -548,10 +548,35 @@ def oauth(
             console.print("[bold]Discovering OAuth server metadata...[/bold]")
             try:
                 metadata = await client.discover_metadata()
-                console.print("[green]✓[/green] Metadata endpoint found")
+                metadata_url = f"{auth_server_url}/.well-known/oauth-authorization-server"
+                console.print(f"[green]✓[/green] Metadata endpoint found: [cyan]{metadata_url}[/cyan]")
                 console.print(f"  Issuer: {metadata.issuer}")
-                console.print(f"  Authorization: {metadata.authorization_endpoint}")
-                console.print(f"  Token: {metadata.token_endpoint}")
+                
+                # Show all discovered endpoints
+                console.print("\n  Discovered endpoints:")
+                console.print(f"  - Authorization: {metadata.authorization_endpoint}")
+                console.print(f"  - Token: {metadata.token_endpoint}")
+                
+                if metadata.jwks_uri:
+                    console.print(f"  - JWKS: {metadata.jwks_uri}")
+                if metadata.registration_endpoint:
+                    console.print(f"  - Registration: {metadata.registration_endpoint}")
+                if metadata.introspection_endpoint:
+                    console.print(f"  - Introspection: {metadata.introspection_endpoint}")
+                if metadata.revocation_endpoint:
+                    console.print(f"  - Revocation: {metadata.revocation_endpoint}")
+                
+                # Show additional metadata
+                if metadata.scopes_supported:
+                    console.print(f"\n  Scopes supported: {', '.join(metadata.scopes_supported)}")
+                if metadata.grant_types_supported:
+                    console.print(f"  Grant types: {', '.join(metadata.grant_types_supported)}")
+                if metadata.token_endpoint_auth_methods_supported:
+                    console.print(f"  Token auth methods: {', '.join(metadata.token_endpoint_auth_methods_supported)}")
+                if metadata.id_token_signing_alg_values_supported:
+                    console.print(f"  ID token algorithms: {', '.join(metadata.id_token_signing_alg_values_supported)}")
+                if metadata.resource_indicators_supported is not None:
+                    console.print(f"  Resource indicators: {metadata.resource_indicators_supported}")
             except Exception as e:
                 console.print(f"[red]✗[/red] Failed to discover metadata: {e}")
                 return False  # Failed to discover metadata
@@ -1528,10 +1553,10 @@ def full(
     """Run ALL validation tests on an MCP server.
     
     This runs a comprehensive test suite in the correct order:
-    1. OAuth client registration (if needed)
-    2. OAuth flow to get access token (if needed)
-    3. Main MCP validation
-    4. OAuth server compliance testing  
+    1. OAuth server discovery and testing (if needed)
+    2. OAuth client registration (if needed)
+    3. OAuth flow to get access token (if needed)
+    4. Main MCP validation
     5. MCP tools testing
     
     Example:
@@ -1545,6 +1570,9 @@ def full(
     
     # Track overall results
     all_passed = True
+    oauth_passed = None
+    validation_passed = None
+    tools_passed = None
     
     # 0. First check if server requires authentication
     async def check_auth_required():
@@ -1565,8 +1593,8 @@ def full(
         credentials = env_manager.get_oauth_credentials(mcp_server_url)
         has_valid_token = env_manager.get_valid_access_token(mcp_server_url) is not None
         
-        # 1. Check OAuth discovery first
-        console.print("[bold blue]═══ OAuth Discovery ═══[/bold blue]")
+        # 1. Test OAuth server first
+        console.print("[bold blue]═══ Testing OAuth Server ═══[/bold blue]")
         
         async def check_oauth_discovery():
             async with MCPValidator(mcp_server_url, verify_ssl=not no_ssl_verify) as validator:
@@ -1579,7 +1607,73 @@ def full(
                     console.print("[dim]This server may use a different authentication method[/dim]")
                     return None
         
+        console.print("[bold]Discovering OAuth server metadata...[/bold]")
         oauth_server_url = asyncio.run(check_oauth_discovery())
+        
+        # If OAuth server discovered, test its compliance
+        if oauth_server_url:
+            console.print()
+            # Run OAuth server compliance test directly
+            async def run_oauth_compliance():
+                has_failures = False
+                async with OAuthTestClient(oauth_server_url) as client:
+                    try:
+                        metadata = await client.discover_metadata()
+                        metadata_url = f"{oauth_server_url}/.well-known/oauth-authorization-server"
+                        console.print(f"[green]✓[/green] Metadata endpoint found: [cyan]{metadata_url}[/cyan]")
+                        console.print(f"  Issuer: {metadata.issuer}")
+                        
+                        # Show all discovered endpoints
+                        console.print("\n  Discovered endpoints:")
+                        console.print(f"  - Authorization: {metadata.authorization_endpoint}")
+                        console.print(f"  - Token: {metadata.token_endpoint}")
+                        
+                        if metadata.jwks_uri:
+                            console.print(f"  - JWKS: {metadata.jwks_uri}")
+                        if metadata.registration_endpoint:
+                            console.print(f"  - Registration: {metadata.registration_endpoint}")
+                        if metadata.introspection_endpoint:
+                            console.print(f"  - Introspection: {metadata.introspection_endpoint}")
+                        if metadata.revocation_endpoint:
+                            console.print(f"  - Revocation: {metadata.revocation_endpoint}")
+                        
+                        # Show additional metadata
+                        if metadata.scopes_supported:
+                            console.print(f"\n  Scopes supported: {', '.join(metadata.scopes_supported)}")
+                        if metadata.grant_types_supported:
+                            console.print(f"  Grant types: {', '.join(metadata.grant_types_supported)}")
+                        if metadata.token_endpoint_auth_methods_supported:
+                            console.print(f"  Token auth methods: {', '.join(metadata.token_endpoint_auth_methods_supported)}")
+                        if metadata.id_token_signing_alg_values_supported:
+                            console.print(f"  ID token algorithms: {', '.join(metadata.id_token_signing_alg_values_supported)}")
+                        if metadata.resource_indicators_supported is not None:
+                            console.print(f"  Resource indicators: {metadata.resource_indicators_supported}")
+                    except Exception as e:
+                        console.print(f"[red]✗[/red] Failed to discover metadata: {e}")
+                        return False
+                    
+                    # Check compliance (without redundant header)
+                    console.print()
+                    compliance_results = await ComplianceChecker.check_oauth_server_compliance(client)
+                    
+                    for check, result in compliance_results.items():
+                        if result == "PASS":
+                            console.print(f"[green]✓[/green] {check}")
+                        elif result.startswith("WARN"):
+                            console.print(f"[yellow]⚠[/yellow] {check}: {result}")
+                        else:
+                            console.print(f"[red]✗[/red] {check}: {result}")
+                            has_failures = True
+                    
+                    return not has_failures
+            
+            oauth_passed = asyncio.run(run_oauth_compliance())
+            if not oauth_passed:
+                all_passed = False
+        else:
+            oauth_passed = False  # No OAuth server found when auth required
+            all_passed = False
+        
         console.print()
     
     # Only proceed with OAuth if server supports it AND requires auth
@@ -1697,50 +1791,7 @@ def full(
     if not validation_passed:
         all_passed = False
     
-    # 5. Run OAuth server testing (if OAuth server was discovered AND auth is required)
-    if oauth_server_url and auth_required:
-        console.print("\n[bold blue]═══ OAuth Server Compliance ═══[/bold blue]")
-        console.print(f"Testing OAuth server: [cyan]{oauth_server_url}[/cyan]")
-        
-        # Run OAuth server compliance test directly
-        async def run_oauth_compliance():
-            has_failures = False
-            async with OAuthTestClient(oauth_server_url) as client:
-                # Discover metadata
-                console.print("[bold]Discovering OAuth server metadata...[/bold]")
-                try:
-                    metadata = await client.discover_metadata()
-                    console.print("[green]✓[/green] Metadata endpoint found")
-                    console.print(f"  Issuer: {metadata.issuer}")
-                    console.print(f"  Authorization: {metadata.authorization_endpoint}")
-                    console.print(f"  Token: {metadata.token_endpoint}")
-                except Exception as e:
-                    console.print(f"[red]✗[/red] Failed to discover metadata: {e}")
-                    return False
-                
-                # Check compliance
-                console.print()
-                console.print("[bold]Checking OAuth compliance...[/bold]")
-                
-                compliance_results = await ComplianceChecker.check_oauth_server_compliance(client)
-                
-                for check, result in compliance_results.items():
-                    if result == "PASS":
-                        console.print(f"[green]✓[/green] {check}")
-                    elif result.startswith("WARN"):
-                        console.print(f"[yellow]⚠[/yellow] {check}: {result}")
-                    else:
-                        console.print(f"[red]✗[/red] {check}: {result}")
-                        has_failures = True
-                
-                return not has_failures
-        
-        oauth_passed = asyncio.run(run_oauth_compliance())
-        if not oauth_passed:
-            all_passed = False
-    elif auth_required:
-        console.print("\n[bold blue]═══ OAuth Server Compliance ═══[/bold blue]")
-        console.print("[yellow]No OAuth server discovered - skipping OAuth compliance tests[/yellow]")
+    # OAuth server testing already done above, no need to repeat
     
     # 6. Run tools testing (skip if already tested in main validation)
     # Check if tools were already tested in main validation
@@ -1754,6 +1805,7 @@ def full(
         console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
         console.print("[green]✓[/green] Tools already tested successfully in main validation")
         console.print("[dim]Use 'mcp-validate tools' for detailed tool testing[/dim]")
+        tools_passed = True
     else:
         console.print("\n[bold blue]═══ MCP Tools Testing ═══[/bold blue]")
         
@@ -1778,8 +1830,21 @@ def full(
                         console.print(f"  Server: {server_info.get('name', 'Unknown')}")
                         console.print(f"  Version: {server_info.get('version', 'Unknown')}")
                 else:
-                    console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error}")
-                    console.print("  Continuing anyway - some servers may not require initialization")
+                    # Check if this is a protocol version spec violation
+                    if isinstance(init_details, dict) and init_details.get("spec_violation"):
+                        console.print(f"[yellow]⚠[/yellow] Session initialization failed: Server spec violation")
+                        err_msg = init_details.get('error', {}).get('message', '') if isinstance(init_details.get('error'), dict) else ''
+                        if err_msg:
+                            console.print(f"  Server error: {err_msg}")
+                        console.print(f"  [dim]Issue: {init_details.get('spec_violation')}[/dim]")
+                        console.print("  Continuing anyway - some servers may not require initialization")
+                    else:
+                        # Show shortened error for readability
+                        error_msg = str(error)
+                        if len(error_msg) > 200:
+                            error_msg = error_msg[:197] + "..."
+                        console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error_msg}")
+                        console.print("  Continuing anyway - some servers may not require initialization")
                 
                 # List tools
                 console.print()
@@ -1805,12 +1870,48 @@ def full(
         if not tools_passed:
             all_passed = False
     
-    # Final summary
-    console.print("\n[bold]═══ Full Validation Complete ═══[/bold]")
-    if all_passed:
-        console.print("[bold green]✅ All tests passed![/bold green]")
+    # Test Summary
+    console.print("\n[bold]═══ Test Summary ═══[/bold]")
+    
+    # OAuth Server Status
+    if auth_required:
+        if oauth_server_url:
+            if oauth_passed is not None:
+                if oauth_passed:
+                    console.print("[green]✓[/green] OAuth Server: Compliant with MCP specification")
+                else:
+                    console.print("[red]✗[/red] OAuth Server: Non-compliant with MCP specification")
+            else:
+                console.print("[yellow]⚠[/yellow] OAuth Server: Discovered but not tested")
+        else:
+            console.print("[yellow]⚠[/yellow] OAuth Server: Not discovered (may use different auth method)")
     else:
-        console.print("[bold red]❌ Some tests failed - review the results above[/bold red]")
+        console.print("[dim]- OAuth Server: Not required (public server)[/dim]")
+    
+    # MCP Validation Status
+    if validation_passed:
+        console.print("[green]✓[/green] MCP Validation: All tests passed")
+    else:
+        console.print("[red]✗[/red] MCP Validation: Some tests failed")
+    
+    # Tools Testing Status
+    if tools_already_tested:
+        console.print("[green]✓[/green] MCP Tools: Tested successfully in main validation")
+    elif tools_passed is not None:
+        if tools_passed:
+            console.print("[green]✓[/green] MCP Tools: Discovery successful")
+        else:
+            console.print("[red]✗[/red] MCP Tools: Testing failed")
+    else:
+        console.print("[dim]- MCP Tools: Not tested[/dim]")
+    
+    # Overall Result
+    console.print()
+    if all_passed:
+        console.print("[bold green]✅ Overall Result: All tests passed![/bold green]")
+    else:
+        console.print("[bold red]❌ Overall Result: Some tests failed[/bold red]")
+        console.print("[dim]Review the detailed results above for more information[/dim]")
         sys.exit(1)
 
 
@@ -1857,24 +1958,85 @@ def tools(
                 console.print("Run 'mcp-validate flow' to authenticate if needed.")
                 console.print()
             
-            # Try to initialize session
-            console.print("[bold]Initializing MCP session...[/bold]")
-            success, error, init_details = await validator.initialize_mcp_session()
+            # Detect transport type first
+            from mcp_http_validator.transport_detector import TransportDetector, TransportType
+            from mcp_http_validator.sse_client import MCPSSEClient
             
-            if success:
-                console.print("[green]✓[/green] Session initialized")
-                server_info = init_details.get("server_info", {})
-                if server_info:
-                    console.print(f"  Server: {server_info.get('name', 'Unknown')}")
-                    console.print(f"  Version: {server_info.get('version', 'Unknown')}")
+            detector = TransportDetector(validator.client)
+            headers = validator._get_headers({})
+            
+            try:
+                caps = await detector.detect(mcp_server_url, headers)
+                is_sse = caps.primary_transport == TransportType.HTTP_SSE
+            except Exception:
+                # If detection fails, try to determine from URL
+                is_sse = mcp_server_url.endswith("/sse")
+            
+            if is_sse:
+                # Handle SSE endpoints
+                console.print("[bold]Connecting to SSE endpoint...[/bold]")
+                sse_client = MCPSSEClient(mcp_server_url, validator.client, headers)
+                
+                connected = await sse_client.connect(timeout=10.0)
+                if not connected:
+                    console.print("[red]✗[/red] Failed to connect to SSE endpoint")
+                    console.print("  The server should send an 'endpoint' event with the message URL")
+                    return False
+                
+                console.print(f"[green]✓[/green] Connected to SSE endpoint")
+                console.print(f"  Message endpoint: {sse_client.endpoint_url}")
+                
+                # Try to initialize (optional for some servers)
+                initialized = await sse_client.test_initialize()
+                if initialized:
+                    console.print("[green]✓[/green] Session initialized")
+                else:
+                    console.print("[yellow]⚠[/yellow] Session initialization not required")
+                
+                # List tools via SSE
+                console.print()
+                console.print("[bold]Discovering tools...[/bold]")
+                tools = await sse_client.list_tools()
+                
+                if tools is None:
+                    console.print("[red]✗[/red] Failed to list tools via SSE")
+                    console.print("  Authentication may be required")
+                    return False
+                
+                success = True
+                error = None
             else:
-                console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error}")
-                console.print("  Continuing anyway - some servers may not require initialization")
-            
-            # List tools
-            console.print()
-            console.print("[bold]Discovering tools...[/bold]")
-            success, error, tools = await validator.list_mcp_tools()
+                # Handle regular HTTP endpoints
+                console.print("[bold]Initializing MCP session...[/bold]")
+                success, error, init_details = await validator.initialize_mcp_session()
+                
+                if success:
+                    console.print("[green]✓[/green] Session initialized")
+                    server_info = init_details.get("server_info", {})
+                    if server_info:
+                        console.print(f"  Server: {server_info.get('name', 'Unknown')}")
+                        console.print(f"  Version: {server_info.get('version', 'Unknown')}")
+                else:
+                    # Check if this is a protocol version spec violation
+                    if isinstance(init_details, dict) and init_details.get("spec_violation"):
+                        console.print(f"[yellow]⚠[/yellow] Session initialization failed: Server spec violation")
+                        err_msg = init_details.get('error', {}).get('message', '') if isinstance(init_details.get('error'), dict) else ''
+                        if err_msg:
+                            console.print(f"  Server error: {err_msg}")
+                        console.print(f"  [dim]Issue: {init_details.get('spec_violation')}[/dim]")
+                        console.print("  Continuing anyway - some servers may not require initialization")
+                    else:
+                        # Show shortened error for readability
+                        error_msg = str(error)
+                        if len(error_msg) > 200:
+                            error_msg = error_msg[:197] + "..."
+                        console.print(f"[yellow]⚠[/yellow] Session initialization failed: {error_msg}")
+                        console.print("  Continuing anyway - some servers may not require initialization")
+                
+                # List tools
+                console.print()
+                console.print("[bold]Discovering tools...[/bold]")
+                success, error, tools = await validator.list_mcp_tools()
             
             if not success:
                 console.print(f"[red]✗[/red] Failed to list tools: {error}")
@@ -1911,7 +2073,7 @@ def tools(
             if list_only:
                 return
             
-            # Filter tools if specific tool requested
+            # Filter tools if specific tool requested (note: tool_name is a parameter of the function)
             if tool_name:
                 tools = [t for t in tools if t.get("name") == tool_name]
                 if not tools:
@@ -1931,7 +2093,60 @@ def tools(
                 if test_destructive and tool.get("annotations", {}).get("destructiveHint"):
                     console.print(f"\n[yellow]Testing destructive tool: {tool['name']}[/yellow]")
                 
-                result = await validator.test_mcp_tool(tool, test_destructive=test_destructive)
+                # Use appropriate method for testing based on transport
+                if is_sse:
+                    # Test via SSE - inline implementation
+                    current_tool_name = tool.get("name", "unknown")
+                    result = {"tool_name": current_tool_name}
+                    
+                    # Skip destructive tools unless explicitly requested
+                    is_destructive = tool.get("annotations", {}).get("destructiveHint", False)
+                    if is_destructive and not test_destructive:
+                        result["status"] = "skipped"
+                        result["reason"] = "Destructive tool - use --test-destructive to test"
+                    else:
+                        try:
+                            # Build minimal test arguments
+                            test_args = {}
+                            schema = tool.get("inputSchema", {})
+                            required = schema.get("required", [])
+                            
+                            # Only provide required arguments with minimal values
+                            for req in required:
+                                prop_def = schema.get("properties", {}).get(req, {})
+                                if prop_def.get("type") == "string":
+                                    test_args[req] = "test"
+                                elif prop_def.get("type") == "integer":
+                                    test_args[req] = 0
+                                elif prop_def.get("type") == "number":
+                                    test_args[req] = 0.0
+                                elif prop_def.get("type") == "boolean":
+                                    test_args[req] = False
+                                elif prop_def.get("type") == "array":
+                                    test_args[req] = []
+                                elif prop_def.get("type") == "object":
+                                    test_args[req] = {}
+                            
+                            # Call the tool via SSE
+                            response = await sse_client.call_tool(current_tool_name, test_args)
+                            
+                            if "result" in response:
+                                result["status"] = "success"
+                                result["test_params"] = test_args
+                            elif "error" in response:
+                                result["status"] = "error"
+                                result["error"] = response["error"].get("message", "Unknown error")
+                                result["test_params"] = test_args
+                            else:
+                                result["status"] = "error"
+                                result["error"] = "Invalid response format"
+                                
+                        except Exception as e:
+                            result["status"] = "exception"
+                            result["error"] = str(e)
+                else:
+                    # Test via JSON-RPC
+                    result = await validator.test_mcp_tool(tool, test_destructive=test_destructive)
                 
                 status_icons = {
                     "success": "[green]✓[/green]",
