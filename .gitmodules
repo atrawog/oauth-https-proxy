@@ -10,3 +10,6 @@
 [submodule "mcp-oauth-dynamicclient"]
 	path = mcp-oauth-dynamicclient
 	url = https://github.com/atrawog/mcp-oauth-dynamicclient
+[submodule "mcp-http-validator"]
+	path = mcp-http-validator
+	url = git@github.com:atrawog/mcp-http-validator.git
