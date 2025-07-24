@@ -129,33 +129,47 @@ class ComplianceChecker:
         if "oauth-metadata" in test_results_by_id:
             result = test_results_by_id["oauth-metadata"]
             if result.status != TestStatus.PASSED:
-                self.recommendations.append(
-                    "Implement /.well-known/oauth-protected-resource endpoint as required by RFC 9728"
-                )
-                self.recommendations.append(
-                    "Include 'resource' and 'authorization_servers' fields in the metadata"
-                )
+                details = result.details or {}
+                url = details.get("url_tested", "/.well-known/oauth-protected-resource")
+                if details.get("status_code") == 401:
+                    self.recommendations.append(
+                        f"**OAuth Discovery**: Remove auth requirement from `{url}` (currently returns 401)"
+                    )
+                elif details.get("status_code") == 404:
+                    self.recommendations.append(
+                        f"**OAuth Discovery**: Implement `{url}` endpoint (currently returns 404)"
+                    )
+                else:
+                    self.recommendations.append(
+                        f"**OAuth Discovery**: Fix `{url}` endpoint (currently returns {details.get('status_code', 'error')})"
+                    )
         
         # Authentication challenge recommendations
         if "auth-challenge" in test_results_by_id:
             result = test_results_by_id["auth-challenge"]
             if result.status != TestStatus.PASSED:
-                self.recommendations.append(
-                    "Return 401 Unauthorized for unauthenticated requests to protected endpoints"
-                )
-                self.recommendations.append(
-                    "Include WWW-Authenticate header with realm, as_uri, and resource_uri parameters"
-                )
+                details = result.details or {}
+                url = details.get("url_tested", "/mcp endpoint")
+                if details.get("status_code") != 401:
+                    self.recommendations.append(
+                        f"**401 Response**: Return 401 Unauthorized for `{url}` (not {details.get('status_code')})"
+                    )
+                elif details.get("missing_params"):
+                    params = details["missing_params"]
+                    self.recommendations.append(
+                        f"**WWW-Authenticate**: Add {', '.join(params)} to Bearer challenge on `{url}`"
+                    )
+                else:
+                    self.recommendations.append(
+                        f"**WWW-Authenticate**: Include proper Bearer challenge on `{url}` responses"
+                    )
         
         # Token validation recommendations
         if "token-audience" in test_results_by_id:
             result = test_results_by_id["token-audience"]
-            if result.status != TestStatus.PASSED:
+            if result.status != TestStatus.PASSED and result.status != TestStatus.SKIPPED:
                 self.recommendations.append(
-                    "Validate that access tokens include the server's resource URL in the audience claim"
-                )
-                self.recommendations.append(
-                    "Reject tokens that don't have the correct audience to prevent token confusion attacks"
+                    "**Token Security**: Validate token audience contains your server URL"
                 )
         
         # HTTP transport recommendations
@@ -185,19 +199,15 @@ class ComplianceChecker:
         if "protocol-version" in test_results_by_id:
             result = test_results_by_id["protocol-version"]
             if result.status != TestStatus.PASSED:
-                if result.details and "error" in result.details:
-                    error_msg = result.details["error"].get("message", "")
-                    if "unsupported protocol version: ." in error_msg.lower():
-                        self.recommendations.append(
-                            "Check MCP-Protocol-Version header parsing - header is being sent but server reports empty value"
-                        )
-                        self.recommendations.append(
-                            "Ensure case-sensitive header parsing for 'MCP-Protocol-Version'"
-                        )
-                    else:
-                        self.recommendations.append(
-                            "Support MCP protocol version 2025-06-18 as specified in the MCP specification"
-                        )
+                if result.details and "diagnosis" in result.details:
+                    # Server bug - not reading header
+                    self.recommendations.append(
+                        "**Server Bug**: Fix MCP-Protocol-Version header parsing (case-insensitive lookup)"
+                    )
+                else:
+                    self.recommendations.append(
+                        "**Protocol Support**: Add MCP version 2025-06-18 to supported versions"
+                    )
         
         # General OAuth recommendations
         if self.server_info.oauth_metadata:

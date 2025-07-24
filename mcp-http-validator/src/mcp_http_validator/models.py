@@ -43,7 +43,8 @@ class TestResult(BaseModel):
     test_case: TestCase
     status: TestStatus
     duration_ms: float = Field(..., description="Test execution time in milliseconds")
-    error_message: Optional[str] = None
+    message: Optional[str] = Field(None, description="Test result message (for any status)")
+    error_message: Optional[str] = Field(None, description="Error details for failed tests (deprecated - use message)")
     details: Optional[Dict[str, Any]] = None
     timestamp: datetime = Field(default_factory=datetime.utcnow)
 
@@ -76,6 +77,11 @@ class ValidationResult(BaseModel):
             result.status == TestStatus.PASSED or not result.test_case.required
             for result in self.test_results
         )
+    
+    @property
+    def duration(self) -> float:
+        """Calculate the duration of the validation run in seconds."""
+        return (self.completed_at - self.started_at).total_seconds()
 
 
 class OAuthServerMetadata(BaseModel):
@@ -160,7 +166,7 @@ class ComplianceReport(BaseModel):
                     f"",
                     f"- **Status**: {result.status}",
                     f"- **Severity**: {result.test_case.severity}",
-                    f"- **Error**: {result.error_message}",
+                    f"- **Error**: {result.message}",
                     f"",
                 ])
         

@@ -90,8 +90,8 @@ class EnvManager:
         server_key = server_url.replace("https://", "").replace("http://", "").replace("/", "_").replace(".", "_").upper()
         
         return {
-            "client_id": self.get(f"OAUTH_CLIENT_ID_{server_key}") or self.get("OAUTH_CLIENT_ID"),
-            "client_secret": self.get(f"OAUTH_CLIENT_SECRET_{server_key}") or self.get("OAUTH_CLIENT_SECRET"),
+            "client_id": self.get(f"OAUTH_CLIENT_ID_{server_key}"),
+            "client_secret": self.get(f"OAUTH_CLIENT_SECRET_{server_key}"),
             "registration_token": self.get(f"OAUTH_REGISTRATION_TOKEN_{server_key}"),
         }
     
@@ -125,12 +125,6 @@ class EnvManager:
         
         if registration_token:
             values[f"OAUTH_REGISTRATION_TOKEN_{server_key}"] = registration_token
-        
-        # Also set generic credentials if not already set
-        if not self.get("OAUTH_CLIENT_ID"):
-            values["OAUTH_CLIENT_ID"] = client_id
-            if client_secret:
-                values["OAUTH_CLIENT_SECRET"] = client_secret
         
         return self.update(values)
     
