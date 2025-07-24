@@ -111,6 +111,20 @@ class GenericOAuthFlow:
                             token.expires_in,
                             token.refresh_token
                         )
+                        
+                        # If we successfully authenticated and don't have redirect URI saved, save it
+                        credentials = self.env_manager.get_oauth_credentials(self.mcp_server_url)
+                        if client.redirect_uri and not credentials.get("redirect_uri"):
+                            self.env_manager.save_oauth_credentials(
+                                self.mcp_server_url,
+                                credentials["client_id"],
+                                credentials.get("client_secret"),
+                                credentials.get("registration_token"),
+                                client.redirect_uri
+                            )
+                            if not self.config.suppress_console:
+                                console.print(f"[dim]Saved successful redirect URI: {client.redirect_uri}[/dim]")
+                        
                         return token.access_token
                 except Exception as e:
                     if not self.config.suppress_console:
@@ -327,8 +341,17 @@ class GenericOAuthFlow:
         if client.redirect_uri:
             redirect_uri = client.redirect_uri
         else:
-            redirect_uri = await self._determine_redirect_uri()
-            client.redirect_uri = redirect_uri
+            # For existing clients without saved redirect URI, try OOB first
+            # as it's the most common default
+            credentials = self.env_manager.get_oauth_credentials(self.mcp_server_url)
+            if credentials.get("client_id") and not credentials.get("redirect_uri"):
+                if not self.config.suppress_console:
+                    console.print("[dim]Existing client without saved redirect URI - trying OOB first[/dim]")
+                redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+                client.redirect_uri = redirect_uri
+            else:
+                redirect_uri = await self._determine_redirect_uri()
+                client.redirect_uri = redirect_uri
         
         # Start callback server if needed
         if redirect_uri and redirect_uri.startswith("http://") and "/callback" in redirect_uri:

@@ -126,11 +126,13 @@ class OAuthHelpers(BaseMCPValidator):
                 )
                 
                 # Save credentials to .env
+                # Auto-registration uses OOB by default
                 self.env_manager.save_oauth_credentials(
                     server_url=self.mcp_endpoint,
                     client_id=client_id,
                     client_secret=client_secret,
                     registration_token=reg_token,
+                    redirect_uri="urn:ietf:wg:oauth:2.0:oob",  # Default used by register_client
                 )
                 
                 return self.oauth_client

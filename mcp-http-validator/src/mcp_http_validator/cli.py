@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Optional
 
 import click
+import httpx
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.panel import Panel
@@ -23,6 +24,8 @@ from .validator import MCPValidator
 from .env_manager import EnvManager
 from .rfc8707 import RFC8707Validator
 from .rfc7591 import RFC7591Validator, RFC7592Validator
+from .generic_oauth_flow import GenericOAuthFlow
+from .oauth_flow_config import OAuthFlowConfig
 
 console = Console()
 
@@ -973,9 +976,19 @@ def register(
                 # Prepare registration request
                 console.print("[bold]Preparing client registration...[/bold]")
                 
+                # Always try public IP first, regardless of environment
+                from .network_utils import NetworkInfo
+                public_ip = await NetworkInfo.detect_public_ip()
+                if public_ip:
+                    redirect_uri = f"http://{public_ip}:8080/callback"
+                    console.print(f"[dim]Attempting registration with public IP: {redirect_uri}[/dim]")
+                else:
+                    redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+                    console.print(f"[dim]No public IP detected, using OOB: {redirect_uri}[/dim]")
+                
                 registration_data = {
                     "client_name": f"MCP Validator for {mcp_server_url}",
-                    "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"],
+                    "redirect_uris": [redirect_uri],
                     "grant_types": ["authorization_code", "refresh_token", "client_credentials"],
                     "response_types": ["code"],
                     "scope": "mcp:read mcp:write",
@@ -1012,6 +1025,9 @@ def register(
                 
                 # Register new client
                 console.print("\n[bold]Registering OAuth client...[/bold]")
+                response_data = None
+                successful_redirect_uri = None
+                
                 try:
                     # Send registration request manually to capture full response
                     response = await client.client.post(
@@ -1022,6 +1038,7 @@ def register(
                     response.raise_for_status()
                     
                     response_data = response.json()
+                    successful_redirect_uri = redirect_uri
                     
                     # Validate response per RFC 7591
                     console.print("\n[bold]RFC 7591 Response Validation:[/bold]")
@@ -1056,12 +1073,13 @@ def register(
                     reg_token = response_data.get("registration_access_token")
                     reg_uri = response_data.get("registration_client_uri")
                     
-                    # Save credentials
+                    # Save credentials including redirect URI
                     env_manager.save_oauth_credentials(
                         mcp_server_url,
                         client_id,
                         client_secret,
                         reg_token,
+                        redirect_uri=successful_redirect_uri,  # Save the actually registered URI
                     )
                     
                     console.print("\n[green]✓[/green] Client registered successfully")
@@ -1130,6 +1148,46 @@ def register(
                             console.print(f"  Description: {error_data['error_description']}")
                     except:
                         console.print(f"  Response: {e.response.text}")
+                    
+                    # Try fallback to OOB if not already using it
+                    if redirect_uri != "urn:ietf:wg:oauth:2.0:oob":
+                        console.print("\n[dim]Falling back to out-of-band redirect...[/dim]")
+                        registration_data["redirect_uris"] = ["urn:ietf:wg:oauth:2.0:oob"]
+                        
+                        try:
+                            response = await client.client.post(
+                                str(metadata.registration_endpoint),
+                                json=registration_data,
+                                headers={"Content-Type": "application/json"},
+                            )
+                            response.raise_for_status()
+                            response_data = response.json()
+                            successful_redirect_uri = "urn:ietf:wg:oauth:2.0:oob"
+                            
+                            console.print("[green]✓[/green] Registration successful with OOB fallback")
+                            
+                            # Extract credentials and save
+                            client_id = response_data.get("client_id")
+                            client_secret = response_data.get("client_secret")
+                            reg_token = response_data.get("registration_access_token")
+                            
+                            env_manager.save_oauth_credentials(
+                                mcp_server_url,
+                                client_id,
+                                client_secret,
+                                reg_token,
+                                redirect_uri=successful_redirect_uri,
+                            )
+                            
+                            console.print("\n[green]✓[/green] Client registered successfully")
+                            console.print(f"  Client ID: {client_id}")
+                            console.print(f"  Client Secret: {'*' * 20}...")
+                            console.print("\n[green]✓[/green] Credentials saved to .env")
+                            console.print("\nYou can now use:")
+                            console.print(f"  • [cyan]mcp-validate flow {mcp_server_url}[/cyan] - Get access token")
+                            console.print(f"  • [cyan]mcp-validate validate {mcp_server_url}[/cyan] - Run validation tests")
+                        except Exception as e2:
+                            console.print(f"[red]✗[/red] OOB fallback also failed: {e2}")
                 except Exception as e:
                     console.print(f"[red]✗[/red] Failed to register client: {e}")
     
