@@ -71,21 +71,6 @@ class BaseMCPValidator:
             headers.update(extra_headers)
         return headers
     
-    async def discover_oauth_server(self) -> Optional[str]:
-        """Discover OAuth server through various methods."""
-        # Implementation would be imported from the main validator
-        # For now, return None as this is just a base class
-        return None
-    
-    async def get_access_token(self, interactive: bool = False) -> Optional[str]:
-        """Get access token through various OAuth grant types."""
-        # Implementation would be imported from the main validator
-        # For now, return None as this is just a base class
-        return None
-    
-    async def close(self):
-        """Close HTTP client."""
-        await self.client.aclose()
 
 
 class OAuthTestValidator(BaseMCPValidator):

@@ -75,7 +75,7 @@ class OAuthHelpers(BaseMCPValidator):
             response = await self.client.get(test_url, follow_redirects=True, timeout=3.0)
             if response.status_code == 200:
                 discovered_servers.append(self.base_url)
-        except Exception:
+        except Exception as e:
             pass
         
         # Return the first discovered server

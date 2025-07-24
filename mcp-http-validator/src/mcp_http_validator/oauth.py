@@ -87,8 +87,18 @@ class OAuthTestClient:
         scope: str = "mcp:read mcp:write",
         software_id: str = "mcp-http-validator",
         software_version: str = "0.1.0",
+        redirect_uris: Optional[List[str]] = None,
     ) -> Tuple[str, Optional[str], Optional[str]]:
         """Dynamically register an OAuth client (RFC 7591).
+        
+        Args:
+            client_name: Human-readable name for the client
+            grant_types: OAuth grant types to request
+            response_types: OAuth response types to request
+            scope: OAuth scope to request
+            software_id: Software identifier
+            software_version: Software version
+            redirect_uris: Custom redirect URIs (defaults to OOB)
         
         Returns:
             Tuple of (client_id, client_secret, registration_access_token)
@@ -99,9 +109,17 @@ class OAuthTestClient:
         if not self.server_metadata.registration_endpoint:
             raise ValueError("Server does not support dynamic client registration")
         
+        # Use provided redirect URIs or default to OOB
+        if redirect_uris is None:
+            redirect_uris = ["urn:ietf:wg:oauth:2.0:oob"]
+        
+        # Update instance redirect_uri if single URI provided
+        if len(redirect_uris) == 1:
+            self.redirect_uri = redirect_uris[0]
+        
         registration_data = {
             "client_name": client_name,
-            "redirect_uris": ["urn:ietf:wg:oauth:2.0:oob"],
+            "redirect_uris": redirect_uris,
             "grant_types": grant_types,
             "response_types": response_types,
             "scope": scope,

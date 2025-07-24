@@ -13,53 +13,6 @@ from .transport_detector import TransportDetector, TransportType
 class ProtocolTests(BaseMCPValidator):
     """Protocol-specific test methods for MCP validation."""
 
-    async def get_access_token(self, interactive: bool = False) -> Optional[str]:
-        """Get an access token, either from parameter or by OAuth flow.
-        
-        Args:
-            interactive: Whether to allow interactive flows (device auth)
-        
-        Returns:
-            Access token or None if unavailable
-        """
-        # If we already have a token from parameter, use it
-        if self.access_token:
-            return self.access_token
-        
-        # Check .env for valid access token
-        stored_token = self.env_manager.get_valid_access_token(self.mcp_endpoint)
-        if stored_token:
-            self.access_token = stored_token
-            return self.access_token
-        
-        # Check if we have a refresh token
-        refresh_token = self.env_manager.get_refresh_token(self.mcp_endpoint)
-        if refresh_token:
-            # Try to setup OAuth client if needed
-            if not self.oauth_client:
-                # Note: setup_oauth_client would need to be implemented or imported
-                # For now, we'll return None if no access token is available
-                return None
-            
-            if self.oauth_client:
-                try:
-                    # Attempt to refresh the token
-                    token_response = await self.oauth_client.refresh_token(refresh_token)
-                    if token_response:
-                        self.access_token = token_response.access_token
-                        # Save new tokens
-                        self.env_manager.save_tokens(
-                            self.mcp_endpoint,
-                            token_response.access_token,
-                            token_response.expires_in,
-                            token_response.refresh_token or refresh_token
-                        )
-                        return self.access_token
-                except Exception as e:
-                    print(f"Token refresh failed: {e}")
-        
-        # If no OAuth client or no stored tokens, return None
-        return None
 
     async def test_http_transport(self) -> Tuple[bool, Optional[str], Dict[str, Any]]:
         """Test HTTP transport implementation for MCP protocol.
