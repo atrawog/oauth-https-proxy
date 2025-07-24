@@ -2,6 +2,19 @@
 
 HTTP-based validator for Model Context Protocol (MCP) servers with OAuth 2.0 authorization testing.
 
+## Quick Example
+
+```bash
+# Install
+pip install mcp-http-validator
+
+# Run full validation suite (handles OAuth automatically)
+mcp-validate full https://mcp.example.com
+
+# Or validate with existing token
+mcp-validate validate https://mcp.example.com --token $ACCESS_TOKEN
+```
+
 ## Overview
 
 MCP HTTP Validator is a comprehensive testing tool for validating MCP server implementations against the [MCP specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization). It focuses on:
@@ -14,6 +27,7 @@ MCP HTTP Validator is a comprehensive testing tool for validating MCP server imp
 
 ## Features
 
+### Core Features
 - **Automatic OAuth Discovery**: Discovers OAuth servers from MCP metadata
 - **Zero Configuration**: Automatically registers and saves OAuth clients
 - **Full MCP Compliance Testing**: Validates servers against MCP 2025-06-18 specification
@@ -24,6 +38,18 @@ MCP HTTP Validator is a comprehensive testing tool for validating MCP server imp
 - **Multiple Output Formats**: Terminal, JSON, and Markdown reports
 - **Credential Management**: Secure .env file storage for OAuth credentials
 - **No stdio Dependencies**: Pure HTTP-based testing
+
+### Advanced Features
+- **Smart Token Management**: Automatically checks token validity before OAuth flows
+- **Token Refresh**: Attempts refresh token flow before initiating new authentication
+- **SSE Support**: Full Server-Sent Events testing for MCP SSE transport
+- **Tool Discovery**: Automatic discovery and testing of MCP server tools
+- **Transport Detection**: Automatically detects SSE vs HTTP transport
+- **Batch Testing**: `full` command runs complete test suite automatically
+- **Progress Reporting**: Real-time progress updates during long operations
+- **Redirect Strategies**: Supports both public IP and out-of-band OAuth flows
+- **JWT Validation**: Decodes and validates JWT tokens for expiry and audience
+- **Per-Server Isolation**: Each MCP server gets its own credentials namespace
 
 ## Installation
 
@@ -43,34 +69,132 @@ pip install -e .
 
 ### Command Line Usage
 
-1. **Validate an MCP Server** (automatic OAuth discovery):
+#### 1. Basic Validation
+
 ```bash
-# Automatically discovers OAuth server and registers client if needed
-mcp-validate https://mcp.example.com
+# Validate an MCP server (automatic OAuth discovery and setup)
+mcp-validate validate https://mcp.example.com
 
 # Use existing access token
-mcp-validate https://mcp.example.com --token $ACCESS_TOKEN
+mcp-validate validate https://mcp.example.com --token $ACCESS_TOKEN
 
-# Force new client registration
-mcp-validate https://mcp.example.com --force-register
+# With additional options
+mcp-validate validate https://mcp.example.com \
+  --output json \
+  --output-file report.json \
+  --verbose \
+  --timeout 60
 ```
 
-2. **Test OAuth Flow**:
+**Options:**
+- `--token, -t`: OAuth access token for authenticated tests
+- `--output, -o`: Output format (terminal/json/markdown)
+- `--output-file, -f`: Save output to file
+- `--no-ssl-verify`: Disable SSL certificate verification
+- `--timeout`: Request timeout in seconds (default: 30)
+- `--verbose, -v`: Show detailed test information
+
+#### 2. Complete Test Suite
+
 ```bash
-# Automatically discovers OAuth server from MCP metadata
+# Run ALL validation tests in the correct order
+mcp-validate full https://mcp.example.com
+
+# Include destructive tool tests (use with caution!)
+mcp-validate full https://mcp.example.com --test-destructive --verbose
+```
+
+This command automatically:
+1. Discovers OAuth server from MCP metadata
+2. Registers OAuth client if needed
+3. Completes OAuth flow for access token
+4. Runs main MCP validation
+5. Tests all MCP tools
+
+#### 3. OAuth Authentication Flow
+
+```bash
+# Complete OAuth flow (checks for existing valid token first)
 mcp-validate flow https://mcp.example.com
+
+# Force new flow even if valid token exists
+mcp-validate flow https://mcp.example.com --force
+
+# Request specific scopes
+mcp-validate flow https://mcp.example.com --scope "mcp:read"
 ```
 
-3. **Manage OAuth Clients** (RFC 7592):
+The flow command automatically:
+- Checks for existing valid access token
+- Attempts token refresh if expired
+- Only initiates new OAuth flow if necessary
+- Supports both public IP and out-of-band redirect strategies
+
+#### 4. OAuth Client Management (RFC 7591/7592)
+
 ```bash
-# List saved credentials
+# Register a new OAuth client
+mcp-validate client register https://mcp.example.com
+
+# Force new registration (replaces existing)
+mcp-validate client register https://mcp.example.com --force
+
+# Also validate RFC 7592 support
+mcp-validate client register https://mcp.example.com --validate-rfc7592
+
+# List all saved OAuth clients
 mcp-validate client list
 
-# Update client configuration
-mcp-validate client update https://mcp.example.com --client-name "New Name"
+# Update client configuration (RFC 7592)
+mcp-validate client update https://mcp.example.com \
+  --client-name "My MCP Client" \
+  --redirect-uri "http://localhost:8080/callback" \
+  --scope "mcp:read mcp:write"
 
 # Delete client registration
 mcp-validate client delete https://mcp.example.com
+```
+
+#### 5. Token Management
+
+```bash
+# List all stored tokens and their status
+mcp-validate tokens list
+
+# Show detailed token status for a specific server
+mcp-validate tokens show https://mcp.example.com
+
+# Refresh access token using refresh token
+mcp-validate tokens refresh https://mcp.example.com
+
+# Clear tokens for a server (keeps client credentials)
+mcp-validate tokens clear https://mcp.example.com
+```
+
+#### 6. MCP Tools Testing
+
+```bash
+# Discover and test all tools
+mcp-validate tools https://mcp.example.com
+
+# List tools without testing
+mcp-validate tools https://mcp.example.com --list-only
+
+# Test specific tool
+mcp-validate tools https://mcp.example.com --tool-name "search"
+
+# Include destructive tool tests
+mcp-validate tools https://mcp.example.com --test-destructive
+```
+
+#### 7. Direct OAuth Server Testing
+
+```bash
+# Test an OAuth authorization server directly
+mcp-validate oauth https://auth.example.com
+
+# Register new client with OAuth server
+mcp-validate oauth https://auth.example.com --register
 ```
 
 ### Programmatic Usage
@@ -100,27 +224,49 @@ asyncio.run(validate_server())
 
 ## Configuration
 
-The validator automatically manages OAuth credentials in a `.env` file:
+The validator automatically manages OAuth credentials and tokens in a `.env` file:
 
+### Manual Configuration
 ```env
-# Manual access token (optional - for pre-authenticated testing)
+# Manual access token for pre-authenticated testing
 MCP_ACCESS_TOKEN=your-access-token
 
-# OAuth credentials are automatically saved per server:
-OAUTH_CLIENT_ID_MCP_EXAMPLE_COM=mcp_client_123456
-OAUTH_CLIENT_SECRET_MCP_EXAMPLE_COM=secret_abcdef...
-OAUTH_REGISTRATION_TOKEN_MCP_EXAMPLE_COM=reg_token_xyz...
-
-# Default credentials (fallback if server-specific not found):
+# Default OAuth credentials (fallback if server-specific not found)
 OAUTH_CLIENT_ID=default-client-id
 OAUTH_CLIENT_SECRET=default-client-secret
 ```
 
-The validator will:
-1. Discover OAuth servers from MCP server metadata
-2. Register OAuth clients automatically (if enabled)
-3. Save credentials to `.env` for future use
-4. Support RFC 7592 for client management
+### Automatic Per-Server Storage
+The validator automatically saves credentials with server-specific keys:
+
+```env
+# OAuth client credentials (RFC 7591)
+OAUTH_CLIENT_ID_MCP_EXAMPLE_COM=mcp_client_123456
+OAUTH_CLIENT_SECRET_MCP_EXAMPLE_COM=secret_abcdef...
+OAUTH_REGISTRATION_TOKEN_MCP_EXAMPLE_COM=reg_token_xyz...
+OAUTH_REDIRECT_URI_MCP_EXAMPLE_COM=http://localhost:61234/callback
+
+# OAuth tokens
+OAUTH_ACCESS_TOKEN_MCP_EXAMPLE_COM=eyJhbGc...
+OAUTH_TOKEN_EXPIRES_AT_MCP_EXAMPLE_COM=1234567890
+OAUTH_REFRESH_TOKEN_MCP_EXAMPLE_COM=refresh_token_abc...
+```
+
+Server URLs are converted to environment variable keys by:
+1. Removing protocol (`https://`)
+2. Replacing dots and special characters with underscores
+3. Converting to uppercase
+
+Example: `https://mcp.example.com` → `MCP_EXAMPLE_COM`
+
+### Automatic Features
+The validator provides intelligent credential management:
+
+1. **Auto-Discovery**: OAuth servers discovered from MCP metadata
+2. **Auto-Registration**: Clients registered via RFC 7591 when needed
+3. **Token Management**: Automatic token validation and refresh
+4. **Secure Storage**: All credentials saved to `.env` file
+5. **Server Isolation**: Each server has its own credentials
 
 ## Validation Tests
 
@@ -156,14 +302,27 @@ Rich, colored output with tables and progress indicators:
 ### JSON Output
 Complete structured data for programmatic processing:
 ```bash
-mcp-validate https://mcp.example.com -o json -f report.json
+mcp-validate validate https://mcp.example.com -o json -f report.json
 ```
 
 ### Markdown Output
 Human-readable reports for documentation:
 ```bash
-mcp-validate https://mcp.example.com -o markdown -f report.md
+mcp-validate validate https://mcp.example.com -o markdown -f report.md
 ```
+
+### Full Test Suite Output
+The `full` command provides comprehensive results:
+```bash
+mcp-validate full https://mcp.example.com --verbose
+```
+
+Shows progress through each phase:
+- OAuth server discovery and validation
+- Client registration status
+- Token acquisition progress
+- MCP validation results
+- Tool discovery and testing
 
 ## Compliance Levels
 
@@ -266,6 +425,47 @@ async def manage_oauth_client(mcp_server: str):
             
             # Or delete client
             # await client.delete_client_registration()
+```
+
+## Troubleshooting
+
+### Common Issues
+
+1. **"No OAuth server discovered"**
+   - Ensure the MCP server implements `/.well-known/oauth-protected-resource`
+   - Check that the metadata includes `authorization_servers` array
+   - Use `--no-ssl-verify` for development servers with self-signed certificates
+
+2. **"Token expired" during validation**
+   - Run `mcp-validate tokens refresh https://mcp.example.com` to refresh
+   - Or use `mcp-validate flow https://mcp.example.com` for new token
+
+3. **"Client registration failed"**
+   - Check if the OAuth server supports RFC 7591 dynamic registration
+   - Try manual registration on the OAuth server's web interface
+   - Use environment variables for manual client credentials
+
+4. **"SSL verification failed"**
+   - For development: use `--no-ssl-verify` flag
+   - For production: ensure valid SSL certificates
+
+5. **"Permission denied on .env"**
+   - Check file permissions: `chmod 600 .env`
+   - Ensure the directory is writable
+
+### Debug Mode
+
+For detailed debugging information:
+```bash
+# Verbose output for any command
+mcp-validate validate https://mcp.example.com --verbose
+
+# Check stored credentials
+mcp-validate client list
+mcp-validate tokens list
+
+# Test OAuth server directly
+mcp-validate oauth https://auth.example.com
 ```
 
 ## Contributing
