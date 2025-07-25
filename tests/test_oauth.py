@@ -132,8 +132,6 @@ class TestOAuthClientRegistration:
             assert data["registration_access_token"] is not None
         if "registration_client_uri" in data:
             assert data["registration_client_uri"] is not None
-        
-        return data
 
 @pytest.mark.oauth
 class TestOAuthAuthorizationFlow:

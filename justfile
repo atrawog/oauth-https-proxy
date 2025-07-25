@@ -88,6 +88,40 @@ token-generate name email="":
         read -p "Certificate email for {{name}}: " cert_email
     fi
     
+    # Try API first if available
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+        # Get admin token
+        if [ -n "${ADMIN_TOKEN:-}" ]; then
+            auth_token="${ADMIN_TOKEN}"
+        else
+            # Try to get admin token from docker
+            auth_token=$(docker exec {{container_name}} pixi run python scripts/show_token.py "ADMIN" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+        fi
+        
+        if [ -n "$auth_token" ]; then
+            # Try API call
+            response=$(curl -sf -X POST "${BASE_URL}/tokens/generate" \
+                -H "Authorization: Bearer $auth_token" \
+                -H "Content-Type: application/json" \
+                -d "{\"name\": \"{{name}}\", \"cert_email\": \"$cert_email\"}" 2>/dev/null || true)
+            
+            if [ -n "$response" ]; then
+                # Extract and display token info
+                token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+                if [ -n "$token" ]; then
+                    echo "Token generated successfully!"
+                    echo "Name: {{name}}"
+                    echo "Token: $token"
+                    echo "Certificate Email: $cert_email"
+                    echo ""
+                    echo "Token stored securely. You can retrieve it later with: just token-show {{name}}"
+                    exit 0
+                fi
+            fi
+        fi
+    fi
+    
+    # Fallback to docker exec
     docker exec {{container_name}} pixi run python scripts/generate_token.py "{{name}}" "$cert_email"
 
 # Show token value
@@ -101,6 +135,30 @@ token-show name:
 
 # List all tokens
 token-list:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Try API first if available
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+        # Get admin token
+        if [ -n "${ADMIN_TOKEN:-}" ]; then
+            auth_token="${ADMIN_TOKEN}"
+        else
+            # Try to get admin token from docker
+            auth_token=$(docker exec {{container_name}} pixi run python scripts/show_token.py "ADMIN" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+        fi
+        
+        if [ -n "$auth_token" ]; then
+            # Try API call
+            response=$(curl -sf -H "Authorization: Bearer $auth_token" "${BASE_URL}/tokens/formatted" 2>/dev/null || true)
+            if [ -n "$response" ]; then
+                echo "$response"
+                exit 0
+            fi
+        fi
+    fi
+    
+    # Fallback to docker exec
     docker exec {{container_name}} pixi run python scripts/list_tokens.py
 
 # Delete token and owned resources
@@ -525,7 +583,17 @@ proxy-list token="":
         fi
     fi
     
-    # Use Python script to list proxies
+    # Try API first if available
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+        # Try API call
+        response=$(curl -sf -H "Authorization: Bearer $token_value" "${BASE_URL}/proxy/targets/formatted" 2>/dev/null || true)
+        if [ -n "$response" ]; then
+            echo "$response"
+            exit 0
+        fi
+    fi
+    
+    # Fallback to Python script
     docker exec {{container_name}} pixi run python scripts/proxy_list.py "$token_value"
 
 # Show proxy details
@@ -888,6 +956,39 @@ oauth-routes-setup domain token="":
         token_value="{{token}}"
     fi
     
+    # Try API first if available
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+        # Try API call
+        response=$(curl -sf -X POST "${BASE_URL}/oauth/admin/setup-routes" \
+            -H "Authorization: Bearer $token_value" \
+            -H "Content-Type: application/json" \
+            -d "{\"oauth_domain\": \"{{domain}}\", \"force\": false}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            # Check if successful
+            success=$(echo "$response" | jq -r '.success' 2>/dev/null || true)
+            if [ "$success" = "true" ]; then
+                echo "OAuth routes setup completed successfully!"
+                echo "$response" | jq -r '.created_routes[]' | while read route; do
+                    echo "  ✓ Created: $route"
+                done
+                echo "$response" | jq -r '.skipped_routes[]' | while read route; do
+                    echo "  - Skipped: $route (already exists)"
+                done
+            else
+                echo "OAuth routes setup completed with issues:"
+                echo "$response" | jq -r '.created_routes[]' | while read route; do
+                    echo "  ✓ Created: $route"
+                done
+                echo "$response" | jq -r '.errors[]' | while read error; do
+                    echo "  ✗ Error: $error"
+                done
+            fi
+            exit 0
+        fi
+    fi
+    
+    # Fallback to docker exec
     docker exec {{container_name}} pixi run python scripts/oauth_routes_setup.py "{{domain}}" "$token_value"
 
 # OAuth Client Testing Commands
@@ -1143,6 +1244,20 @@ instance-register-oauth token="":
 # Route Management Commands
 # List all routes
 route-list:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Try API first if available
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+        # Routes endpoint doesn't require authentication
+        response=$(curl -sf "${BASE_URL}/routes/formatted" 2>/dev/null || true)
+        if [ -n "$response" ]; then
+            echo "$response"
+            exit 0
+        fi
+    fi
+    
+    # Fallback to docker exec
     docker exec {{container_name}} pixi run python scripts/route_list.py
 
 # Show route details

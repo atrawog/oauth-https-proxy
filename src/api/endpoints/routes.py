@@ -3,7 +3,7 @@
 import logging
 import uuid
 from typing import Optional, Tuple
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Query
 
 from ..auth import get_current_token_info, require_route_owner
 from ...proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
@@ -62,6 +62,58 @@ def create_router(storage):
         """List all routing rules sorted by priority."""
         routes = storage.list_routes()
         return routes
+    
+    @router.get("/formatted")
+    async def list_routes_formatted(
+        format: str = Query("table", description="Output format", enum=["table", "json", "csv"])
+    ):
+        """List all routing rules with formatted output."""
+        from fastapi.responses import PlainTextResponse
+        import csv
+        import io
+        from tabulate import tabulate
+        
+        # Get routes using existing endpoint logic
+        routes = await list_routes()
+        
+        if format == "json":
+            # Return standard JSON response
+            return routes
+        
+        # Prepare data for table/csv formatting
+        rows = []
+        for route in routes:
+            # Format methods
+            methods = ", ".join(route.methods) if route.methods else "ALL"
+            
+            # Format target
+            target = f"{route.target_type}:{route.target_value}"
+            
+            # Status
+            status = "enabled" if route.enabled else "disabled"
+            
+            rows.append([
+                route.route_id,
+                route.path_pattern,
+                target,
+                str(route.priority),
+                methods,
+                "regex" if route.is_regex else "prefix",
+                status,
+                route.description or ""
+            ])
+        
+        if format == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["ID", "Path", "Target", "Priority", "Methods", "Type", "Status", "Description"])
+            writer.writerows(rows)
+            return PlainTextResponse(output.getvalue(), media_type="text/csv")
+        
+        # Default to table format
+        headers = ["ID", "Path", "Target", "Priority", "Methods", "Type", "Status", "Description"]
+        table = tabulate(rows, headers=headers, tablefmt="grid")
+        return PlainTextResponse(table, media_type="text/plain")
     
     @router.get("/{route_id}")
     async def get_route(route_id: str):

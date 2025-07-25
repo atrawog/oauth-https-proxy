@@ -4,7 +4,7 @@ import os
 import logging
 from datetime import datetime, timezone
 from typing import Optional, Tuple
-from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks
+from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 
 from ..auth import require_auth, require_auth_header, get_current_token_info, require_proxy_owner
 from ...proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig
@@ -137,6 +137,60 @@ def create_router(storage, cert_manager):
         
         # Regular users see only their own targets
         return [target for target in all_targets if target.owner_token_hash == token_hash]
+    
+    @router.get("/formatted")
+    async def list_proxy_targets_formatted(
+        format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
+        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+    ):
+        """List proxy targets with formatted output."""
+        from fastapi.responses import PlainTextResponse
+        import csv
+        import io
+        from tabulate import tabulate
+        
+        # Get proxy targets using existing endpoint logic
+        targets = await list_proxy_targets(token_info)
+        
+        if format == "json":
+            # Return standard JSON response
+            return targets
+        
+        # Prepare data for table/csv formatting
+        rows = []
+        for target in targets:
+            # Determine status
+            status = "enabled" if target.enabled else "disabled"
+            
+            # Format auth info
+            auth_info = ""
+            if hasattr(target, 'auth_enabled') and target.auth_enabled:
+                auth_info = f"auth:{target.auth_mode}"
+            
+            # Format cert info
+            cert_info = target.cert_name if target.cert_name else "no-cert"
+            
+            rows.append([
+                target.hostname,
+                target.target_url,
+                status,
+                cert_info,
+                auth_info,
+                "http" if target.enable_http else "",
+                "https" if target.enable_https else ""
+            ])
+        
+        if format == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["Hostname", "Target URL", "Status", "Certificate", "Auth", "HTTP", "HTTPS"])
+            writer.writerows(rows)
+            return PlainTextResponse(output.getvalue(), media_type="text/csv")
+        
+        # Default to table format
+        headers = ["Hostname", "Target URL", "Status", "Certificate", "Auth", "HTTP", "HTTPS"]
+        table = tabulate(rows, headers=headers, tablefmt="grid")
+        return PlainTextResponse(table, media_type="text/plain")
     
     @router.get("/{hostname}")
     async def get_proxy_target(hostname: str):

@@ -8,7 +8,17 @@ import redis
 from typing import Generator
 
 # Test configuration - NO DEFAULTS!
-TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
+# When running inside container, use local HTTP endpoint
+if os.path.exists('/.dockerenv') or os.getenv('RUNNING_IN_DOCKER'):
+    # Inside container - use internal proxy hostname
+    # The proxy service is accessible as 'proxy' on the Docker network
+    TEST_BASE_URL = os.getenv("TEST_BASE_URL_INTERNAL", "http://proxy")
+    print(f"Running tests inside Docker, using internal URL: {TEST_BASE_URL}")
+else:
+    # Outside container - use configured URL
+    TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
+    print(f"Running tests outside Docker, using external URL: {TEST_BASE_URL}")
+
 REDIS_URL = os.getenv("REDIS_URL")  # From .env via just - use same Redis as app!
 ACME_STAGING_URL = os.getenv("ACME_STAGING_URL")  # From .env via just
 
@@ -41,7 +51,11 @@ def redis_client() -> Generator[redis.Redis, None, None]:
 @pytest.fixture(scope="session")
 def http_client() -> Generator[httpx.Client, None, None]:
     """Provide HTTP client for API tests."""
-    with httpx.Client(base_url=TEST_BASE_URL, timeout=30.0) as client:
+    # Never verify SSL in tests - we're either using HTTP internally or self-signed certs
+    verify_ssl = False
+    
+    # For internal Docker access, we need to handle both the base URL and proxy targets
+    with httpx.Client(base_url=TEST_BASE_URL, timeout=30.0, verify=verify_ssl) as client:
         # Wait for service to be ready
         max_retries = 30
         for i in range(max_retries):

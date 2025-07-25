@@ -10,7 +10,15 @@ from datetime import datetime, timezone
 TEST_DOMAIN = os.getenv("TEST_DOMAIN")  # From .env via just
 TEST_EMAIL = os.getenv("TEST_EMAIL")  # From .env via just
 ACME_STAGING_URL = os.getenv("ACME_STAGING_URL")  # From .env via just
-TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
+
+# When running inside container, use local HTTP endpoint
+if os.path.exists('/.dockerenv') or os.getenv('RUNNING_IN_DOCKER'):
+    # Inside container - use internal proxy hostname
+    TEST_BASE_URL = os.getenv("TEST_BASE_URL_INTERNAL", "http://proxy")
+    print(f"Running ACME tests inside Docker, using internal URL: {TEST_BASE_URL}")
+else:
+    # Outside container - use configured URL
+    TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
 
 # Verify all required env vars are set
 assert TEST_DOMAIN, "TEST_DOMAIN not set - must be loaded from .env via just"

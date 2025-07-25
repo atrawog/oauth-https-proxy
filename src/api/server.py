@@ -128,8 +128,9 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     
     # OAuth endpoints (if available)
     try:
-        from .endpoints import oauth_status
+        from .endpoints import oauth_status, oauth_admin
         app.include_router(oauth_status.create_oauth_status_router(storage))
+        app.include_router(oauth_admin.create_router(storage))
     except ImportError as e:
         logger.warning(f"OAuth endpoints not available: {e}")
     

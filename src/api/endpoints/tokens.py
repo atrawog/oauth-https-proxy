@@ -137,6 +137,74 @@ def create_router(storage):
         tokens.sort(key=lambda t: t.name)
         return tokens
     
+    @router.get("/formatted")
+    async def list_tokens_formatted(
+        format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
+        _: dict = Depends(require_admin)  # Admin only
+    ):
+        """List all API tokens with formatted output."""
+        from fastapi.responses import PlainTextResponse
+        import csv
+        import io
+        from tabulate import tabulate
+        
+        # Get tokens using existing endpoint logic
+        tokens = await list_tokens(_)
+        
+        if format == "json":
+            # Return standard JSON response
+            return tokens
+        
+        # Prepare data for table/csv formatting
+        rows = []
+        for token in tokens:
+            rows.append([
+                token.name,
+                token.cert_email or "",
+                str(token.certificate_count),
+                str(token.proxy_count),
+                "Yes" if token.is_admin else "No",
+                token.created_at.strftime("%Y-%m-%d %H:%M:%S")
+            ])
+        
+        if format == "csv":
+            output = io.StringIO()
+            writer = csv.writer(output)
+            writer.writerow(["Name", "Email", "Certificates", "Proxies", "Admin", "Created"])
+            writer.writerows(rows)
+            return PlainTextResponse(output.getvalue(), media_type="text/csv")
+        
+        # Default to table format
+        headers = ["Name", "Email", "Certificates", "Proxies", "Admin", "Created"]
+        table = tabulate(rows, headers=headers, tablefmt="grid")
+        return PlainTextResponse(table, media_type="text/plain")
+    
+    class TokenGenerateResponse(BaseModel):
+        """Response model for token generation with full display."""
+        name: str
+        token: str
+        cert_email: Optional[str] = None
+        created_at: datetime
+        warning: str = "Save this token securely - it cannot be retrieved again"
+    
+    @router.post("/generate", response_model=TokenGenerateResponse)
+    async def generate_token_display(
+        request: TokenCreateRequest,
+        _: dict = Depends(require_admin)  # Admin only
+    ):
+        """Generate a new API token and return full value for display."""
+        # Use existing create_token logic
+        response = await create_token(request, _)
+        
+        # Return with warning message
+        return TokenGenerateResponse(
+            name=response.name,
+            token=response.token,
+            cert_email=response.cert_email,
+            created_at=response.created_at,
+            warning="Save this token securely - it cannot be retrieved again"
+        )
+    
     # Keep existing endpoints for backward compatibility
     # These must be defined BEFORE /{name} to avoid route conflicts
     class EmailUpdateRequest(BaseModel):
@@ -219,6 +287,64 @@ def create_router(storage):
             is_admin=(token_data['name'].upper() == 'ADMIN'),
             certificates=cert_names,
             proxies=proxy_names
+        )
+    
+    class TokenRevealResponse(BaseModel):
+        """Response model for secure token revelation."""
+        name: str
+        token: str
+        revealed_at: datetime
+        warning: str = "Token value revealed - this action has been logged"
+    
+    @router.get("/{name}/reveal")
+    async def reveal_token(
+        name: str,
+        confirm: bool = Query(False, description="Confirm token revelation"),
+        request: Request = None,
+        _: dict = Depends(require_admin)  # Admin only
+    ):
+        """Securely reveal full token value with audit logging."""
+        if not confirm:
+            raise HTTPException(
+                status_code=400,
+                detail="Set confirm=true to reveal token value. This action will be logged."
+            )
+        
+        token_data = storage.get_api_token_by_name(name)
+        if not token_data:
+            raise HTTPException(404, f"Token '{name}' not found")
+        
+        # Audit log the access
+        audit_entry = {
+            "action": "token_reveal",
+            "token_name": name,
+            "admin_token": _["name"],  # Which admin token was used
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "client_ip": request.client.host if request and request.client else "unknown"
+        }
+        
+        # Store audit log in Redis
+        import json
+        audit_key = f"audit:token_reveal:{name}:{datetime.now(timezone.utc).timestamp()}"
+        storage.redis_client.setex(
+            audit_key,
+            86400 * 30,  # Keep for 30 days
+            json.dumps(audit_entry)
+        )
+        
+        # Also add to sorted set for easy retrieval
+        storage.redis_client.zadd(
+            "audit:token_reveals",
+            {json.dumps(audit_entry): datetime.now(timezone.utc).timestamp()}
+        )
+        
+        logger.warning(f"Token '{name}' revealed by admin '{_['name']}' from {audit_entry['client_ip']}")
+        
+        return TokenRevealResponse(
+            name=name,
+            token=token_data['token'],
+            revealed_at=datetime.now(timezone.utc),
+            warning="Token value revealed - this action has been logged"
         )
     
     @router.delete("/{name}")

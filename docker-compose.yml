@@ -42,6 +42,9 @@ services:
       - OAUTH_CLIENT_LIFETIME=${OAUTH_CLIENT_LIFETIME}
       - OAUTH_ALLOWED_GITHUB_USERS=${OAUTH_ALLOWED_GITHUB_USERS}
       - OAUTH_MCP_PROTOCOL_VERSION=${OAUTH_MCP_PROTOCOL_VERSION}
+      # Test environment variables for internal access
+      - TEST_BASE_URL_INTERNAL=http://proxy
+      - RUNNING_IN_DOCKER=1
     env_file:
       - .env
     depends_on:
