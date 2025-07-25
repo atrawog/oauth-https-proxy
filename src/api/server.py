@@ -13,18 +13,33 @@ from fastapi.middleware.cors import CORSMiddleware
 from .auth import require_auth, require_auth_header, get_token_info_from_header
 from .models import HealthStatus
 
+# OAuth imports
+from .oauth.config import Settings as OAuthSettings
+from .oauth.redis_client import RedisManager as OAuthRedisManager
+from .oauth.auth_authlib import AuthManager
+from .oauth.routes import create_oauth_router
+
 logger = logging.getLogger(__name__)
 
 
 def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     """Create the FastAPI application."""
     
+    # Initialize OAuth components
+    oauth_settings = OAuthSettings()
+    oauth_redis_manager = OAuthRedisManager(oauth_settings)
+    auth_manager = AuthManager(oauth_settings)
+    
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage application lifecycle."""
         logger.info("API app starting...")
+        # Initialize OAuth Redis connection
+        await oauth_redis_manager.initialize()
         yield
         logger.info("API app shutting down...")
+        # Close OAuth Redis connection
+        await oauth_redis_manager.close()
     
     app = FastAPI(
         title="MCP HTTP Proxy API",
@@ -117,5 +132,10 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         app.include_router(oauth_status.create_oauth_status_router(storage))
     except ImportError as e:
         logger.warning(f"OAuth endpoints not available: {e}")
+    
+    # Include OAuth router
+    oauth_router = create_oauth_router(oauth_settings, oauth_redis_manager, auth_manager)
+    app.include_router(oauth_router)
+    logger.info("OAuth router included successfully")
     
     return app

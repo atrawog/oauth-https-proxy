@@ -1,0 +1,1 @@
+"""OAuth 2.1 and RFC 7591/7592 compliant authentication service."""

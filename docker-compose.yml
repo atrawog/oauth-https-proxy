@@ -30,6 +30,18 @@ services:
       - HTTPS_PORT=443
       - LOG_LEVEL=${LOG_LEVEL:-INFO}
       - PYTHONPATH=/app
+      # OAuth environment variables
+      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
+      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
+      - OAUTH_JWT_ALGORITHM=${OAUTH_JWT_ALGORITHM}
+      - OAUTH_JWT_SECRET=${OAUTH_JWT_SECRET}
+      - OAUTH_JWT_PRIVATE_KEY_B64=${OAUTH_JWT_PRIVATE_KEY_B64}
+      - OAUTH_ACCESS_TOKEN_LIFETIME=${OAUTH_ACCESS_TOKEN_LIFETIME}
+      - OAUTH_REFRESH_TOKEN_LIFETIME=${OAUTH_REFRESH_TOKEN_LIFETIME}
+      - OAUTH_SESSION_TIMEOUT=${OAUTH_SESSION_TIMEOUT}
+      - OAUTH_CLIENT_LIFETIME=${OAUTH_CLIENT_LIFETIME}
+      - OAUTH_ALLOWED_GITHUB_USERS=${OAUTH_ALLOWED_GITHUB_USERS}
+      - OAUTH_MCP_PROTOCOL_VERSION=${OAUTH_MCP_PROTOCOL_VERSION}
     env_file:
       - .env
     depends_on:
@@ -46,32 +58,6 @@ services:
       - proxy_network
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost/health"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 30s
-
-  auth:
-    build: ./mcp-oauth-dynamicclient
-    restart: unless-stopped
-    # No ports exposed - accessed via proxy
-    environment:
-      - REDIS_URL=${REDIS_URL}
-      - GITHUB_CLIENT_ID=${GITHUB_CLIENT_ID}
-      - GITHUB_CLIENT_SECRET=${GITHUB_CLIENT_SECRET}
-      - BASE_DOMAIN=${BASE_DOMAIN}
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    env_file:
-      - .env
-    depends_on:
-      redis:
-        condition: service_healthy
-    volumes:
-      - ./logs/oauth:/app/logs
-    networks:
-      - proxy_network
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/.well-known/oauth-authorization-server"]
       interval: 30s
       timeout: 10s
       retries: 3
