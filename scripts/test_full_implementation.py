@@ -77,7 +77,7 @@ def test_full_implementation():
     hostname = f"test-proxy-{int(time.time())}.example.com"
     try:
         response = requests.post(
-            f"{BASE_URL}/proxy/targets",
+            f"{BASE_URL}/api/v1/proxy/targets",
             headers=headers,
             json={
                 "hostname": hostname,
@@ -99,7 +99,7 @@ def test_full_implementation():
     # Step 5: List proxy targets (authenticated)
     print("\n5. Listing proxy targets (authenticated - should see only owned)...")
     try:
-        response = requests.get(f"{BASE_URL}/proxy/targets", headers=headers)
+        response = requests.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
         if response.status_code == 200:
             targets = response.json()
             print(f"   ✅ Found {len(targets)} proxy target(s)")
@@ -113,7 +113,7 @@ def test_full_implementation():
     # Step 6: Test public access (no auth)
     print("\n6. Testing public access (no authentication)...")
     try:
-        response = requests.get(f"{BASE_URL}/proxy/targets")
+        response = requests.get(f"{BASE_URL}/api/v1/proxy/targets")
         if response.status_code == 200:
             targets = response.json()
             print(f"   ✅ Public access works - found {len(targets)} proxy target(s)")
@@ -127,7 +127,7 @@ def test_full_implementation():
     cert_name = f"test-cert-{int(time.time())}"
     try:
         response = requests.post(
-            f"{BASE_URL}/certificates",
+            f"{BASE_URL}/api/v1/certificates",
             headers=headers,
             json={
                 "cert_name": cert_name,
@@ -173,7 +173,7 @@ def test_full_implementation():
         # Delete proxy target
         if 'hostname' in locals():
             response = requests.delete(
-                f"{BASE_URL}/proxy/targets/{hostname}",
+                f"{BASE_URL}/api/v1/proxy/targets/{hostname}",
                 headers=headers,
                 params={"delete_certificate": "true"}
             )

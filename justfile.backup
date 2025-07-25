@@ -100,7 +100,7 @@ token-generate name email="":
         
         if [ -n "$auth_token" ]; then
             # Try API call
-            response=$(curl -sf -X POST "${BASE_URL}/api/v1/tokens/generate" \
+            response=$(curl -sf -X POST "${BASE_URL}/tokens/generate" \
                 -H "Authorization: Bearer $auth_token" \
                 -H "Content-Type: application/json" \
                 -d "{\"name\": \"{{name}}\", \"cert_email\": \"$cert_email\"}" 2>/dev/null || true)
@@ -150,7 +150,7 @@ token-list:
         
         if [ -n "$auth_token" ]; then
             # Try API call
-            response=$(curl -sf -H "Authorization: Bearer $auth_token" "${BASE_URL}/api/v1/tokens/formatted" 2>/dev/null || true)
+            response=$(curl -sf -H "Authorization: Bearer $auth_token" "${BASE_URL}/tokens/formatted" 2>/dev/null || true)
             if [ -n "$response" ]; then
                 echo "$response"
                 exit 0
@@ -207,7 +207,7 @@ token-email-update name email token="":
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     data=$(jq -n --arg email "{{email}}" '{email: $email}')
     
-    response=$(curl -s -w '\n%{http_code}' -X PUT "${BASE_URL}/api/v1/tokens/email" \
+    response=$(curl -s -w '\n%{http_code}' -X PUT "${BASE_URL}/tokens/email" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -281,7 +281,7 @@ cert-create name domain email="" token="" staging="false":
     # Get certificate email if not provided
     if [ -z "{{email}}" ]; then
         # Try to get from token first
-        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/tokens/info")
+        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
         # Fall back to ADMIN_EMAIL if token has no email
@@ -310,7 +310,7 @@ cert-create name domain email="" token="" staging="false":
         }')
     
     # Create certificate
-    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/certificates/" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/certificates/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -357,7 +357,7 @@ cert-list token="":
     fi
     
     # Get certificates with auth
-    response=$(curl -sL "${BASE_URL}/api/v1/certificates/" -H "Authorization: Bearer $token_value")
+    response=$(curl -sL "${BASE_URL}/certificates/" -H "Authorization: Bearer $token_value")
     
     # Format as table
     echo "=== Certificates ==="
@@ -402,7 +402,7 @@ cert-show name token="" pem="false":
     fi
     
     # Get certificate with auth
-    response=$(curl -s "${BASE_URL}/api/v1/certificates/{{name}}" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${BASE_URL}/certificates/{{name}}" -H "Authorization: Bearer $token_value")
     
     # Show formatted or PEM
     if [ "{{pem}}" = "true" ]; then
@@ -451,7 +451,7 @@ cert-delete name token="" force="false":
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     
     # Delete certificate
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/certificates/{{name}}" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/certificates/{{name}}" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -504,7 +504,7 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
         cert_email="{{email}}"
     else
         # Try to get from token
-        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/tokens/info")
+        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
         # Fall back to ADMIN_EMAIL if token has no email
@@ -537,7 +537,7 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
         }')
     
     # Create proxy
-    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/proxy/targets/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -586,7 +586,7 @@ proxy-list token="":
     # Try API first if available
     if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
         # Try API call
-        response=$(curl -sf -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/proxy/targets/formatted" 2>/dev/null || true)
+        response=$(curl -sf -H "Authorization: Bearer $token_value" "${BASE_URL}/proxy/targets/formatted" 2>/dev/null || true)
         if [ -n "$response" ]; then
             echo "$response"
             exit 0
@@ -644,7 +644,7 @@ proxy-delete hostname token="" delete-cert="false" force="false":
     fi
     
     # Delete proxy
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/proxy/targets/{{hostname}}$query" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/proxy/targets/{{hostname}}$query" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -682,7 +682,7 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
     fi
     
     # Create auth config
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/proxy/targets/{{hostname}}/auth" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d '{
@@ -719,7 +719,7 @@ proxy-auth-disable hostname token="":
     fi
     
     # Delete auth config
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/proxy/targets/{{hostname}}/auth" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -738,7 +738,7 @@ proxy-auth-show hostname:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth")
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/proxy/targets/{{hostname}}/auth")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -959,7 +959,7 @@ oauth-routes-setup domain token="":
     # Try API first if available
     if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
         # Try API call
-        response=$(curl -sf -X POST "${BASE_URL}/api/v1/oauth/admin/setup-routes" \
+        response=$(curl -sf -X POST "${BASE_URL}/oauth/admin/setup-routes" \
             -H "Authorization: Bearer $token_value" \
             -H "Content-Type: application/json" \
             -d "{\"oauth_domain\": \"{{domain}}\", \"force\": false}" 2>/dev/null || true)
@@ -1108,7 +1108,7 @@ instance-list:
     fi
     
     echo "=== Named Instances ==="
-    response=$(curl -s "${BASE_URL}/api/v1/instances/" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${BASE_URL}/instances/" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -1135,7 +1135,7 @@ instance-show name:
         exit 1
     fi
     
-    response=$(curl -s "${BASE_URL}/api/v1/instances/{{name}}" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${BASE_URL}/instances/{{name}}" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -1158,7 +1158,7 @@ instance-register name target-url token="" description="":
         exit 1
     fi
     
-    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${BASE_URL}/api/v1/instances" \
+    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${BASE_URL}/instances" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
@@ -1191,7 +1191,7 @@ instance-update name target-url token="" description="":
         exit 1
     fi
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT "${BASE_URL}/api/v1/instances/{{name}}" \
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT "${BASE_URL}/instances/{{name}}" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
@@ -1224,7 +1224,7 @@ instance-delete name token="":
         exit 1
     fi
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/api/v1/instances/{{name}}" \
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/instances/{{name}}" \
         -H "Authorization: Bearer $TOKEN")
     
     HTTP_CODE=$(echo "$RESPONSE" | tail -1)
@@ -1250,7 +1250,7 @@ route-list:
     # Try API first if available
     if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
         # Routes endpoint doesn't require authentication
-        response=$(curl -sf "${BASE_URL}/api/v1/routes/formatted" 2>/dev/null || true)
+        response=$(curl -sf "${BASE_URL}/routes/formatted" 2>/dev/null || true)
         if [ -n "$response" ]; then
             echo "$response"
             exit 0
@@ -1353,7 +1353,7 @@ route-delete route-id token="":
         curl -X PUT -H "Authorization: Bearer {{token}}" \
             -H "Content-Type: application/json" \
             -d '{"target_url": "http://auth:8000"}' \
-            http://localhost/api/v1/proxy/targets/auth.${BASE_DOMAIN} > /dev/null 2>&1 || true
+            http://localhost/proxy/targets/auth.${BASE_DOMAIN} > /dev/null 2>&1 || true
     fi
     
     # Update echo-stateful proxy
@@ -1362,7 +1362,7 @@ route-delete route-id token="":
         curl -X PUT -H "Authorization: Bearer {{token}}" \
             -H "Content-Type: application/json" \
             -d '{"target_url": "http://echo-stateful:3000"}' \
-            http://localhost/api/v1/proxy/targets/echo-stateful.${BASE_DOMAIN} > /dev/null 2>&1 || true
+            http://localhost/proxy/targets/echo-stateful.${BASE_DOMAIN} > /dev/null 2>&1 || true
     fi
     
     # Update echo-stateless proxy
@@ -1371,7 +1371,7 @@ route-delete route-id token="":
         curl -X PUT -H "Authorization: Bearer {{token}}" \
             -H "Content-Type: application/json" \
             -d '{"target_url": "http://echo-stateless:3000"}' \
-            http://localhost/api/v1/proxy/targets/echo-stateless.${BASE_DOMAIN} > /dev/null 2>&1 || true
+            http://localhost/proxy/targets/echo-stateless.${BASE_DOMAIN} > /dev/null 2>&1 || true
     fi
     
     # Update fetcher proxy
@@ -1380,7 +1380,7 @@ route-delete route-id token="":
         curl -X PUT -H "Authorization: Bearer {{token}}" \
             -H "Content-Type: application/json" \
             -d '{"target_url": "http://fetcher:3000"}' \
-            http://localhost/api/v1/proxy/targets/fetcher.${BASE_DOMAIN} > /dev/null 2>&1 || true
+            http://localhost/proxy/targets/fetcher.${BASE_DOMAIN} > /dev/null 2>&1 || true
     fi
     
     # 4. Verify services
@@ -1472,14 +1472,14 @@ route-delete route-id token="":
     echo "   Enabling auth on echo-stateless..."
     curl -s -X POST -H "Authorization: Bearer {{token}}" -H "Content-Type: application/json" \
         -d '{"auth_proxy": "auth.'${BASE_DOMAIN}'", "auth_mode": "forward"}' \
-        http://localhost/api/v1/proxy/targets/echo-stateless.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
+        http://localhost/proxy/targets/echo-stateless.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
     echo "   ✓ Auth enabled on echo-stateless"
     
     # Enable auth on stateful
     echo "   Enabling auth on echo-stateful..."
     curl -s -X POST -H "Authorization: Bearer {{token}}" -H "Content-Type: application/json" \
         -d '{"auth_proxy": "auth.'${BASE_DOMAIN}'", "auth_mode": "forward"}' \
-        http://localhost/api/v1/proxy/targets/echo-stateful.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
+        http://localhost/proxy/targets/echo-stateful.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
     echo "   ✓ Auth enabled on echo-stateful"
     
     # 4. Verify everything is working

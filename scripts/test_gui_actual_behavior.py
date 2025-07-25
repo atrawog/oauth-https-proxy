@@ -30,21 +30,21 @@ def test_gui_login_and_display():
         print(f"   - Token email: {info.get('cert_email')}")
     
     # Get certificates
-    response = requests.get(f"{BASE_URL}/certificates", headers=headers)
+    response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
     print(f"\n   - Certificates endpoint status: {response.status_code}")
     if response.status_code == 200:
         certs = response.json()
         print(f"   - Number of certificates: {len(certs)}")
         
     # Get proxies
-    response = requests.get(f"{BASE_URL}/proxy/targets", headers=headers)
+    response = requests.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
     print(f"\n   - Proxies endpoint status: {response.status_code}")
     if response.status_code == 200:
         proxies = response.json()
         print(f"   - Number of proxies: {len(proxies)}")
         
     # Get routes
-    response = requests.get(f"{BASE_URL}/routes", headers=headers)
+    response = requests.get(f"{BASE_URL}/api/v1/routes", headers=headers)
     print(f"\n   - Routes endpoint status: {response.status_code}")
     if response.status_code == 200:
         routes = response.json()
@@ -70,7 +70,7 @@ def test_gui_login_and_display():
         print(f"   - Token name: {info.get('name')}")
         
     # Get certificates
-    response = requests.get(f"{BASE_URL}/certificates", headers=headers)
+    response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
     print(f"\n   - Certificates endpoint status: {response.status_code}")
     if response.status_code == 200:
         certs = response.json()

@@ -42,7 +42,7 @@ except Exception as e:
 # Test 4: API endpoint - Certificates
 print("\n4. Testing /certificates endpoint:")
 try:
-    response = requests.get(f"{BASE_URL}/certificates", headers=headers, verify=False, timeout=5)
+    response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers, verify=False, timeout=5)
     print(f"   GET /certificates -> Status: {response.status_code}")
     if response.status_code == 200:
         certs = response.json()
@@ -54,7 +54,7 @@ except Exception as e:
 
 # Test 5: Check if it's a redirect issue
 print("\n5. Testing redirect behavior:")
-response = requests.get(f"{BASE_URL}/certificates", headers=headers, verify=False, allow_redirects=False)
+response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers, verify=False, allow_redirects=False)
 print(f"   GET /certificates (no redirects) -> Status: {response.status_code}")
 if response.status_code in [301, 302, 303, 307, 308]:
     print(f"   Redirects to: {response.headers.get('Location', 'Unknown')}")

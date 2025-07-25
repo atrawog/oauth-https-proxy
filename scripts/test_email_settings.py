@@ -90,7 +90,7 @@ def test_email_settings(token_name: str):
     hostname = f"test-{int(time.time())}.example.com"
     try:
         response = requests.post(
-            f"{BASE_URL}/proxy/targets",
+            f"{BASE_URL}/api/v1/proxy/targets",
             headers=headers,
             json={
                 "hostname": hostname,
@@ -106,7 +106,7 @@ def test_email_settings(token_name: str):
             # Cleanup
             print("\n   Cleaning up proxy...")
             delete_response = requests.delete(
-                f"{BASE_URL}/proxy/targets/{hostname}",
+                f"{BASE_URL}/api/v1/proxy/targets/{hostname}",
                 headers=headers,
                 params={"delete_certificate": "true"}
             )

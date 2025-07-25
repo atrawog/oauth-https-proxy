@@ -48,82 +48,82 @@ class CertificateAPI {
     }
 
     async getCertificates() {
-        return this.request('GET', '/certificates');
+        return this.request('GET', '/api/v1/certificates');
     }
 
     async getCertificate(certName) {
-        return this.request('GET', `/certificates/${certName}`);
+        return this.request('GET', `/api/v1/certificates/${certName}`);
     }
 
     async getCertificateStatus(certName) {
-        return this.request('GET', `/certificates/${certName}/status`);
+        return this.request('GET', `/api/v1/certificates/${certName}/status`);
     }
 
     async createCertificate(data) {
-        return this.request('POST', '/certificates', data);
+        return this.request('POST', '/api/v1/certificates', data);
     }
 
     async renewCertificate(certName) {
-        return this.request('POST', `/certificates/${certName}/renew`);
+        return this.request('POST', `/api/v1/certificates/${certName}/renew`);
     }
 
     async convertCertificateToProduction(certName) {
-        return this.request('POST', `/certificates/${certName}/convert-to-production`);
+        return this.request('POST', `/api/v1/certificates/${certName}/convert-to-production`);
     }
 
     async deleteDomain(certName, domain) {
-        return this.request('DELETE', `/certificates/${certName}/domains/${domain}`);
+        return this.request('DELETE', `/api/v1/certificates/${certName}/domains/${domain}`);
     }
     
     // Proxy target methods
     async getProxyTargets() {
-        return this.request('GET', '/proxy/targets');
+        return this.request('GET', '/api/v1/proxy/targets');
     }
     
     async createProxyTarget(data) {
-        return this.request('POST', '/proxy/targets', data);
+        return this.request('POST', '/api/v1/proxy/targets', data);
     }
     
     async updateProxyTarget(hostname, data) {
-        return this.request('PUT', `/proxy/targets/${hostname}`, data);
+        return this.request('PUT', `/api/v1/proxy/targets/${hostname}`, data);
     }
     
     async deleteProxyTarget(hostname, deleteCert = false) {
-        return this.request('DELETE', `/proxy/targets/${hostname}?delete_certificate=${deleteCert}`);
+        return this.request('DELETE', `/api/v1/proxy/targets/${hostname}?delete_certificate=${deleteCert}`);
     }
     
     // Route methods
     async getRoutes() {
-        return this.request('GET', '/routes');
+        return this.request('GET', '/api/v1/routes');
     }
     
     async createRoute(data) {
-        return this.request('POST', '/routes', data);
+        return this.request('POST', '/api/v1/routes', data);
     }
     
     async updateRoute(routeId, data) {
-        return this.request('PUT', `/routes/${routeId}`, data);
+        return this.request('PUT', `/api/v1/routes/${routeId}`, data);
     }
     
     async deleteRoute(routeId) {
-        return this.request('DELETE', `/routes/${routeId}`);
+        return this.request('DELETE', `/api/v1/routes/${routeId}`);
     }
     
     // Proxy route methods
     async getProxyRoutes(hostname) {
-        return this.request('GET', `/proxy/targets/${hostname}/routes`);
+        return this.request('GET', `/api/v1/proxy/targets/${hostname}/routes`);
     }
     
     async updateProxyRoutes(hostname, data) {
-        return this.request('PUT', `/proxy/targets/${hostname}/routes`, data);
+        return this.request('PUT', `/api/v1/proxy/targets/${hostname}/routes`, data);
     }
     
     async enableProxyRoute(hostname, routeId) {
-        return this.request('POST', `/proxy/targets/${hostname}/routes/${routeId}/enable`);
+        return this.request('POST', `/api/v1/proxy/targets/${hostname}/routes/${routeId}/enable`);
     }
     
     async disableProxyRoute(hostname, routeId) {
-        return this.request('POST', `/proxy/targets/${hostname}/routes/${routeId}/disable`);
+        return this.request('POST', `/api/v1/proxy/targets/${hostname}/routes/${routeId}/disable`);
     }
 }
 

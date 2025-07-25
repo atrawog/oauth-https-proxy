@@ -42,7 +42,7 @@ print(f"   Expected: 403 (Not authenticated)")
 
 # Step 5: Check if token exists in storage
 print("\n5. Checking token in storage (via debug endpoint)")
-response5 = requests.get(f"{BASE_URL}/certificates", headers=headers)
+response5 = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
 print(f"   Can access protected endpoint: {response5.status_code == 200}")
 
 print("\n" + "="*60)

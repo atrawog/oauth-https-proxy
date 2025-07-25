@@ -27,7 +27,7 @@ if response.status_code == 200:
     print(f"        → Auth status: 'Authenticated as: {token_info['name']}'")
 
 print("\nSTEP 4: JavaScript loads certificates (loadCertificates())")
-response = requests.get(f"{BASE_URL}/certificates", headers=headers)
+response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
 if response.status_code == 200:
     certs = response.json()
     print(f"        API returns: {len(certs)} certificates")
@@ -41,7 +41,7 @@ if response.status_code == 200:
             print(f"          • {cert['cert_name']} - {', '.join(cert['domains'])}")
 
 print("\nSTEP 5: JavaScript loads proxies (loadProxies())")
-response = requests.get(f"{BASE_URL}/proxy/targets", headers=headers)
+response = requests.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
 if response.status_code == 200:
     proxies = response.json()
     print(f"        API returns: {len(proxies)} proxy targets")
@@ -53,7 +53,7 @@ if response.status_code == 200:
             print(f"          • {proxy['hostname']} → {proxy['target_url']}")
 
 print("\nSTEP 6: JavaScript loads routes (loadRoutes())")
-response = requests.get(f"{BASE_URL}/routes", headers=headers)
+response = requests.get(f"{BASE_URL}/api/v1/routes", headers=headers)
 if response.status_code == 200:
     routes = response.json()
     print(f"        API returns: {len(routes)} routes")

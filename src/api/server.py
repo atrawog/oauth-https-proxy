@@ -116,25 +116,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             logger.warning(f"ACME challenge not found for token: {token}")
             raise HTTPException(status_code=404, detail="Challenge not found")
     
-    # Import and register endpoint routers
-    from .endpoints import certificates, proxies, tokens, routes, instances, resources
-    
-    app.include_router(certificates.create_router(storage, cert_manager))
-    app.include_router(proxies.create_router(storage, cert_manager))
-    app.include_router(tokens.create_router(storage))
-    app.include_router(routes.create_router(storage))
-    app.include_router(instances.create_router(storage))
-    app.include_router(resources.create_router(storage))
-    
-    # OAuth endpoints (if available)
-    try:
-        from .endpoints import oauth_status, oauth_admin
-        app.include_router(oauth_status.create_oauth_status_router(storage))
-        app.include_router(oauth_admin.create_router(storage))
-    except ImportError as e:
-        logger.warning(f"OAuth endpoints not available: {e}")
-    
-    # Include OAuth router
+    # Include OAuth protocol router (remains at root level for compliance)
     oauth_router = create_oauth_router(oauth_settings, oauth_redis_manager, auth_manager)
     app.include_router(oauth_router)
     logger.info("OAuth router included successfully")
