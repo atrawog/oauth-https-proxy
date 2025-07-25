@@ -139,4 +139,13 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     app.include_router(oauth_router)
     logger.info("OAuth router included successfully")
     
+    # Include v1 API router
+    try:
+        from .routers.v1 import create_v1_router
+        v1_router = create_v1_router(storage, cert_manager)
+        app.include_router(v1_router, prefix="/api/v1")
+        logger.info("API v1 router included successfully at /api/v1")
+    except Exception as e:
+        logger.error(f"Failed to include v1 router: {e}")
+    
     return app
