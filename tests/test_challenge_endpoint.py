@@ -34,9 +34,10 @@ def test_challenge_not_found(http_client: httpx.Client):
 
 def test_certificate_list_endpoint(http_client: httpx.Client):
     """Test certificate list endpoint."""
-    response = http_client.get("/certificates")
-    assert response.status_code == 200
-    assert isinstance(response.json(), list)
+    response = http_client.get("/certificates/")
+    # Expect 403 without authentication
+    assert response.status_code == 403
+    assert "not authenticated" in response.json()["detail"].lower()
 
 def test_health_endpoint(http_client: httpx.Client):
     """Test health check endpoint."""

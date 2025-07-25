@@ -30,7 +30,8 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         title="MCP HTTP Proxy API",
         description="Certificate and proxy management API",
         version="1.0.0",
-        lifespan=lifespan
+        lifespan=lifespan,
+        redirect_slashes=False
     )
     
     # Store dependencies
@@ -101,19 +102,20 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             raise HTTPException(status_code=404, detail="Challenge not found")
     
     # Import and register endpoint routers
-    from .endpoints import certificates, proxies, tokens, routes, instances
+    from .endpoints import certificates, proxies, tokens, routes, instances, resources
     
     app.include_router(certificates.create_router(storage, cert_manager))
     app.include_router(proxies.create_router(storage, cert_manager))
     app.include_router(tokens.create_router(storage))
     app.include_router(routes.create_router(storage))
     app.include_router(instances.create_router(storage))
+    app.include_router(resources.create_router(storage))
     
     # OAuth endpoints (if available)
     try:
         from .endpoints import oauth_status
         app.include_router(oauth_status.create_oauth_status_router(storage))
-    except ImportError:
-        logger.warning("OAuth endpoints not available")
+    except ImportError as e:
+        logger.warning(f"OAuth endpoints not available: {e}")
     
     return app

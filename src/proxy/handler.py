@@ -458,15 +458,17 @@ class EnhancedProxyHandler:
         """Check authentication via unified auth proxy."""
         
         # Build auth verification request
-        auth_url = f"https://{target.auth_proxy}/verify"
+        # Use internal service URL to avoid proxy loops
+        auth_url = "http://auth:8000/verify"
         
         # Forward relevant headers and cookies
         headers = {
             "X-Original-URL": str(request.url),
             "X-Original-Method": request.method,
-            "X-Forwarded-Host": request.headers.get("host", ""),
+            "X-Forwarded-Host": target.hostname,  # Pass the actual target hostname for resource validation
             "X-Forwarded-Proto": request.url.scheme,
             "X-Forwarded-For": request.client.host if request.client else "",
+            "X-Forwarded-Path": request.url.path,  # Pass the path for full resource URL construction
         }
         
         # Include auth cookie if present

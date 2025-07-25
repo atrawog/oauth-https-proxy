@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union, TYPE_CHECKING
 from enum import Enum
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, ValidationInfo
 import re
 
 if TYPE_CHECKING:
@@ -34,27 +34,30 @@ class Route(BaseModel):
     owner_token_hash: Optional[str] = Field(None, description="Hash of token that owns this route")
     created_by: Optional[str] = Field(None, description="Token name that created this route")
     
-    @validator('methods')
-    def uppercase_methods(cls, v):
+    @field_validator('methods')
+    @classmethod
+    def uppercase_methods(cls, v: Optional[List[str]]) -> Optional[List[str]]:
         """Ensure HTTP methods are uppercase."""
         if v:
             return [method.upper() for method in v]
         return v
     
-    @validator('path_pattern')
-    def validate_pattern(cls, v, values):
+    @field_validator('path_pattern')
+    @classmethod
+    def validate_pattern(cls, v: str, info: ValidationInfo) -> str:
         """Validate regex patterns."""
-        if values.get('is_regex', False):
+        if info.data.get('is_regex', False):
             try:
                 re.compile(v)
             except re.error as e:
                 raise ValueError(f"Invalid regex pattern: {e}")
         return v
     
-    @validator('target_value')
-    def validate_target_value(cls, v, values):
+    @field_validator('target_value')
+    @classmethod
+    def validate_target_value(cls, v: Union[int, str], info: ValidationInfo) -> Union[int, str]:
         """Validate target value based on target type."""
-        target_type = values.get('target_type')
+        target_type = info.data.get('target_type')
         if target_type == RouteTargetType.PORT:
             if isinstance(v, str):
                 try:

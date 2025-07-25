@@ -2,7 +2,7 @@
 
 from datetime import datetime
 from typing import List, Optional
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator, field_serializer
 
 
 class CertificateRequest(BaseModel):
@@ -12,15 +12,17 @@ class CertificateRequest(BaseModel):
     cert_name: str
     acme_directory_url: str = Field(default="https://acme-v02.api.letsencrypt.org/directory")
     
-    @validator('domain')
-    def validate_domain(cls, v):
+    @field_validator('domain')
+    @classmethod
+    def validate_domain(cls, v: str) -> str:
         v = v.strip()
         if not v or not '.' in v:
             raise ValueError('Invalid domain format')
         return v.lower()
     
-    @validator('email')
-    def validate_email(cls, v):
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
         v = v.strip()
         if not v or '@' not in v:
             raise ValueError('Invalid email format')
@@ -34,16 +36,18 @@ class MultiDomainCertificateRequest(BaseModel):
     email: str
     acme_directory_url: str
     
-    @validator('cert_name')
-    def validate_cert_name(cls, v):
+    @field_validator('cert_name')
+    @classmethod
+    def validate_cert_name(cls, v: str) -> str:
         if not v or not v.strip():
             raise ValueError('Certificate name cannot be empty')
         if not all(c.isalnum() or c in '-_' for c in v):
             raise ValueError('Certificate name can only contain letters, numbers, dash, and underscore')
         return v.strip()
     
-    @validator('domains')
-    def validate_domains(cls, v):
+    @field_validator('domains')
+    @classmethod
+    def validate_domains(cls, v: List[str]) -> List[str]:
         if not v or len(v) == 0:
             raise ValueError("At least one domain required")
         if len(v) > 100:  # Let's Encrypt limit
@@ -66,8 +70,9 @@ class MultiDomainCertificateRequest(BaseModel):
         
         return cleaned
     
-    @validator('email')
-    def validate_email(cls, v):
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: str) -> str:
         v = v.strip()
         if not v or '@' not in v:
             raise ValueError('Invalid email format')
@@ -89,20 +94,21 @@ class Certificate(BaseModel):
     owner_token_hash: Optional[str] = None
     created_by: Optional[str] = None
     
-    @validator('domains', pre=True)
+    @field_validator('domains', mode='before')
+    @classmethod
     def validate_domains(cls, v):
         if isinstance(v, list):
             return [domain.strip().lower() for domain in v if domain.strip()]
         return v
     
-    @validator('email')
-    def validate_email(cls, v):
+    @field_validator('email')
+    @classmethod
+    def validate_email(cls, v: Optional[str]) -> Optional[str]:
         return v.strip().lower() if v else v
     
-    class Config:
-        json_encoders = {
-            datetime: lambda v: v.isoformat() if v else None
-        }
+    @field_serializer('expires_at', 'issued_at')
+    def serialize_datetime(self, dt: Optional[datetime]) -> Optional[str]:
+        return dt.isoformat() if dt else None
 
 
 class ChallengeToken(BaseModel):

@@ -43,7 +43,7 @@ def create_route(path: str, target_type: str, target_value: str, token: str,
     }
     
     try:
-        response = requests.post(f"{base_url}/routes", json=data, headers=headers, timeout=10)
+        response = requests.post(f"{base_url}/routes/", json=data, headers=headers, timeout=10)
         response.raise_for_status()
         
         route = response.json()

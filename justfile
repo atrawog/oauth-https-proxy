@@ -599,6 +599,99 @@ proxy-delete hostname token="" delete-cert="false" force="false":
     
     echo "$body" | jq '.'
 
+# Enable OAuth authentication on a proxy
+proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    # Default auth proxy to auth.${BASE_DOMAIN}
+    if [ -z "{{auth-proxy}}" ]; then
+        auth_proxy_value="auth.${BASE_DOMAIN}"
+    else
+        auth_proxy_value="{{auth-proxy}}"
+    fi
+    
+    # Create auth config
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/proxy/targets/{{hostname}}/auth" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d '{
+            "auth_proxy": "'$auth_proxy_value'",
+            "auth_mode": "{{mode}}"
+        }')
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "✓ Auth enabled on {{hostname}}"
+    echo "$body" | jq '.'
+
+# Disable OAuth authentication on a proxy
+proxy-auth-disable hostname token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    # Delete auth config
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/proxy/targets/{{hostname}}/auth" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "✓ Auth disabled on {{hostname}}"
+
+# Show proxy authentication configuration
+proxy-auth-show hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/proxy/targets/{{hostname}}/auth")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "$body" | jq '.'
+
 # ============================================================================
 # TESTING COMMANDS
 # ============================================================================
@@ -1312,19 +1405,23 @@ mcp-setup:
         echo "   ✓ echo-stateful proxy already exists"
     fi
     
-    # 3. Disable auth on both echo servers for easy testing
+    # 3. Enable auth on both echo servers for proper security
     echo ""
     echo "3️⃣ Configuring authentication..."
     
-    # Disable auth on stateless
-    echo "   Disabling auth on echo-stateless..."
-    curl -s -X DELETE -H "Authorization: Bearer {{token}}" http://localhost/proxy/targets/echo-stateless.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
-    echo "   ✓ Auth disabled on echo-stateless"
+    # Enable auth on stateless
+    echo "   Enabling auth on echo-stateless..."
+    curl -s -X POST -H "Authorization: Bearer {{token}}" -H "Content-Type: application/json" \
+        -d '{"auth_proxy": "auth.'${BASE_DOMAIN}'", "auth_mode": "forward"}' \
+        http://localhost/proxy/targets/echo-stateless.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
+    echo "   ✓ Auth enabled on echo-stateless"
     
-    # Disable auth on stateful
-    echo "   Disabling auth on echo-stateful..."
-    curl -s -X DELETE -H "Authorization: Bearer {{token}}" http://localhost/proxy/targets/echo-stateful.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
-    echo "   ✓ Auth disabled on echo-stateful"
+    # Enable auth on stateful
+    echo "   Enabling auth on echo-stateful..."
+    curl -s -X POST -H "Authorization: Bearer {{token}}" -H "Content-Type: application/json" \
+        -d '{"auth_proxy": "auth.'${BASE_DOMAIN}'", "auth_mode": "forward"}' \
+        http://localhost/proxy/targets/echo-stateful.${BASE_DOMAIN}/auth > /dev/null 2>&1 || true
+    echo "   ✓ Auth enabled on echo-stateful"
     
     # 4. Verify everything is working
     echo ""

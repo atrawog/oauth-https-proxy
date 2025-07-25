@@ -16,6 +16,7 @@ COPY pyproject.toml .
 COPY mcp-streamablehttp-client/ ./mcp-streamablehttp-client/
 COPY mcp-echo-streamablehttp-server-stateful/ ./mcp-echo-streamablehttp-server-stateful/
 COPY mcp-echo-streamablehttp-server-stateless/ ./mcp-echo-streamablehttp-server-stateless/
+COPY mcp-http-validator/ ./mcp-http-validator/
 
 # Install pixi
 RUN curl -fsSL https://pixi.sh/install.sh | bash && \

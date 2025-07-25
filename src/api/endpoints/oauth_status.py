@@ -157,7 +157,7 @@ class OAuthStatusRouter:
     
     def __init__(self, storage: RedisStorage):
         self.storage = storage
-        self.router = APIRouter(prefix="/oauth-status", tags=["OAuth Status"])
+        self.router = APIRouter(prefix="/oauth", tags=["OAuth Status"])
         self._setup_routes()
     
     def _setup_routes(self):
