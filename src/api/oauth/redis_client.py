@@ -35,5 +35,19 @@ class RedisManager:
     def client(self) -> redis.Redis:
         """Get Redis client from pool"""
         if not self._pool:
-            raise RuntimeError("Redis pool not initialized")
+            # Auto-initialize the pool if not already done
+            import asyncio
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're in an async context but can't await here
+                # Create a synchronous Redis client instead
+                self._pool = redis.from_url(
+                    self.settings.redis_url,
+                    encoding="utf-8",
+                    decode_responses=True,
+                    password=self.settings.redis_password,
+                )
+            else:
+                # Initialize asynchronously
+                loop.run_until_complete(self.initialize())
         return self._pool

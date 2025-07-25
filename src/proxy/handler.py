@@ -458,8 +458,8 @@ class EnhancedProxyHandler:
         """Check authentication via unified auth proxy."""
         
         # Build auth verification request
-        # Use internal service URL to avoid proxy loops
-        auth_url = "http://auth:8000/verify"
+        # Use internal API service URL to avoid proxy loops
+        auth_url = "http://localhost:9000/verify"
         
         # Forward relevant headers and cookies
         headers = {

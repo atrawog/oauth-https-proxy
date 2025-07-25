@@ -706,38 +706,43 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     @router.post("/verify")
     async def verify_token(request: Request):
         """Token examination oracle - validates Bearer tokens for Traefik"""
-        # Extract the target resource from forwarded headers
-        forwarded_host = request.headers.get("x-forwarded-host", "")
-        forwarded_proto = request.headers.get("x-forwarded-proto", "https")
-        forwarded_path = request.headers.get("x-forwarded-path", "")
-        
-        # Construct the resource URI if we have the host
-        resource = None
-        if forwarded_host:
-            resource = f"{forwarded_proto}://{forwarded_host}{forwarded_path}"
-        
-        # Validate token with resource context
-        nonlocal require_oauth
-        if require_oauth is None:
-            require_oauth = create_async_resource_protector(
-                settings,
-                redis_manager.client,
-                auth_manager.key_manager,
-            )
-        
-        # Validate with resource for audience checking
-        token = await require_oauth.validate_request(request, resource=resource)
-        
-        # Return success with user info in JSON body
-        return {
-            "sub": token.get("sub", ""),
-            "username": token.get("username", ""),
-            "email": token.get("email", ""),
-            "name": token.get("name", ""),
-            "groups": token.get("groups", []),
-            "scope": token.get("scope", ""),
-            "client_id": token.get("client_id", ""),
-        }
+        try:
+            # Extract the target resource from forwarded headers
+            forwarded_host = request.headers.get("x-forwarded-host", "")
+            forwarded_proto = request.headers.get("x-forwarded-proto", "https")
+            forwarded_path = request.headers.get("x-forwarded-path", "")
+            
+            # Construct the resource URI if we have the host
+            resource = None
+            if forwarded_host:
+                resource = f"{forwarded_proto}://{forwarded_host}{forwarded_path}"
+            
+            # Validate token with resource context
+            nonlocal require_oauth
+            if require_oauth is None:
+                require_oauth = create_async_resource_protector(
+                    settings,
+                    redis_manager.client,
+                    auth_manager.key_manager,
+                )
+            
+            # Validate with resource for audience checking
+            token = await require_oauth.validate_request(request, resource=resource)
+            
+            # Return success with user info in JSON body
+            return {
+                "sub": token.get("sub", ""),
+                "username": token.get("username", ""),
+                "email": token.get("email", ""),
+                "name": token.get("name", ""),
+                "groups": token.get("groups", []),
+                "scope": token.get("scope", ""),
+                "client_id": token.get("client_id", ""),
+            }
+        except Exception as e:
+            logger.error(f"Verify token error: {type(e).__name__}: {str(e)}", exc_info=True)
+            # Re-raise the exception to maintain proper error handling
+            raise
 
     # Token revocation endpoint (RFC 7009)
     @router.post("/revoke")
