@@ -751,6 +751,130 @@ proxy-auth-show hostname:
     
     echo "$body" | jq '.'
 
+# Configure MCP metadata for a proxy
+proxy-mcp-enable hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        TOKEN="${ADMIN_TOKEN}"
+    else
+        TOKEN="{{token}}"
+    fi
+    
+    # Build scopes array
+    scopes_json=$(echo "{{scopes}}" | jq -R 'split(" ")')
+    
+    # Build request body
+    body=$(jq -n \
+        --argjson scopes "$scopes_json" \
+        '{
+            enabled: true,
+            endpoint: "{{endpoint}}",
+            scopes: $scopes,
+            stateful: {{stateful}},
+            override_backend: {{override-backend}}
+        }')
+    
+    echo "Enabling MCP for {{hostname}}..."
+    echo "$body" | jq '.'
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST \
+        -H "Authorization: Bearer $TOKEN" \
+        -H "Content-Type: application/json" \
+        -d "$body" \
+        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/mcp")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "✓ MCP enabled on {{hostname}}"
+    echo "$body" | jq '.proxy_target.mcp_metadata' 2>/dev/null || echo "$body"
+
+# Disable MCP metadata for a proxy
+proxy-mcp-disable hostname token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        if [ -z "${ADMIN_TOKEN:-}" ]; then
+            echo "Error: No token provided and ADMIN_TOKEN not set"
+            exit 1
+        fi
+        TOKEN="${ADMIN_TOKEN}"
+    else
+        TOKEN="{{token}}"
+    fi
+    
+    echo "Disabling MCP for {{hostname}}..."
+    
+    response=$(curl -s -w '\n%{http_code}' -X DELETE \
+        -H "Authorization: Bearer $TOKEN" \
+        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/mcp")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "✓ MCP disabled on {{hostname}}"
+
+# Show MCP configuration for a proxy
+proxy-mcp-show hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/mcp")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "$body" | jq '.'
+
+# Test proxy MCP metadata endpoint
+test-proxy-mcp hostname:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # First check if proxy exists
+    echo "Testing MCP metadata endpoint for {{hostname}}..."
+    
+    # Try to fetch the MCP metadata endpoint
+    response=$(curl -s -w '\n%{http_code}' "https://{{hostname}}/.well-known/oauth-protected-resource" -k)
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    echo "HTTP Status: $http_code"
+    echo "Response:"
+    echo "$body" | jq '.' 2>/dev/null || echo "$body"
+    
+    # Also check the proxy's MCP configuration
+    echo -e "\nProxy MCP Configuration:"
+    just proxy-mcp-show {{hostname}}
+
 # ============================================================================
 # TESTING COMMANDS
 # ============================================================================

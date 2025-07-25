@@ -1,8 +1,22 @@
 """Proxy-specific data models."""
 
 from datetime import datetime
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, field_validator, field_serializer
+
+
+class MCPMetadata(BaseModel):
+    """MCP (Model Context Protocol) metadata configuration."""
+    enabled: bool = False
+    endpoint: str = "/mcp"
+    scopes: List[str] = ["mcp:read", "mcp:write"]
+    stateful: bool = False
+    mcp_versions: List[str] = ["2025-06-18"]
+    server_info: Optional[Dict[str, Any]] = None
+    override_backend: bool = False  # If True, always use proxy-generated metadata
+    auto_detected: bool = False  # True if proxy checked backend
+    backend_implements: bool = False  # True if backend has the endpoint
+    last_checked: Optional[datetime] = None
 
 
 class ProxyTarget(BaseModel):
@@ -35,6 +49,9 @@ class ProxyTarget(BaseModel):
     route_mode: str = "all"  # all, selective, none
     enabled_routes: List[str] = []
     disabled_routes: List[str] = []
+    
+    # MCP metadata configuration
+    mcp_metadata: Optional[MCPMetadata] = None
     
     @field_validator('auth_mode')
     @classmethod
@@ -119,6 +136,8 @@ class ProxyTargetUpdate(BaseModel):
     route_mode: Optional[str] = None
     enabled_routes: Optional[List[str]] = None
     disabled_routes: Optional[List[str]] = None
+    # MCP metadata field
+    mcp_metadata: Optional[MCPMetadata] = None
     
     @field_validator('target_url')
     @classmethod
@@ -197,4 +216,32 @@ class ProxyAuthConfig(BaseModel):
         valid_modes = ["forward", "redirect", "passthrough"]
         if v not in valid_modes:
             raise ValueError(f"mode must be one of {valid_modes}")
+        return v
+
+
+class ProxyMCPConfig(BaseModel):
+    """Request model for configuring proxy MCP metadata."""
+    enabled: bool = True
+    endpoint: Optional[str] = "/mcp"
+    scopes: Optional[List[str]] = ["mcp:read", "mcp:write"]
+    stateful: Optional[bool] = False
+    mcp_versions: Optional[List[str]] = ["2025-06-18"]
+    server_info: Optional[Dict[str, Any]] = None
+    override_backend: Optional[bool] = False
+    
+    @field_validator('endpoint')
+    @classmethod
+    def validate_endpoint(cls, v):
+        if v is not None and not v.startswith('/'):
+            raise ValueError('Endpoint must start with /')
+        return v
+    
+    @field_validator('scopes')
+    @classmethod
+    def validate_scopes(cls, v):
+        if v is not None:
+            valid_scopes = ["mcp:read", "mcp:write", "mcp:session", "mcp:admin"]
+            for scope in v:
+                if not any(scope.startswith(prefix) for prefix in ["mcp:", "openid", "profile", "email"]):
+                    raise ValueError(f"Invalid scope: {scope}")
         return v

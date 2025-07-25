@@ -560,6 +560,48 @@ class RedisStorage:
             logger.error(f"Failed to update proxy target: {e}")
             return False
     
+    # MCP metadata operations
+    def update_mcp_metadata(self, hostname: str, mcp_metadata: dict) -> bool:
+        """Update MCP metadata for a proxy target."""
+        try:
+            target = self.get_proxy_target(hostname)
+            if not target:
+                return False
+            
+            # Import here to avoid circular dependency
+            from ..proxy.models import MCPMetadata
+            
+            # Update or create MCP metadata
+            if target.mcp_metadata:
+                # Update existing metadata
+                for field, value in mcp_metadata.items():
+                    if hasattr(target.mcp_metadata, field):
+                        setattr(target.mcp_metadata, field, value)
+            else:
+                # Create new metadata
+                target.mcp_metadata = MCPMetadata(**mcp_metadata)
+            
+            # Update last_checked if we're doing auto-detection
+            if 'auto_detected' in mcp_metadata:
+                target.mcp_metadata.last_checked = datetime.now(timezone.utc)
+            
+            return self.store_proxy_target(hostname, target)
+        except Exception as e:
+            logger.error(f"Failed to update MCP metadata: {e}")
+            return False
+    
+    def get_proxy_targets_with_mcp(self, enabled_only: bool = True) -> List[ProxyTarget]:
+        """Get all proxy targets with MCP metadata configured."""
+        try:
+            targets = []
+            for target in self.list_proxy_targets():
+                if target.mcp_metadata and (not enabled_only or target.mcp_metadata.enabled):
+                    targets.append(target)
+            return targets
+        except Exception as e:
+            logger.error(f"Failed to get MCP proxy targets: {e}")
+            return []
+    
     # Route operations
     def store_route(self, route: Route) -> bool:
         """Store routing rule with priority indexing and uniqueness check."""

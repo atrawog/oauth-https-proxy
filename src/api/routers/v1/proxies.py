@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 
 from ...auth import require_auth, require_auth_header, get_current_token_info, require_proxy_owner
-from ....proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig
+from ....proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig, ProxyMCPConfig
 from ....certmanager.models import CertificateRequest
 
 logger = logging.getLogger(__name__)
@@ -481,5 +481,87 @@ def create_router(storage, cert_manager):
         logger.info(f"Route {route_id} disabled for proxy {hostname}")
         
         return {"status": "Route disabled", "route_id": route_id}
+    
+    # MCP (Model Context Protocol) configuration endpoints
+    @router.post("/{hostname}/mcp")
+    async def configure_proxy_mcp(
+        hostname: str,
+        config: ProxyMCPConfig,
+        _=Depends(require_proxy_owner)
+    ):
+        """Configure MCP metadata for a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Build MCP metadata dict
+        mcp_metadata = {
+            "enabled": config.enabled,
+            "endpoint": config.endpoint,
+            "scopes": config.scopes,
+            "stateful": config.stateful,
+            "mcp_versions": config.mcp_versions,
+            "server_info": config.server_info,
+            "override_backend": config.override_backend
+        }
+        
+        # Update MCP metadata
+        if not storage.update_mcp_metadata(hostname, mcp_metadata):
+            raise HTTPException(500, "Failed to update MCP metadata")
+        
+        # Get updated target
+        target = storage.get_proxy_target(hostname)
+        
+        logger.info(f"MCP configured for proxy {hostname}: enabled={config.enabled}")
+        
+        return {"status": "MCP configured", "proxy_target": target}
+    
+    @router.get("/{hostname}/mcp")
+    async def get_proxy_mcp_config(hostname: str):
+        """Get MCP configuration for a proxy target."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        if not target.mcp_metadata:
+            return {
+                "enabled": False,
+                "message": "MCP not configured for this proxy"
+            }
+        
+        # Return MCP configuration
+        return {
+            "enabled": target.mcp_metadata.enabled,
+            "endpoint": target.mcp_metadata.endpoint,
+            "scopes": target.mcp_metadata.scopes,
+            "stateful": target.mcp_metadata.stateful,
+            "mcp_versions": target.mcp_metadata.mcp_versions,
+            "server_info": target.mcp_metadata.server_info,
+            "override_backend": target.mcp_metadata.override_backend,
+            "auto_detected": target.mcp_metadata.auto_detected,
+            "backend_implements": target.mcp_metadata.backend_implements,
+            "last_checked": target.mcp_metadata.last_checked
+        }
+    
+    @router.delete("/{hostname}/mcp")
+    async def remove_proxy_mcp(
+        hostname: str,
+        _=Depends(require_proxy_owner)
+    ):
+        """Remove MCP configuration from a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Remove MCP metadata
+        target.mcp_metadata = None
+        
+        # Store updated target
+        if not storage.store_proxy_target(hostname, target):
+            raise HTTPException(500, "Failed to update proxy target")
+        
+        logger.info(f"MCP configuration removed for proxy {hostname}")
+        
+        return {"status": "MCP configuration removed", "proxy_target": target}
     
     return router
