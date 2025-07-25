@@ -34,6 +34,9 @@ COPY scripts/ ./scripts/
 # Create log directory
 RUN mkdir -p /app/logs
 
+# Set environment variable to indicate we're running in Docker
+ENV RUNNING_IN_DOCKER=1
+
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
   CMD curl -f http://localhost:80/health || exit 1

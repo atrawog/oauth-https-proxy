@@ -82,6 +82,20 @@ def wait_for_service(url: str, timeout: int = 60) -> bool:
     return False
 
 
+def get_api_base_url() -> str:
+    """Get the correct API base URL based on environment.
+    
+    When running inside the Docker container, use the internal API port.
+    When running outside, use the external BASE_URL.
+    """
+    # Check if we're running inside the container
+    if os.path.exists('/.dockerenv') or os.getenv('RUNNING_IN_DOCKER'):
+        return 'http://localhost:9000'
+    
+    # Otherwise use the configured BASE_URL
+    return os.getenv('BASE_URL', 'http://localhost:80')
+
+
 def cleanup_test_resources(prefix: str = "test"):
     """Clean up test resources."""
     # Clean up test proxies

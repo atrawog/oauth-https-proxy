@@ -525,21 +525,12 @@ proxy-list token="":
         fi
     fi
     
-    # Get proxies with auth
-    response=$(curl -sL "${BASE_URL}/proxy/targets" -H "Authorization: Bearer $token_value")
-    
-    # Format as table
-    echo "=== Proxy Targets ==="
-    echo "$response" | jq -r '.[] | [.hostname, .target_url, (if .enabled then "✓" else "✗" end), .cert_name // "none"] | @tsv' | \
-        column -t -s $'\t' -N "Hostname,Target,Enabled,Certificate"
+    # Use Python script to list proxies
+    docker exec {{container_name}} pixi run python scripts/proxy_list.py "$token_value"
 
 # Show proxy details
 proxy-show hostname:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
-    curl -s "${BASE_URL}/proxy/targets/{{hostname}}" | jq '.'
+    docker exec {{container_name}} pixi run python scripts/proxy_show.py "{{hostname}}"
 
 # Delete proxy target
 proxy-delete hostname token="" delete-cert="false" force="false":

@@ -7,11 +7,15 @@ import requests
 from datetime import datetime
 from tabulate import tabulate
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from test_utils import get_api_base_url
+
 def list_proxy_targets(token: str = None):
     """List all proxy targets (optionally filtered by token)."""
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     headers = {}
@@ -20,7 +24,7 @@ def list_proxy_targets(token: str = None):
     
     try:
         response = requests.get(
-            f"{base_url}/proxy/targets",
+            f"{base_url}/proxy/targets/",
             headers=headers
         )
         

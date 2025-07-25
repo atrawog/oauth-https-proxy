@@ -7,15 +7,19 @@ import requests
 import json
 from datetime import datetime
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from test_utils import get_api_base_url
+
 def show_proxy_target(hostname: str):
     """Display proxy target details."""
     if not hostname:
         print("Error: Hostname is required")
         return False
     
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     try:

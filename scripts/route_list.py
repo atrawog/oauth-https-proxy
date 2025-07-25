@@ -6,12 +6,16 @@ import sys
 import requests
 from tabulate import tabulate
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.test_utils import get_api_base_url
+
 
 def list_routes(token: str = None):
     """List all routes."""
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     headers = {}

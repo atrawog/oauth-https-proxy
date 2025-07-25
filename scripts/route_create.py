@@ -5,14 +5,18 @@ import os
 import sys
 import requests
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.test_utils import get_api_base_url
+
 
 def create_route(path: str, target_type: str, target_value: str, token: str, 
                  priority: str = "50", methods: str = "", is_regex: str = "false", 
                  description: str = ""):
     """Create a new route."""
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
