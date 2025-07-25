@@ -59,8 +59,14 @@
 ```
 
 ### API Endpoints
-- `PUT /token/email` - Update certificate email for current token
-- `GET /token/info` - Get current token information
+- `GET /api/v1/tokens` - List all tokens
+- `POST /api/v1/tokens` - Create new token
+- `POST /api/v1/tokens/generate` - Generate token for display
+- `PUT /api/v1/tokens/email` - Update certificate email for current token
+- `GET /api/v1/tokens/info` - Get current token information
+- `GET /api/v1/tokens/{name}` - Get specific token details
+- `DELETE /api/v1/tokens/{name}` - Delete a token
+- `GET /api/v1/tokens/{name}/reveal` - Securely reveal token value
 
 ### Token Commands
 ```bash
@@ -75,11 +81,12 @@ just token-email-update <n> <email>      # Update token cert email
 ## Service Architecture
 
 ### Docker Services
-- **proxy**: HTTP/HTTPS gateway and certificate manager  
-- **auth**: OAuth 2.1 authorization server
+- **proxy**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API  
 - **redis**: State storage for all services
-- **echo-stateful**: Stateful MCP echo server
-- **echo-stateless**: Stateless MCP echo server
+- **echo-stateful**: Stateful MCP echo server (example MCP implementation)
+- **echo-stateless**: Stateless MCP echo server (example MCP implementation)
+
+**Note**: OAuth functionality is now integrated directly into the proxy service - there is no separate auth service.
 
 ### Unified Multi-Instance Dispatcher
 **CRITICAL**: UnifiedDispatcher is THE server - FastAPI is just another instance!
@@ -106,6 +113,7 @@ Client → Port 80/443 → UnifiedDispatcher
 #### API App (FastAPI) - localhost only
 - Full FastAPI with lifespan management
 - API endpoints, Web GUI, certificate management
+- Integrated OAuth 2.1 server functionality
 - Global resources (scheduler, Redis)
 - Runs on internal port 9000
 
@@ -176,15 +184,15 @@ class DomainInstance:
 - No downtime during renewal
 
 ### API Endpoints
-- `POST /certificates` - Single domain (async)
-- `POST /certificates/multi-domain` - Multiple domains (async)
-- `GET /certificates` - List all certificates
-- `GET /certificates/{cert_name}` - Get certificate details
-- `GET /certificates/{cert_name}/status` - Generation status
-- `POST /certificates/{cert_name}/renew` - Manual renewal
-- `DELETE /certificates/{cert_name}` - Delete certificate
-- `GET /.well-known/acme-challenge/{token}` - ACME validation
-- `GET /health` - Service health status
+- `POST /api/v1/certificates` - Single domain (async)
+- `POST /api/v1/certificates/multi-domain` - Multiple domains (async)
+- `GET /api/v1/certificates` - List all certificates
+- `GET /api/v1/certificates/{cert_name}` - Get certificate details
+- `GET /api/v1/certificates/{cert_name}/status` - Generation status
+- `POST /api/v1/certificates/{cert_name}/renew` - Manual renewal
+- `DELETE /api/v1/certificates/{cert_name}` - Delete certificate
+- `GET /.well-known/acme-challenge/{token}` - ACME validation (root level)
+- `GET /health` - Service health status (root level)
 
 ### Certificate Commands
 ```bash
@@ -274,14 +282,16 @@ Three modes for route filtering:
 ```
 
 ### API Endpoints
-- `POST /proxy/targets` - Create proxy target
-- `GET /proxy/targets` - List all proxies
-- `GET /proxy/targets/{hostname}` - Get proxy details
-- `PUT /proxy/targets/{hostname}` - Update proxy
-- `DELETE /proxy/targets/{hostname}` - Delete proxy
-- `POST /proxy/targets/{hostname}/auth` - Configure auth
-- `DELETE /proxy/targets/{hostname}/auth` - Remove auth
-- `GET /proxy/targets/{hostname}/auth` - Get auth config
+- `POST /api/v1/proxy/targets` - Create proxy target
+- `GET /api/v1/proxy/targets` - List all proxies
+- `GET /api/v1/proxy/targets/{hostname}` - Get proxy details
+- `PUT /api/v1/proxy/targets/{hostname}` - Update proxy
+- `DELETE /api/v1/proxy/targets/{hostname}` - Delete proxy
+- `POST /api/v1/proxy/targets/{hostname}/auth` - Configure auth
+- `DELETE /api/v1/proxy/targets/{hostname}/auth` - Remove auth
+- `GET /api/v1/proxy/targets/{hostname}/auth` - Get auth config
+- `GET /api/v1/proxy/targets/{hostname}/routes` - Get proxy routes
+- `PUT /api/v1/proxy/targets/{hostname}/routes` - Update proxy routes
 
 ### Proxy Commands
 ```bash
@@ -315,6 +325,15 @@ just test-proxy-all
 just test-auth-flow <hostname>
 ```
 
+### Route API Endpoints
+- `GET /api/v1/routes` - List all routing rules
+- `POST /api/v1/routes` - Create new routing rule
+- `GET /api/v1/routes/{route_id}` - Get specific route details
+- `PUT /api/v1/routes/{route_id}` - Update route configuration
+- `DELETE /api/v1/routes/{route_id}` - Delete route
+- `PUT /api/v1/routes/{route_id}/enable` - Enable route
+- `PUT /api/v1/routes/{route_id}/disable` - Disable route
+
 ### Route Commands
 ```bash
 just route-list
@@ -341,9 +360,10 @@ just test-proxy-routes
 ## OAuth Service
 
 ### Architecture
-OAuth runs as a standard proxied service (not special):
-- Internal port: 8000
-- Accessed via proxy: `auth.example.com`
+OAuth is integrated directly into the proxy service:
+- Runs on the same process as the proxy
+- Accessed via configured domains (e.g., `auth.example.com`)
+- Routes OAuth paths to the integrated OAuth server
 - Authlib-based implementation
 - Redis for all state
 - **MCP 2025-06-18 Compliant**: Full support for resource indicators, audience validation, and protected resource metadata
@@ -501,29 +521,40 @@ Response:
 }
 ```
 
-### OAuth Status API Endpoints
-- `GET /oauth/clients` - List OAuth clients
-- `GET /oauth/clients/{client_id}` - Client details
-- `GET /oauth/clients/{client_id}/tokens` - Client's tokens
-- `GET /oauth/tokens` - Token statistics
-- `GET /oauth/tokens/{jti}` - Token details
-- `GET /oauth/sessions` - Active sessions
-- `GET /oauth/sessions/{session_id}` - Session details
-- `DELETE /oauth/sessions/{session_id}` - Revoke session
-- `GET /oauth/metrics` - System metrics
-- `GET /oauth/health` - Integration health
-- `GET /oauth/proxies` - OAuth status for proxies
-- `GET /oauth/proxies/{hostname}/sessions` - Proxy sessions
+### OAuth Protocol Endpoints (Root Level)
+- `GET /authorize` - OAuth authorization endpoint
+- `POST /token` - Token exchange endpoint
+- `GET /callback` - OAuth callback handler
+- `POST /verify` - Token verification endpoint
+- `POST /revoke` - Token revocation endpoint
+- `POST /introspect` - Token introspection (RFC 7662)
+- `POST /register` - Dynamic client registration (RFC 7591)
+- `GET /jwks` - JSON Web Key Set endpoint
+- `GET /.well-known/oauth-authorization-server` - Server metadata
+
+### OAuth Admin API Endpoints
+- `GET /api/v1/oauth/clients` - List OAuth clients
+- `GET /api/v1/oauth/clients/{client_id}` - Client details
+- `GET /api/v1/oauth/clients/{client_id}/tokens` - Client's tokens
+- `GET /api/v1/oauth/tokens` - Token statistics
+- `GET /api/v1/oauth/tokens/{jti}` - Token details
+- `GET /api/v1/oauth/sessions` - Active sessions
+- `GET /api/v1/oauth/sessions/{session_id}` - Session details
+- `DELETE /api/v1/oauth/sessions/{session_id}` - Revoke session
+- `GET /api/v1/oauth/metrics` - System metrics
+- `GET /api/v1/oauth/health` - Integration health
+- `GET /api/v1/oauth/proxies` - OAuth status for proxies
+- `GET /api/v1/oauth/proxies/{hostname}/sessions` - Proxy sessions
 
 ### MCP Resource Management API Endpoints
 **Note**: These management endpoints are optional conveniences, not MCP requirements.
-- `GET /resources` - List registered MCP resources
-- `POST /resources` - Register new MCP resource
-- `GET /resources/{uri}` - Get resource details
-- `PUT /resources/{uri}` - Update resource
-- `DELETE /resources/{uri}` - Remove resource
-- `POST /resources/{uri}/validate-token` - Validate token for resource
-- `POST /resources/auto-register` - Auto-discover proxy resources
+- `GET /api/v1/resources` - List registered MCP resources
+- `POST /api/v1/resources` - Register new MCP resource
+- `GET /api/v1/resources/{uri}` - Get resource details
+- `PUT /api/v1/resources/{uri}` - Update resource
+- `DELETE /api/v1/resources/{uri}` - Remove resource
+- `POST /api/v1/resources/{uri}/validate-token` - Validate token for resource
+- `POST /api/v1/resources/auto-register` - Auto-discover proxy resources
 
 ### MCP Server Endpoints (Required on each MCP server)
 - `GET /.well-known/oauth-protected-resource` - Protected resource metadata (REQUIRED)
@@ -533,8 +564,8 @@ Response:
 ```bash
 # OAuth setup and management
 just generate-oauth-key                            # Generate RSA key
-just auth-setup <domain>                          # Setup OAuth service
 just oauth-routes-setup <domain> [token]          # Setup OAuth routes (CRITICAL!)
+just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client for testing
 
 # MCP resource management (for MCP compliance)
 just resource-register <uri> <proxy> <n> [scopes] # Register MCP resource
@@ -583,6 +614,42 @@ resource:{resource_uri} = {
 }
 ```
 
+## Instance Management
+
+### Named Instance Registry
+The system supports registering named instances for internal services:
+- Provides stable names for service discovery
+- Maps instance names to target URLs
+- Enables route targeting by instance name
+
+### Instance Schema
+```json
+{
+  "name": "api-backend",
+  "target_url": "http://service:8080",
+  "description": "Backend API service",
+  "created_by": "admin",
+  "created_at": "2024-01-15T10:00:00Z"
+}
+```
+
+### Instance API Endpoints
+- `GET /api/v1/instances` - List all registered instances
+- `POST /api/v1/instances` - Register new instance
+- `GET /api/v1/instances/{name}` - Get instance details
+- `PUT /api/v1/instances/{name}` - Update instance
+- `DELETE /api/v1/instances/{name}` - Delete instance
+
+### Instance Commands
+```bash
+just instance-list                                        # List all registered instances
+just instance-show <name>                                 # Show instance details
+just instance-register <name> <target-url> <token> [desc] # Register new instance
+just instance-update <name> <target-url> <token> [desc]   # Update instance
+just instance-delete <name> <token>                       # Delete instance
+just instance-register-oauth <token>                      # Register OAuth server instance
+```
+
 ## Key Implementation Insights
 
 1. **Dispatcher-Centric**: UnifiedDispatcher owns ports, routes all traffic
@@ -592,7 +659,8 @@ resource:{resource_uri} = {
 5. **Token Authentication**: All write operations require bearer tokens
 6. **Route Priority**: Higher priority routes checked first
 7. **Certificate Sharing**: Multi-domain certs reduce overhead
-8. **OAuth Integration**: Standard proxy pattern, not special-cased
+8. **OAuth Integration**: Integrated into proxy service, accessed via routes
+9. **Instance Registry**: Named instances for stable service discovery
 
 ## MCP 2025-06-18 Compliance Summary
 
@@ -628,10 +696,13 @@ To ensure MCP compliance for any proxy:
 ```bash
 just up                      # Start all services
 just down                    # Stop all services
+just restart                 # Restart all services
 just rebuild <service>       # Rebuild specific service
-just logs                    # View service logs
+just logs [service]          # View service logs (all or specific)
 just shell                   # Shell into proxy container
 just redis-cli               # Access Redis CLI
+just dev                     # Run development server locally
+just setup                   # Quick setup for development
 ```
 
 ### Token Management
@@ -669,10 +740,18 @@ just test-certs             # Test certificate operations
 just test-proxy-all         # Run all proxy tests
 just test-auth [token]      # Test authorization system
 
-# Debugging
-just logs                   # View all service logs
-just logs <service>         # View specific service logs
-just shell                  # Debug shell access
-just redis-cli              # Direct Redis access
-just proxy-cleanup          # Clean up orphaned proxies
+# System maintenance
+just health                 # Check system health
+just stats                  # Show system statistics
+just cleanup-orphaned       # Clean up orphaned resources
+just web-ui                 # Open web UI
+just help                   # Show all available commands
+
+# Additional commands
+just generate-admin-token   # Generate admin token
+just lint                   # Run linting
+just docs-build            # Build documentation
+just mcp-test-all          # Run full MCP client test suite
+just mcp-test-auth         # Test MCP client authentication
+just oauth-test-tokens <server-url>  # Generate test OAuth tokens for MCP client
 ```
