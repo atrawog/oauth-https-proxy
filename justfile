@@ -974,6 +974,20 @@ mcp-test-auth:
     @echo "Testing MCP client authentication..."
     docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py::TestMCPClient::test_oauth_client_registration -v
 
+# OAuth Status Commands
+# List OAuth clients
+oauth-clients-list active-only="":
+    docker exec -e ADMIN_TOKEN="${ADMIN_TOKEN}" {{container_name}} pixi run python scripts/oauth_clients_list.py {{active-only}}
+
+# List active OAuth sessions
+oauth-sessions-list:
+    docker exec -e ADMIN_TOKEN="${ADMIN_TOKEN}" {{container_name}} pixi run python scripts/oauth_sessions_list.py
+
+# MCP Resource Commands
+# List MCP resources
+resource-list:
+    docker exec -e ADMIN_TOKEN="${ADMIN_TOKEN}" {{container_name}} pixi run python scripts/resource_list.py
+
 # List tools available on MCP server
 mcp-list-tools:
     #!/usr/bin/env bash
@@ -1035,17 +1049,54 @@ mcp-test-all:
 # List all registered instances
 instance-list:
     #!/usr/bin/env bash
+    set -euo pipefail
+    
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get admin token
+    token_value="${ADMIN_TOKEN:-}"
+    if [ -z "$token_value" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
     echo "=== Named Instances ==="
-    curl -s "${BASE_URL}/instances" | \
+    response=$(curl -s "${BASE_URL}/instances/" -H "Authorization: Bearer $token_value")
+    
+    # Check if response is an error
+    if echo "$response" | jq -e '.detail' &>/dev/null; then
+        echo "Error: $(echo "$response" | jq -r '.detail')"
+        exit 1
+    fi
+    
+    # Format the output
+    echo "$response" | \
         jq -r '.[] | [.name, .target_url, .description, .created_by] | @tsv' | \
         column -t -s $'\t' -N "Name,Target URL,Description,Created By"
 
 # Show instance details
 instance-show name:
     #!/usr/bin/env bash
+    set -euo pipefail
+    
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
-    curl -s "${BASE_URL}/instances/{{name}}" | jq '.'
+    
+    # Get admin token
+    token_value="${ADMIN_TOKEN:-}"
+    if [ -z "$token_value" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    response=$(curl -s "${BASE_URL}/instances/{{name}}" -H "Authorization: Bearer $token_value")
+    
+    # Check if response is an error
+    if echo "$response" | jq -e '.detail' &>/dev/null; then
+        echo "Error: $(echo "$response" | jq -r '.detail')"
+        exit 1
+    fi
+    
+    echo "$response" | jq '.'
 
 # Register a new named instance
 instance-register name target-url token="" description="":

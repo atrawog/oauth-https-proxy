@@ -41,7 +41,29 @@ def run_command(cmd: str, timeout: int = 30) -> Dict:
 
 def get_admin_token() -> Optional[str]:
     """Get or create admin token."""
-    # Check if admin token exists
+    # First check environment variable
+    admin_token = os.getenv("ADMIN_TOKEN")
+    if admin_token:
+        return admin_token
+    
+    # If we're inside Docker, try to get token directly from Redis
+    if os.getenv('RUNNING_IN_DOCKER'):
+        try:
+            # Import here to avoid circular dependency
+            import sys
+            sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+            from src.storage import RedisStorage
+            
+            redis_url = os.getenv('REDIS_URL')
+            if redis_url:
+                storage = RedisStorage(redis_url)
+                token_data = storage.redis_client.hgetall("token:admin")
+                if token_data and 'token' in token_data:
+                    return token_data['token']
+        except Exception:
+            pass
+    
+    # Otherwise try using just command
     result = run_command("just token-show admin")
     
     if result["success"] and "token:" in result["stdout"]:

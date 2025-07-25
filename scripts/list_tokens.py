@@ -47,9 +47,13 @@ def list_tokens():
                     for cert_key in cert_keys:
                         cert_json = storage.redis_client.get(cert_key)
                         if cert_json:
-                            cert = json.loads(cert_json)
-                            if cert.get('owner_token_hash') == token_hash:
-                                cert_count += 1
+                            try:
+                                cert = json.loads(cert_json)
+                                if cert.get('owner_token_hash') == token_hash:
+                                    cert_count += 1
+                            except json.JSONDecodeError:
+                                # Skip invalid JSON
+                                pass
                     if cert_cursor == 0:
                         break
                 
@@ -63,9 +67,13 @@ def list_tokens():
                     for proxy_key in proxy_keys:
                         proxy_json = storage.redis_client.get(proxy_key)
                         if proxy_json:
-                            proxy = json.loads(proxy_json)
-                            if proxy.get('owner_token_hash') == token_hash:
-                                proxy_count += 1
+                            try:
+                                proxy = json.loads(proxy_json)
+                                if proxy.get('owner_token_hash') == token_hash:
+                                    proxy_count += 1
+                            except json.JSONDecodeError:
+                                # Skip invalid JSON
+                                pass
                     if proxy_cursor == 0:
                         break
                 
