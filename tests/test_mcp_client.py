@@ -172,14 +172,8 @@ class TestEchoServers:
             assert False, "FAILURE: Echo servers not accessible"
 
 @pytest.mark.integration
-@pytest.mark.slow
-class TestMCPClientCommands:
-    """Test MCP client command execution."""
-    
-    @pytest.fixture
-    def container_name(self) -> str:
-        """Get container name for docker exec."""
-        return "mcp-http-proxy-proxy-1"
+class TestMCPEchoSetup:
+    """Test MCP echo server setup command."""
     
     def run_just_command(self, command: str) -> tuple[int, str, str]:
         """Run a just command and return exit code, stdout, stderr."""
@@ -195,18 +189,6 @@ class TestMCPClientCommands:
             return -1, "", "Command timed out"
         except FileNotFoundError:
             assert False, "FAILURE: just command not available"
-    
-    @pytest.mark.skip(reason="just command not available inside container")
-    def test_mcp_client_token_generation_command(self):
-        """Test MCP client token generation via just command."""
-        # This tests the command exists and runs without error
-        exit_code, stdout, stderr = self.run_just_command("mcp-client-servers")
-        
-        # Command should at least run
-        assert exit_code == 0
-        assert "Available MCP test servers" in stdout
-        assert "echo-stateless" in stdout
-        assert "echo-stateful" in stdout
     
     @pytest.mark.skip(reason="just command not available inside container")
     def test_mcp_echo_setup_command(self):
@@ -270,27 +252,3 @@ class TestMCPProtocolCompliance:
         except httpx.ConnectError:
             assert False, "FAILURE: OAuth server not accessible"
 
-@pytest.mark.integration
-class TestMCPClientWorkflow:
-    """Test complete MCP client workflow."""
-    
-    @pytest.mark.skip(reason="Documentation test runs in different working directory inside container")
-    def test_mcp_client_documentation(self):
-        """Test that MCP client setup is documented."""
-        # Check if documentation exists
-        docs = [
-            "README.md",
-            "docs/mcp-client.md",
-            "CLAUDE.md"
-        ]
-        
-        doc_exists = False
-        for doc_path in docs:
-            if os.path.exists(doc_path):
-                with open(doc_path, 'r') as f:
-                    content = f.read().lower()
-                    if "mcp" in content and "client" in content:
-                        doc_exists = True
-                        break
-        
-        assert doc_exists, "MCP client documentation not found"

@@ -13,7 +13,6 @@ COPY pixi.toml .
 COPY pyproject.toml .
 
 # Copy local dependencies referenced in pixi.toml
-COPY mcp-streamablehttp-client/ ./mcp-streamablehttp-client/
 COPY mcp-echo-streamablehttp-server-stateful/ ./mcp-echo-streamablehttp-server-stateful/
 COPY mcp-echo-streamablehttp-server-stateless/ ./mcp-echo-streamablehttp-server-stateless/
 COPY mcp-http-validator/ ./mcp-http-validator/
