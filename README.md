@@ -12,6 +12,8 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **WebSocket Support**: Proxy WebSocket and Server-Sent Events (SSE) connections
 - **Route Management**: Priority-based path routing with regex support
 - **Instance Registry**: Named service discovery for internal services
+- **Docker Service Management**: Create and manage Docker containers dynamically
+- **MCP Metadata**: Automatic metadata endpoints for MCP-compliant services
 
 ### Security Features
 - **Token-Based API**: All administrative operations require bearer tokens
@@ -32,6 +34,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - Docker and Docker Compose
 - A domain pointing to your server (for HTTPS)
 - GitHub OAuth App (for authentication)
+- Docker socket access (for container management features)
 
 ### 1. Clone and Configure
 
@@ -114,25 +117,28 @@ just mcp-echo-setup
 ### Service Components
 
 ```
-┌─────────────────┐     ┌─────────────────┐
-│                 │     │                 │
-│  HTTP Client    │────▶│  Proxy Service  │
-│                 │     │                 │
-└─────────────────┘     └────────┬────────┘
-                                 │
-                    ┌────────────┼────────────┐
-                    │            │            │
-              ┌─────▼────┐ ┌─────▼────┐ ┌────▼─────┐
-              │          │ │          │ │          │
-              │  Redis   │ │  OAuth   │ │  Backend │
-              │          │ │  Server  │ │ Services │
-              └──────────┘ └──────────┘ └──────────┘
+┌─────────────────┐     ┌──────────────────────────┐
+│                 │     │                          │
+│  HTTP Client    │────▶│     Proxy Service        │
+│                 │     │  - HTTP/HTTPS Gateway    │
+└─────────────────┘     │  - OAuth Server          │
+                        │  - Certificate Manager   │
+                        │  - Docker Manager        │
+                        └────────────┬─────────────┘
+                                     │
+                    ┌────────────────┼────────────────┐
+                    │                │                │
+              ┌─────▼────┐     ┌─────▼────┐    ┌────▼─────┐
+              │          │     │  Docker  │    │          │
+              │  Redis   │     │  Socket  │    │ Backend  │
+              │          │     │          │    │ Services │
+              └──────────┘     └──────────┘    └──────────┘
 ```
 
-- **Proxy Service**: Main container handling all HTTP/HTTPS traffic
-- **OAuth Server**: Integrated into proxy, provides authentication
-- **Redis**: Stores all configuration, certificates, and session data
-- **Backend Services**: Your applications (MCP servers, APIs, etc.)
+- **Proxy Service**: All-in-one container with HTTP/HTTPS gateway, OAuth server, certificate manager, and Docker management
+- **Redis**: Stores all configuration, certificates, tokens, and session data
+- **Docker Socket**: Enables dynamic container creation and management
+- **Backend Services**: Your applications (MCP servers, APIs, Docker containers)
 
 ### Request Flow
 
@@ -158,6 +164,9 @@ just proxy-auth-enable mcp.yourdomain.com $ADMIN_TOKEN auth.yourdomain.com forwa
 
 # 3. Register as MCP resource
 just resource-register https://mcp.yourdomain.com mcp.yourdomain.com "My MCP Server"
+
+# 4. Enable MCP metadata (optional - for automatic metadata endpoints)
+just proxy-mcp-enable mcp.yourdomain.com $ADMIN_TOKEN /mcp "mcp:read mcp:write"
 
 # Your MCP server is now accessible at https://mcp.yourdomain.com/mcp
 # with full OAuth protection and MCP compliance!
@@ -204,6 +213,10 @@ GITHUB_CLIENT_ID=<github-client-id>
 GITHUB_CLIENT_SECRET=<github-client-secret>
 OAUTH_JWT_PRIVATE_KEY_B64=<base64-encoded-private-key>
 OAUTH_ALLOWED_GITHUB_USERS=*        # Or comma-separated list
+
+# Docker Management
+DOCKER_GID=999                      # Docker group GID (varies by OS)
+DOCKER_API_VERSION=1.41             # Docker API version
 
 # Advanced (usually defaults are fine)
 ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
@@ -267,6 +280,29 @@ just oauth-clients-list
 just oauth-metrics
 ```
 
+### Docker Service Management
+
+```bash
+# Create a service from Docker image
+just service-create my-nginx nginx:latest "" 8080 $ADMIN_TOKEN "512m" "1.0" true
+
+# Create a service from Dockerfile
+just service-create my-app "" ./dockerfiles/app.Dockerfile 3000 $ADMIN_TOKEN
+
+# Manage service lifecycle
+just service-start my-app
+just service-stop my-app
+just service-restart my-app
+
+# Monitor services
+just service-list
+just service-logs my-app 100 true
+just service-stats my-app
+
+# Create proxy for service
+just service-proxy-create my-app app.domain.com true $ADMIN_TOKEN
+```
+
 ## API Reference
 
 ### Base URL
@@ -312,6 +348,12 @@ Authorization: Bearer your-admin-token
 - MCP server registration
 - Resource validation
 - Auto-discovery
+
+#### Docker Services (`/api/v1/services/*`)
+- Container creation and management
+- Service lifecycle control (start/stop/restart)
+- Log retrieval and statistics
+- Automatic proxy creation for services
 
 ### OAuth Protocol Endpoints (Root Level)
 - `/authorize` - OAuth authorization
@@ -362,13 +404,17 @@ mcp-http-proxy/
 ├── src/
 │   ├── api/            # FastAPI application
 │   │   ├── oauth/      # OAuth server implementation
-│   │   └── endpoints/  # REST API endpoints
+│   │   ├── endpoints/  # REST API endpoints
+│   │   └── routers/    # API route definitions
 │   ├── certmanager/    # ACME certificate management
 │   ├── dispatcher/     # HTTP/HTTPS request dispatcher
+│   ├── docker/         # Docker service management
 │   ├── proxy/          # Reverse proxy implementation
 │   └── storage/        # Redis storage layer
 ├── tests/              # Pytest test suite
 ├── scripts/            # Utility scripts
+├── dockerfiles/        # Custom Dockerfiles for services
+├── contexts/           # Docker build contexts
 ├── docker-compose.yml  # Service orchestration
 ├── justfile           # Task automation
 └── .env.example       # Example configuration
@@ -403,6 +449,17 @@ mcp-http-proxy/
    
    # View proxy logs
    just logs proxy
+   ```
+
+4. **Docker Service Creation Fails**
+   ```bash
+   # Check Docker socket permissions
+   # Find your Docker GID:
+   getent group docker | cut -d: -f3
+   
+   # Update DOCKER_GID in .env to match
+   # Restart the proxy service
+   just restart
    ```
 
 ### Debugging Commands

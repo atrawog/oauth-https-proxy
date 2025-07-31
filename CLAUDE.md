@@ -36,6 +36,7 @@
 - OAuth JWT private key must be base64-encoded
 - ACME URLs can be switched between staging and production for testing
 - HTTP routing configuration is managed via Redis, not environment variables
+- Docker socket access requires appropriate group permissions (DOCKER_GID)
 
 
 ## Token Management
@@ -279,6 +280,23 @@ Three modes for route filtering:
 }
 ```
 
+### MCP Metadata Configuration
+Enable MCP protocol metadata endpoints for proxies:
+```json
+{
+  "mcp_enabled": true,
+  "mcp_endpoint": "/mcp",  // MCP protocol endpoint path
+  "mcp_scopes": ["mcp:read", "mcp:write"],
+  "mcp_stateful": false,  // Whether server maintains session state
+  "mcp_override_backend": false  // Override backend's metadata endpoint
+}
+```
+
+When enabled, the proxy automatically serves:
+- `/.well-known/oauth-protected-resource` - MCP resource metadata
+- Proper WWW-Authenticate headers on 401 responses
+- Integration with OAuth for token validation
+
 ### API Endpoints
 - `POST /api/v1/proxy/targets` - Create proxy target
 - `GET /api/v1/proxy/targets` - List all proxies
@@ -288,6 +306,9 @@ Three modes for route filtering:
 - `POST /api/v1/proxy/targets/{hostname}/auth` - Configure auth
 - `DELETE /api/v1/proxy/targets/{hostname}/auth` - Remove auth
 - `GET /api/v1/proxy/targets/{hostname}/auth` - Get auth config
+- `POST /api/v1/proxy/targets/{hostname}/mcp` - Configure MCP metadata
+- `DELETE /api/v1/proxy/targets/{hostname}/mcp` - Remove MCP metadata
+- `GET /api/v1/proxy/targets/{hostname}/mcp` - Get MCP configuration
 - `GET /api/v1/proxy/targets/{hostname}/routes` - Get proxy routes
 - `PUT /api/v1/proxy/targets/{hostname}/routes` - Update proxy routes
 
@@ -313,6 +334,12 @@ just proxy-auth-enable <hostname> <token> <auth-proxy> <mode>
 just proxy-auth-disable <hostname> <token>
 just proxy-auth-config <hostname> <token> users="" emails="" groups=""
 just proxy-auth-show <hostname>
+
+# MCP metadata configuration
+just proxy-mcp-enable <hostname> <token> [endpoint] [scopes] [stateful] [override-backend]
+just proxy-mcp-disable <hostname> <token>
+just proxy-mcp-show <hostname>
+just test-proxy-mcp <hostname>
 
 # Testing
 just test-proxy-basic
@@ -352,6 +379,75 @@ just proxy-route-enable <hostname> <route-id> <token>
 just proxy-route-disable <hostname> <route-id> <token>
 just proxy-routes-set <hostname> <token> <enabled-routes> <disabled-routes>
 just test-proxy-routes
+```
+
+## Docker Service Management
+
+### Overview
+The system supports creating and managing Docker containers as services:
+- Dynamic container creation with custom images or Dockerfiles
+- Automatic port allocation and management
+- Integration with proxy for external access
+- Resource limits (CPU, memory)
+- Container lifecycle management
+
+### Docker Configuration
+- `DOCKER_GID` - Docker group GID on host (default: 999, varies by OS)
+- `DOCKER_API_VERSION` - Docker API version (default: 1.41)
+- `DOCKER_HOST` - Docker socket path (default: unix:///var/run/docker.sock)
+- `BASE_DOMAIN` - Base domain for auto-created service proxies
+
+### Service Schema
+```json
+{
+  "service_name": "my-app",
+  "image": "nginx:latest",  // OR use dockerfile_path
+  "dockerfile_path": "./dockerfiles/custom.Dockerfile",
+  "external_port": 8080,  // Optional, auto-allocated if not specified
+  "memory_limit": "512m",
+  "cpu_limit": 1.0,
+  "environment": {"KEY": "value"},
+  "command": ["npm", "start"],
+  "network": "proxy_network"
+}
+```
+
+### API Endpoints
+- `POST /api/v1/services` - Create new Docker service
+- `GET /api/v1/services` - List all services
+- `GET /api/v1/services/{name}` - Get service details
+- `PUT /api/v1/services/{name}` - Update service configuration
+- `DELETE /api/v1/services/{name}` - Delete service
+- `POST /api/v1/services/{name}/start` - Start service
+- `POST /api/v1/services/{name}/stop` - Stop service
+- `POST /api/v1/services/{name}/restart` - Restart service
+- `GET /api/v1/services/{name}/logs` - Get service logs
+- `GET /api/v1/services/{name}/stats` - Get service statistics
+- `POST /api/v1/services/{name}/proxy` - Create proxy for service
+- `POST /api/v1/services/cleanup` - Clean up orphaned services
+
+### Service Commands
+```bash
+# Service lifecycle management
+just service-create <name> <image> [dockerfile] [port] [token] [memory] [cpu] [auto-proxy]
+just service-list [owned-only] [token]
+just service-show <name>
+just service-delete <name> [token] [force] [delete-proxy]
+just service-start <name> [token]
+just service-stop <name> [token]
+just service-restart <name> [token]
+
+# Service monitoring
+just service-logs <name> [lines] [timestamps]
+just service-stats <name>
+
+# Service proxy management
+just service-proxy-create <name> [hostname] [enable-https] [token]
+just service-cleanup
+
+# Testing
+just test-docker-services
+just test-docker-api
 ```
 
 ## OAuth Service
@@ -658,6 +754,9 @@ just instance-register-oauth <token>                      # Register OAuth serve
 7. **Certificate Sharing**: Multi-domain certs reduce overhead
 8. **OAuth Integration**: Integrated into proxy service, accessed via routes
 9. **Instance Registry**: Named instances for stable service discovery
+10. **Docker Management**: Dynamic container creation via Docker socket
+11. **MCP Metadata**: Automatic metadata endpoints for MCP compliance
+12. **Resource Limits**: CPU and memory limits for Docker services
 
 ## MCP 2025-06-18 Compliance Summary
 
@@ -726,6 +825,7 @@ just token-email-update <name> <email>      # Update token cert email
 - `ADMIN_TOKEN` - Administrative token for privileged operations
 - `ADMIN_EMAIL` - Administrator email address for certificates
 - `MCP_SERVER_URL` - MCP server SSE endpoint URL
+- `BASE_DOMAIN` - Base domain for services and OAuth (e.g., yourdomain.com)
 
 ```bash
 # Comprehensive test suites
