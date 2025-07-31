@@ -3,7 +3,7 @@
 
 # Variables
 container_name := "mcp-http-proxy-proxy-1"
-default_base_url := "http://localhost"
+default_base_url := "http://localhost:80"
 staging_cert_email := env_var_or_default("TEST_EMAIL", "test@example.com")
 
 # Load environment from .env

@@ -46,7 +46,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         description="Certificate and proxy management API",
         version="1.0.0",
         lifespan=lifespan,
-        redirect_slashes=False
+        redirect_slashes=True
     )
     
     # Store dependencies

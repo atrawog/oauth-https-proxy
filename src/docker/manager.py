@@ -180,23 +180,25 @@ class DockerManager:
         """
         image_tag = f"mcp-service-{config.service_name}:latest"
         
-        # Ensure build context exists
-        build_path = Path(config.build_context)
-        if not build_path.exists():
-            build_path.mkdir(parents=True, exist_ok=True)
-            
-        # Copy Dockerfile to build context if needed
+        # Determine build context based on Dockerfile location
         dockerfile_src = Path(config.dockerfile_path)
-        if dockerfile_src.exists() and dockerfile_src.parent != build_path:
-            shutil.copy(dockerfile_src, build_path / "Dockerfile")
+        if dockerfile_src.exists():
+            # Use the Dockerfile's parent directory as build context
+            build_context = str(dockerfile_src.parent.absolute())
+            dockerfile_name = dockerfile_src.name
+        else:
+            # Fall back to default build context
+            build_context = Path(config.build_context).absolute()
+            dockerfile_name = "Dockerfile"
             
         # Build with python-on-whales
-        logger.info(f"Building image {image_tag} from {config.build_context}")
+        logger.info(f"Building image {image_tag} from {build_context}")
+        # Note: python-on-whales expects the Dockerfile path relative to build context
+        # or we can omit the file parameter if the Dockerfile is in the build context root
         self.client.build(
-            config.build_context,
+            build_context,
             tags=[image_tag],
             build_args=config.build_args,
-            rm=True,
             pull=True
         )
         

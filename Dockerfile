@@ -5,7 +5,14 @@ RUN apt-get update && apt-get install -y \
     curl \
     docker.io \
     libcap2-bin \
+    wget \
     && rm -rf /var/lib/apt/lists/*
+
+# Install Docker buildx plugin manually (newer version with --format support)
+RUN mkdir -p /usr/local/lib/docker/cli-plugins && \
+    wget -O /usr/local/lib/docker/cli-plugins/docker-buildx \
+    https://github.com/docker/buildx/releases/download/v0.14.1/buildx-v0.14.1.linux-amd64 && \
+    chmod +x /usr/local/lib/docker/cli-plugins/docker-buildx
 
 # Create non-root user with specific UID/GID
 RUN groupadd -g 1000 proxyuser && \

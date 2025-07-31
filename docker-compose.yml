@@ -44,6 +44,7 @@ services:
       - OAUTH_MCP_PROTOCOL_VERSION=${OAUTH_MCP_PROTOCOL_VERSION}
       # Docker management environment variables
       - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.41}
+      - DOCKER_BUILDKIT=1
       # Test environment variables for internal access
       - TEST_BASE_URL_INTERNAL=http://proxy
       - RUNNING_IN_DOCKER=1
