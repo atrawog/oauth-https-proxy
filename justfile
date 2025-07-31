@@ -876,6 +876,405 @@ test-proxy-mcp hostname:
     just proxy-mcp-show {{hostname}}
 
 # ============================================================================
+# DOCKER SERVICE MANAGEMENT
+# ============================================================================
+
+# Create a Docker service
+service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1.0" auto-proxy="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Validate inputs
+    if [ -z "{{image}}" ] && [ -z "{{dockerfile}}" ]; then
+        echo "Error: Either --image or --dockerfile must be specified" >&2
+        exit 1
+    fi
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+        if [ -z "$token_value" ]; then
+            echo "Error: Token '{{token}}' not found" >&2
+            exit 1
+        fi
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build request data
+    data=$(jq -n \
+        --arg name "{{name}}" \
+        --arg image "{{image}}" \
+        --arg dockerfile "{{dockerfile}}" \
+        --arg port "{{port}}" \
+        --arg memory "{{memory}}" \
+        --arg cpu "{{cpu}}" \
+        '{
+            service_name: $name,
+            memory_limit: $memory,
+            cpu_limit: ($cpu | tonumber)
+        } + (if $image != "" then {image: $image} else {} end)
+          + (if $dockerfile != "" then {dockerfile_path: $dockerfile} else {} end)
+          + (if $port != "" then {external_port: ($port | tonumber)} else {} end)')
+    
+    # Create service
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services?auto_proxy={{auto-proxy}}" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$data")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "$body" | jq '.'
+
+# List Docker services
+service-list owned-only="false" token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+        if [ -z "$token_value" ]; then
+            echo "Error: Token '{{token}}' not found" >&2
+            exit 1
+        fi
+    fi
+    
+    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/services?owned_only={{owned-only}}")
+    
+    echo "$response" | jq -r '.services[] | "\(.service_name)\t\(.status)\t\(.allocated_port)\t\(.created_at)"' | \
+        column -t -s $'\t' -N "SERVICE,STATUS,PORT,CREATED"
+
+# Show Docker service details
+service-show name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/services/{{name}}")
+    
+    echo "$response" | jq '.'
+
+# Delete Docker service
+service-delete name token="" force="false" delete-proxy="true":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+        if [ -z "$token_value" ]; then
+            echo "Error: Token '{{token}}' not found" >&2
+            exit 1
+        fi
+    fi
+    
+    # Confirm unless forced
+    if [ "{{force}}" != "true" ]; then
+        read -p "Delete service '{{name}}'? [y/N] " -n 1 -r
+        echo
+        [[ $REPLY =~ ^[Yy]$ ]] || exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Delete service
+    response=$(curl -s -w '\n%{http_code}' -X DELETE \
+        "${BASE_URL}/api/v1/services/{{name}}?force={{force}}&delete_proxy={{delete-proxy}}" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    
+    if [[ "$http_code" == "204" ]]; then
+        echo "Service '{{name}}' deleted successfully"
+    else
+        body=$(echo "$response" | head -n -1)
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Start Docker service
+service-start name token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST \
+        "${BASE_URL}/api/v1/services/{{name}}/start" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq -r '.message'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Stop Docker service
+service-stop name token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST \
+        "${BASE_URL}/api/v1/services/{{name}}/stop" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq -r '.message'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Restart Docker service
+service-restart name token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST \
+        "${BASE_URL}/api/v1/services/{{name}}/restart" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq -r '.message'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Get Docker service logs
+service-logs name lines="100" timestamps="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/services/{{name}}/logs?lines={{lines}}&timestamps={{timestamps}}")
+    
+    echo "$response" | jq -r '.logs[]'
+
+# Get Docker service stats
+service-stats name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/services/{{name}}/stats")
+    
+    echo "$response" | jq '.'
+
+# Create proxy for Docker service
+service-proxy-create name hostname="" enable-https="false" token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+    elif [[ "{{token}}" == acm_* ]]; then
+        token_value="{{token}}"
+    else
+        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build request data
+    if [ -n "{{hostname}}" ]; then
+        url="${BASE_URL}/api/v1/services/{{name}}/proxy?enable_https={{enable-https}}&hostname={{hostname}}"
+    else
+        url="${BASE_URL}/api/v1/services/{{name}}/proxy?enable_https={{enable-https}}"
+    fi
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "$url" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq '.'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Get Docker image allowlist
+service-allowlist-show:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/services/allowlist")
+    
+    echo "$response" | jq '.'
+
+# Update Docker image allowlist (admin only)
+service-allowlist-update patterns='["nginx:*", "httpd:*", "python:*-slim", "node:*-alpine"]' registries='["docker.io", "ghcr.io"]':
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    # Build request data
+    data=$(jq -n \
+        --argjson patterns '{{patterns}}' \
+        --argjson registries '{{registries}}' \
+        '{
+            patterns: $patterns,
+            registries: $registries
+        }')
+    
+    response=$(curl -s -w '\n%{http_code}' -X PUT "${BASE_URL}/api/v1/services/allowlist" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$data")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq '.'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Cleanup orphaned Docker services (admin only)
+service-cleanup:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/cleanup" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq -r '.message'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# ============================================================================
 # TESTING COMMANDS
 # ============================================================================
 
@@ -975,6 +1374,14 @@ test-resource-indicators:
 # Test audience validation  
 test-audience-validation:
     docker exec {{container_name}} pixi run pytest tests/test_oauth.py -v -k "audience"
+
+# Test Docker service management
+test-docker-services:
+    docker exec {{container_name}} pixi run pytest tests/test_docker_services.py -v
+
+# Test Docker service API
+test-docker-api:
+    docker exec {{container_name}} pixi run pytest tests/test_docker_services.py::TestDockerServiceAPI -v
 
 # ============================================================================
 # UTILITY COMMANDS

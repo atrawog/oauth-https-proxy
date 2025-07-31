@@ -42,6 +42,8 @@ services:
       - OAUTH_CLIENT_LIFETIME=${OAUTH_CLIENT_LIFETIME}
       - OAUTH_ALLOWED_GITHUB_USERS=${OAUTH_ALLOWED_GITHUB_USERS}
       - OAUTH_MCP_PROTOCOL_VERSION=${OAUTH_MCP_PROTOCOL_VERSION}
+      # Docker management environment variables
+      - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.41}
       # Test environment variables for internal access
       - TEST_BASE_URL_INTERNAL=http://proxy
       - RUNNING_IN_DOCKER=1
@@ -57,6 +59,15 @@ services:
       - ./run.py:/app/run.py
       - ./scripts:/app/scripts
       - ./tests:/app/tests
+      # Docker service management volumes
+      - ./dockerfiles:/app/dockerfiles
+      - ./contexts:/app/contexts
+      # Docker socket for container management
+      - /var/run/docker.sock:/var/run/docker.sock
+    # Add container to docker group for socket access
+    # Note: The GID must match the docker group on the host
+    group_add:
+      - ${DOCKER_GID:-999}
     networks:
       - proxy_network
     healthcheck:

@@ -96,3 +96,9 @@ reports/
 
 # Analysis
 analysis/
+
+# Docker service management
+dockerfiles/*
+!dockerfiles/.gitkeep
+contexts/*
+!contexts/.gitkeep

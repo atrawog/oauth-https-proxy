@@ -3,35 +3,54 @@ FROM python:3.11-slim
 # Install system dependencies
 RUN apt-get update && apt-get install -y \
     curl \
+    docker.io \
+    libcap2-bin \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user with specific UID/GID
+RUN groupadd -g 1000 proxyuser && \
+    useradd -u 1000 -g 1000 -m -s /bin/bash proxyuser
 
 # Set working directory
 WORKDIR /app
 
+# Create necessary directories with proper ownership
+RUN mkdir -p /app/logs /app/dockerfiles /app/contexts && \
+    chown -R proxyuser:proxyuser /app
+
 # Copy requirements first for better caching
-COPY pixi.toml .
-COPY pyproject.toml .
+COPY --chown=proxyuser:proxyuser pixi.toml .
+COPY --chown=proxyuser:proxyuser pyproject.toml .
 
 # Copy local dependencies referenced in pixi.toml
-COPY mcp-echo-streamablehttp-server-stateful/ ./mcp-echo-streamablehttp-server-stateful/
-COPY mcp-echo-streamablehttp-server-stateless/ ./mcp-echo-streamablehttp-server-stateless/
-COPY mcp-http-validator/ ./mcp-http-validator/
+COPY --chown=proxyuser:proxyuser mcp-echo-streamablehttp-server-stateful/ ./mcp-echo-streamablehttp-server-stateful/
+COPY --chown=proxyuser:proxyuser mcp-echo-streamablehttp-server-stateless/ ./mcp-echo-streamablehttp-server-stateless/
+COPY --chown=proxyuser:proxyuser mcp-http-validator/ ./mcp-http-validator/
 
-# Install pixi
+# Switch to non-root user for pixi installation
+USER proxyuser
+
+# Install pixi as proxyuser
 RUN curl -fsSL https://pixi.sh/install.sh | bash && \
-    echo 'export PATH="/root/.pixi/bin:$PATH"' >> ~/.bashrc
+    echo 'export PATH="/home/proxyuser/.pixi/bin:$PATH"' >> ~/.bashrc
 
 # Install dependencies using pixi
-ENV PATH="/root/.pixi/bin:$PATH"
+ENV PATH="/home/proxyuser/.pixi/bin:$PATH"
 RUN pixi install
 
 # Copy application code
-COPY src/ ./src/
-COPY run.py ./
-COPY scripts/ ./scripts/
+COPY --chown=proxyuser:proxyuser src/ ./src/
+COPY --chown=proxyuser:proxyuser run.py ./
+COPY --chown=proxyuser:proxyuser scripts/ ./scripts/
 
-# Create log directory
-RUN mkdir -p /app/logs
+# Switch back to root to set capabilities
+USER root
+
+# Grant capability to bind to privileged ports
+RUN setcap 'cap_net_bind_service=+ep' /usr/local/bin/python3.11
+
+# Switch to non-root user for runtime
+USER proxyuser
 
 # Set environment variable to indicate we're running in Docker
 ENV RUNNING_IN_DOCKER=1

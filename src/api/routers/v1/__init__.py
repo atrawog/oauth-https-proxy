@@ -22,7 +22,8 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         instances,
         resources,
         oauth_status,
-        oauth_admin
+        oauth_admin,
+        services
     )
     
     # Create main v1 router (no prefix here, it's added when mounting)
@@ -84,6 +85,17 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         tags=["mcp-resources"]
     )
     logger.info("Included resources router in v1")
+    
+    # Docker service endpoints: /api/v1/services/*
+    try:
+        v1_router.include_router(
+            services.create_router(storage),
+            prefix="/services",
+            tags=["docker-services"]
+        )
+        logger.info("Included services router in v1")
+    except Exception as e:
+        logger.warning(f"Docker service endpoints not available: {e}")
     
     # OAuth status endpoints: /api/v1/oauth/*
     # Note: These are management endpoints, not OAuth protocol endpoints
