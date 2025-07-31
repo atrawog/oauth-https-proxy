@@ -4,7 +4,7 @@
 # Variables
 container_name := "mcp-http-proxy-proxy-1"
 default_base_url := "http://localhost:80"
-staging_cert_email := env_var_or_default("TEST_EMAIL", "test@example.com")
+staging_cert_email := env_var_or_default("TEST_EMAIL", env_var_or_default("ACME_EMAIL", "test@example.com"))
 
 # Load environment from .env
 set dotenv-load := true
@@ -284,11 +284,11 @@ cert-create name domain email="" token="" staging="false":
         response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
-        # Fall back to ADMIN_EMAIL if token has no email
+        # Fall back to ACME_EMAIL or ADMIN_EMAIL if token has no email
         if [ -z "$cert_email" ]; then
-            cert_email="${ADMIN_EMAIL:-}"
+            cert_email="${ACME_EMAIL:-${ADMIN_EMAIL:-}}"
             if [ -z "$cert_email" ]; then
-                echo "Error: No email provided, token has no default email, and ADMIN_EMAIL not set"
+                echo "Error: No email provided, token has no default email, and neither ACME_EMAIL nor ADMIN_EMAIL are set"
                 exit 1
             fi
         fi
@@ -974,7 +974,7 @@ service-list owned-only="false" token="":
         fi
     fi
     
-    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+    response=$(curl -sfL -H "Authorization: Bearer $token_value" \
         "${BASE_URL}/api/v1/services?owned_only={{owned-only}}")
     
     echo "$response" | jq -r '.services[] | "\(.service_name)\t\(.status)\t\(.allocated_port)\t\(.created_at)"' | \
@@ -988,7 +988,7 @@ service-show name:
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     token_value="${ADMIN_TOKEN:-}"
     
-    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+    response=$(curl -sfL -H "Authorization: Bearer $token_value" \
         "${BASE_URL}/api/v1/services/{{name}}")
     
     echo "$response" | jq '.'
@@ -1162,7 +1162,7 @@ service-stats name:
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     token_value="${ADMIN_TOKEN:-}"
     
-    response=$(curl -sf -H "Authorization: Bearer $token_value" \
+    response=$(curl -sfL -H "Authorization: Bearer $token_value" \
         "${BASE_URL}/api/v1/services/{{name}}/stats")
     
     echo "$response" | jq '.'
@@ -1206,51 +1206,6 @@ service-proxy-create name hostname="" enable-https="false" token="":
         exit 1
     fi
 
-# Get Docker image allowlist
-service-allowlist-show:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
-    token_value="${ADMIN_TOKEN:-}"
-    
-    response=$(curl -sf -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/services/allowlist")
-    
-    echo "$response" | jq '.'
-
-# Update Docker image allowlist (admin only)
-service-allowlist-update patterns='["nginx:*", "httpd:*", "python:*-slim", "node:*-alpine"]' registries='["docker.io", "ghcr.io"]':
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
-    token_value="${ADMIN_TOKEN:-}"
-    
-    # Build request data
-    data=$(jq -n \
-        --argjson patterns '{{patterns}}' \
-        --argjson registries '{{registries}}' \
-        '{
-            patterns: $patterns,
-            registries: $registries
-        }')
-    
-    response=$(curl -s -w '\n%{http_code}' -X PUT "${BASE_URL}/api/v1/services/allowlist" \
-        -H "Authorization: Bearer $token_value" \
-        -H "Content-Type: application/json" \
-        -d "$data")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n -1)
-    
-    if [[ "$http_code" =~ ^2 ]]; then
-        echo "$body" | jq '.'
-    else
-        echo "Error: HTTP $http_code"
-        echo "$body" | jq '.' 2>/dev/null || echo "$body"
-        exit 1
-    fi
 
 # Cleanup orphaned Docker services (admin only)
 service-cleanup:

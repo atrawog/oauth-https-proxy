@@ -1,6 +1,7 @@
 """Docker service management API endpoints."""
 
 import logging
+from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Response
 from python_on_whales.exceptions import DockerException
@@ -13,11 +14,11 @@ from ....docker.models import (
     DockerServiceLogs,
     DockerServiceStats,
     DockerServiceListResponse,
-    DockerServiceCreateResponse,
-    DockerImageAllowlist
+    DockerServiceCreateResponse
 )
 from ....docker.manager import DockerManager
 from ....proxy.models import ProxyTarget
+from ....shared.config import Config
 
 logger = logging.getLogger(__name__)
 
@@ -73,10 +74,10 @@ def create_router(storage) -> APIRouter:
             # Optionally create proxy configuration
             if auto_proxy:
                 try:
-                    proxy_hostname = f"{config.service_name}.{storage.get_config('BASE_DOMAIN', 'local')}"
+                    proxy_hostname = f"{config.service_name}.{Config.BASE_DOMAIN}"
                     proxy_config = ProxyTarget(
                         hostname=proxy_hostname,
-                        target_url=f"http://localhost:{service_info.allocated_port}",
+                        target_url=f"http://{service_name}:{service_info.internal_port}",
                         cert_name=f"cert-{config.service_name}",
                         enabled=True,
                         enable_http=True,
@@ -85,7 +86,7 @@ def create_router(storage) -> APIRouter:
                         preserve_host_header=True
                     )
                     
-                    storage.create_proxy_target(proxy_config)
+                    storage.store_proxy_target(proxy_config.hostname, proxy_config)
                     response.proxy_created = True
                     response.warnings.append(f"Created proxy at {proxy_hostname}")
                     
@@ -190,7 +191,7 @@ def create_router(storage) -> APIRouter:
             
             # Delete associated proxy if requested
             if delete_proxy:
-                proxy_hostname = f"{service_name}.{storage.get_config('BASE_DOMAIN', 'local')}"
+                proxy_hostname = f"{service_name}.{Config.BASE_DOMAIN}"
                 proxy_target = storage.get_proxy_target(proxy_hostname)
                 if proxy_target:
                     storage.delete_proxy_target(proxy_hostname)
@@ -361,7 +362,7 @@ def create_router(storage) -> APIRouter:
         
         # Determine hostname
         if not hostname:
-            hostname = f"{service_name}.{storage.get_config('BASE_DOMAIN', 'local')}"
+            hostname = f"{service_name}.{Config.BASE_DOMAIN}"
         
         # Check if proxy already exists
         if storage.get_proxy_target(hostname):
@@ -371,16 +372,17 @@ def create_router(storage) -> APIRouter:
             # Create proxy configuration
             proxy_config = ProxyTarget(
                 hostname=hostname,
-                target_url=f"http://localhost:{service_info.allocated_port}",
+                target_url=f"http://{service_name}:{service_info.internal_port}",
                 cert_name=f"cert-{service_name}" if enable_https else None,
                 enabled=True,
                 enable_http=True,
                 enable_https=enable_https,
                 owner_token_hash=token_info["hash"],
-                preserve_host_header=True
+                preserve_host_header=True,
+                created_at=datetime.now(timezone.utc)
             )
             
-            storage.create_proxy_target(proxy_config)
+            storage.store_proxy_target(proxy_config.hostname, proxy_config)
             
             return {
                 "message": f"Created proxy for service {service_name}",
@@ -392,33 +394,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error creating proxy for service {service_name}: {e}")
             raise HTTPException(500, f"Error creating proxy: {str(e)}")
     
-    @router.get("/allowlist", response_model=DockerImageAllowlist)
-    async def get_image_allowlist(
-        token_info: Dict = Depends(require_auth)
-    ):
-        """Get the Docker image allowlist configuration."""
-        # Get allowlist from storage
-        allowlist_data = storage.redis_client.get("docker_image_allowlist")
-        if allowlist_data:
-            return DockerImageAllowlist.parse_raw(allowlist_data)
-        else:
-            # Return default allowlist
-            return DockerImageAllowlist()
-    
-    @router.put("/allowlist", response_model=DockerImageAllowlist)
-    async def update_image_allowlist(
-        allowlist: DockerImageAllowlist,
-        token_info: Dict = Depends(get_token_info_from_header)
-    ):
-        """Update the Docker image allowlist (admin only)."""
-        # Check admin permission
-        if token_info.get("name") != "ADMIN":
-            raise HTTPException(403, "Admin token required")
-        
-        # Store updated allowlist
-        storage.redis_client.set("docker_image_allowlist", allowlist.json())
-        
-        return allowlist
     
     @router.post("/cleanup")
     async def cleanup_orphaned_services(

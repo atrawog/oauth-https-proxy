@@ -4,7 +4,6 @@ import os
 import json
 import logging
 import shutil
-import fnmatch
 from typing import Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +15,7 @@ from .models import (
     DockerServiceConfig,
     DockerServiceInfo,
     DockerServiceUpdate,
-    DockerServiceStats,
-    DockerImageAllowlist
+    DockerServiceStats
 )
 from ..storage.redis_storage import RedisStorage
 
@@ -63,29 +61,31 @@ class DockerManager:
         Returns:
             Service information
         """
-        # Validate image is allowed
-        if config.image and not await self._validate_image_allowed(config.image):
-            raise ValueError(f"Image {config.image} is not in the allowlist")
-            
-        # Allocate port if needed
-        if not config.external_port:
-            config.external_port = await self._allocate_port()
-            logger.info(f"Allocated port {config.external_port} for service {config.service_name}")
-            
         # Build image if Dockerfile provided
         if config.dockerfile_path:
             image_tag = await self._build_image(config)
             config.image = image_tag
             logger.info(f"Built image {image_tag} for service {config.service_name}")
             
+            # Detect exposed ports from built image if internal_port is default
+            if config.internal_port == 8080:  # Default value
+                try:
+                    image_info = self.client.image.inspect(image_tag)
+                    exposed_ports = image_info.config.exposed_ports
+                    if exposed_ports:
+                        # Get first exposed port
+                        first_port = list(exposed_ports.keys())[0]
+                        port_num = int(first_port.split('/')[0])
+                        config.internal_port = port_num
+                        logger.info(f"Detected exposed port {port_num} from image {image_tag}")
+                except Exception as e:
+                    logger.warning(f"Failed to detect exposed ports: {e}")
+            
         # Create container
         try:
             container = await self._create_container(config)
             logger.info(f"Created container {container.id[:12]} for service {config.service_name}")
         except Exception as e:
-            # Clean up allocated port on failure
-            if config.external_port >= self.port_range[0]:
-                await self._release_port(config.external_port)
             raise
             
         # Store service info in Redis
@@ -95,7 +95,7 @@ class DockerManager:
             container_id=container.id,
             created_at=datetime.now(timezone.utc),
             owner_token_hash=token_hash,
-            allocated_port=config.external_port
+            allocated_port=0  # Not used anymore - services only accessible via proxy
         )
         
         await self._store_service_info(service_info)
@@ -105,42 +105,6 @@ class DockerManager:
         
         return service_info
         
-    async def _validate_image_allowed(self, image: str) -> bool:
-        """Check if image is in allowlist.
-        
-        Args:
-            image: Docker image name
-            
-        Returns:
-            True if allowed, False otherwise
-        """
-        # Get allowlist from storage
-        allowlist_data = self.storage.redis_client.get("docker_image_allowlist")
-        if allowlist_data:
-            allowlist = DockerImageAllowlist.parse_raw(allowlist_data)
-        else:
-            # Use default allowlist
-            allowlist = DockerImageAllowlist()
-            
-        # Extract registry from image name
-        parts = image.split('/')
-        if len(parts) > 2 or (len(parts) == 2 and '.' in parts[0]):
-            registry = parts[0]
-        else:
-            registry = "docker.io"
-            
-        # Check registry
-        if registry not in allowlist.registries:
-            logger.warning(f"Registry {registry} not in allowlist")
-            return False
-            
-        # Check image patterns
-        for pattern in allowlist.patterns:
-            if fnmatch.fnmatch(image, pattern):
-                return True
-                
-        logger.warning(f"Image {image} does not match any allowed patterns")
-        return False
         
     async def _allocate_port(self) -> int:
         """Allocate an unused port from the pool.
@@ -221,8 +185,8 @@ class DockerManager:
             "restart": config.restart_policy,
             "envs": config.environment,  # python-on-whales uses 'envs' not 'environment'
             "labels": {**config.labels, "managed": "true"},
-            "networks": config.networks if config.networks else ["proxy_network"],
-            "publish": [(config.external_port, config.internal_port)]  # python-on-whales format
+            "networks": config.networks if config.networks else ["proxy_network"]
+            # NO PORT PUBLISHING - services should only be accessible via proxy through Docker network
         }
         
         # Add volumes if specified
@@ -268,17 +232,6 @@ class DockerManager:
         
         # Also store in a set for listing
         self.storage.redis_client.sadd("docker_services", service_info.service_name)
-        
-        # Store port allocation with service reference
-        if service_info.allocated_port:
-            port_key = f"port_allocation:{service_info.allocated_port}"
-            self.storage.redis_client.set(
-                port_key, 
-                json.dumps({
-                    "service": service_info.service_name,
-                    "allocated_at": service_info.created_at.isoformat()
-                })
-            )
             
     async def _register_instance(self, service_info: DockerServiceInfo):
         """Register service in instance registry.
@@ -287,7 +240,7 @@ class DockerManager:
             service_info: Service information
         """
         instance_name = f"docker-{service_info.service_name}"
-        target_url = f"http://localhost:{service_info.allocated_port}"
+        target_url = f"http://{service_info.service_name}:{service_info.internal_port}"
         
         instance_data = {
             "name": instance_name,
@@ -436,10 +389,6 @@ class DockerManager:
         except NoSuchContainer:
             logger.warning(f"Container for service {service_name} not found")
             
-        # Clean up allocated port
-        if service_info.allocated_port:
-            await self._release_port(service_info.allocated_port)
-            
         # Remove from instance registry
         instance_name = f"docker-{service_name}"
         self.storage.redis_client.delete(f"instance_url:{instance_name}")
@@ -520,44 +469,24 @@ class DockerManager:
             Service statistics
         """
         try:
-            # python-on-whales stats returns a list of stats
+            # python-on-whales stats returns a list of ContainerStats objects
             stats_list = self.client.container.stats(service_name)
             if not stats_list:
                 raise ValueError(f"No stats available for {service_name}")
             stats = stats_list[0]  # Get first sample
             
-            # Parse stats
-            cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - \
-                        stats["precpu_stats"]["cpu_usage"]["total_usage"]
-            system_delta = stats["cpu_stats"]["system_cpu_usage"] - \
-                          stats["precpu_stats"]["system_cpu_usage"]
-            cpu_usage = (cpu_delta / system_delta) * 100.0 if system_delta > 0 else 0.0
-            
-            memory_usage = stats["memory_stats"]["usage"]
-            memory_limit = stats["memory_stats"]["limit"]
-            memory_percentage = (memory_usage / memory_limit) * 100.0 if memory_limit > 0 else 0.0
-            
-            # Network stats
-            network_rx = sum(v["rx_bytes"] for v in stats["networks"].values())
-            network_tx = sum(v["tx_bytes"] for v in stats["networks"].values())
-            
-            # Block I/O stats
-            block_read = sum(s["value"] for s in stats.get("blkio_stats", {}).get("io_service_bytes_recursive", [])
-                           if s["op"] == "Read")
-            block_write = sum(s["value"] for s in stats.get("blkio_stats", {}).get("io_service_bytes_recursive", [])
-                            if s["op"] == "Write")
-            
+            # python-on-whales provides processed stats as attributes
             return DockerServiceStats(
                 service_name=service_name,
-                cpu_usage=cpu_usage,
-                memory_usage=memory_usage,
-                memory_limit=memory_limit,
-                memory_percentage=memory_percentage,
-                network_rx_bytes=network_rx,
-                network_tx_bytes=network_tx,
-                block_read_bytes=block_read,
-                block_write_bytes=block_write,
-                pids=stats["pids_stats"]["current"]
+                cpu_usage=stats.cpu_percentage,
+                memory_usage=stats.memory_used,
+                memory_limit=stats.memory_limit,
+                memory_percentage=stats.memory_percentage,
+                network_rx_bytes=stats.net_download,
+                network_tx_bytes=stats.net_upload,
+                block_read_bytes=stats.block_read,
+                block_write_bytes=stats.block_write,
+                pids=0  # python-on-whales doesn't provide PIDs in stats
             )
         except NoSuchContainer:
             raise ValueError(f"Container for service {service_name} not found")
@@ -589,8 +518,14 @@ class DockerManager:
         
     async def _cleanup_port_allocations(self):
         """Clean up orphaned port allocations."""
-        # Get all port allocation keys
-        port_keys = self.storage.redis_client.keys("port_allocation:*")
+        # Get all port allocation keys using SCAN
+        port_keys = []
+        cursor = 0
+        while True:
+            cursor, keys = self.storage.redis_client.scan(cursor, match="port_allocation:*", count=100)
+            port_keys.extend(keys)
+            if cursor == 0:
+                break
         
         for key in port_keys:
             data = self.storage.redis_client.get(key)
