@@ -518,7 +518,11 @@ class DockerManager:
             Service statistics
         """
         try:
-            stats = self.client.container.stats(service_name, stream=False)
+            # python-on-whales stats returns a list of stats
+            stats_list = self.client.container.stats(service_name)
+            if not stats_list:
+                raise ValueError(f"No stats available for {service_name}")
+            stats = stats_list[0]  # Get first sample
             
             # Parse stats
             cpu_delta = stats["cpu_stats"]["cpu_usage"]["total_usage"] - \
@@ -559,9 +563,10 @@ class DockerManager:
     async def cleanup_orphaned_services(self):
         """Remove containers not tracked in Redis."""
         # Get all managed containers
+        # python-on-whales uses 'label' not 'filters'
         containers = self.client.container.list(
             all=True,
-            filters={"label": self.managed_label}
+            filters={"label": [self.managed_label]}
         )
         
         # Get tracked service names
