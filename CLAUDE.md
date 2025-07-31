@@ -83,8 +83,6 @@ just token-email-update <n> <email>      # Update token cert email
 ### Docker Services
 - **proxy**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API  
 - **redis**: State storage for all services
-- **echo-stateful**: Stateful MCP echo server (example MCP implementation)
-- **echo-stateless**: Stateless MCP echo server (example MCP implementation)
 
 **Note**: OAuth functionality is now integrated directly into the proxy service - there is no separate auth service.
 
@@ -345,7 +343,6 @@ just route-enable <route-id> <token>
 just route-disable <route-id> <token>
 
 # Service setup shortcuts
-just mcp-echo-setup [token]      # Setup both echo servers
 just migrate-service-names       # Migrate old service names
 
 # Per-proxy route control

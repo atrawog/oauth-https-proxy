@@ -77,26 +77,6 @@ services:
       retries: 3
       start_period: 30s
 
-  echo-stateful:
-    build: ./mcp-echo-streamablehttp-server-stateful
-    restart: unless-stopped
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    volumes:
-      - ./logs/mcp-echo-stateful:/app/logs
-    networks:
-      - proxy_network
-
-  echo-stateless:
-    build: ./mcp-echo-streamablehttp-server-stateless
-    restart: unless-stopped
-    environment:
-      - LOG_LEVEL=${LOG_LEVEL:-INFO}
-    volumes:
-      - ./logs/mcp-echo-stateless:/app/logs
-    networks:
-      - proxy_network
-
   # fetcher:
   #   build: ./fetcher-mcp
   #   restart: unless-stopped
