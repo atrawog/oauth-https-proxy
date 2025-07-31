@@ -23,7 +23,7 @@ def list_routes(token: str = None):
         headers["Authorization"] = f"Bearer {token}"
     
     try:
-        response = requests.get(f"{base_url}/routes/", headers=headers, timeout=10)
+        response = requests.get(f"{base_url}/api/v1/routes", headers=headers, timeout=10)
         response.raise_for_status()
         
         routes = response.json()

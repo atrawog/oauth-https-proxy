@@ -6,12 +6,16 @@ import sys
 import requests
 import argparse
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.test_utils import get_api_base_url
+
 
 def update_route(route_id: str, token: str, **updates):
     """Update a route."""
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -55,7 +59,7 @@ def update_route(route_id: str, token: str, **updates):
         return False
     
     try:
-        response = requests.put(f"{base_url}/routes/{route_id}", json=data, headers=headers, timeout=10)
+        response = requests.put(f"{base_url}/api/v1/routes/{route_id}", json=data, headers=headers, timeout=10)
         response.raise_for_status()
         
         route = response.json()

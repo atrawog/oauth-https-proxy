@@ -6,16 +6,20 @@ import sys
 import requests
 from datetime import datetime
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.test_utils import get_api_base_url
+
 
 def show_route(route_id: str):
     """Show route details."""
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     try:
-        response = requests.get(f"{base_url}/routes/{route_id}", timeout=10)
+        response = requests.get(f"{base_url}/api/v1/routes/{route_id}", timeout=10)
         response.raise_for_status()
         
         route = response.json()

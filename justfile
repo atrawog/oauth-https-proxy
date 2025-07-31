@@ -1386,7 +1386,7 @@ route-list:
 
 # Show route details
 route-show route-id:
-    docker exec {{container_name}} pixi run python scripts/route_show.py --route-id {{route-id}}
+    docker exec {{container_name}} pixi run python scripts/route_show.py {{route-id}}
 
 # Create a new route
 route-create path target-type target-value token="" priority="50" methods="*" is-regex="false" description="":

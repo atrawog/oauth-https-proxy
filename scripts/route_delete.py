@@ -5,18 +5,22 @@ import os
 import sys
 import requests
 
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+from scripts.test_utils import get_api_base_url
+
 
 def delete_route(route_id: str, token: str):
     """Delete a route."""
-    base_url = os.getenv('BASE_URL')
+    base_url = get_api_base_url()
     if not base_url:
-        print("Error: BASE_URL must be set in .env")
+        print("Error: Unable to determine API base URL")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
     
     try:
-        response = requests.delete(f"{base_url}/routes/{route_id}", headers=headers, timeout=10)
+        response = requests.delete(f"{base_url}/api/v1/routes/{route_id}", headers=headers, timeout=10)
         response.raise_for_status()
         
         result = response.json()
