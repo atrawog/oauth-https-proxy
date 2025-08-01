@@ -46,6 +46,9 @@ def initialize_components(config: Config) -> None:
     # Initialize default routes
     storage.initialize_default_routes()
     
+    # Initialize default proxies
+    storage.initialize_default_proxies()
+    
     logger.info("All components initialized successfully")
 
 
@@ -61,10 +64,21 @@ async def run_server(config: Config) -> None:
     scheduler.start()
     
     try:
-        # Run unified multi-instance server
+        # Start the FastAPI app on port 9000
+        from hypercorn.asyncio import serve
+        from hypercorn.config import Config as HypercornConfig
+        
+        api_config = HypercornConfig()
+        api_config.bind = ["127.0.0.1:9000"]
+        api_config.loglevel = config.LOG_LEVEL.upper()
+        
+        logger.info("Starting FastAPI app on port 9000")
+        api_task = asyncio.create_task(serve(app, api_config))
+        
+        # Run unified multi-instance server for proxy domains
         unified_server = UnifiedMultiInstanceServer(
             https_server_instance=https_server,
-            app=app,
+            app=None,  # No app needed - just proxy instances
             host=config.SERVER_HOST
         )
         

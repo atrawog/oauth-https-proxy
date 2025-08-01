@@ -102,18 +102,27 @@ DEFAULT_ROUTES = [
         "route_id": "acme-challenge",
         "path_pattern": "/.well-known/acme-challenge/",
         "target_type": RouteTargetType.INSTANCE,
-        "target_value": "localhost",
+        "target_value": "api",
         "priority": 100,
         "description": "ACME challenge validation",
         "enabled": True
     },
     {
-        "route_id": "health",
-        "path_pattern": "/health",
+        "route_id": "oauth-protected-resource",
+        "path_pattern": "/.well-known/oauth-protected-resource",
         "target_type": RouteTargetType.INSTANCE,
-        "target_value": "localhost",
-        "priority": 80,
-        "description": "Health check endpoint",
+        "target_value": "api",
+        "priority": 100,
+        "description": "MCP OAuth protected resource metadata",
+        "enabled": True
+    },
+    {
+        "route_id": "oauth-authorization-server",
+        "path_pattern": "/.well-known/oauth-authorization-server",
+        "target_type": RouteTargetType.INSTANCE,
+        "target_value": "api",
+        "priority": 95,
+        "description": "OAuth authorization server metadata",
         "enabled": True
     }
 ]

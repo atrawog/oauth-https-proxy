@@ -245,3 +245,23 @@ class ProxyMCPConfig(BaseModel):
                 if not any(scope.startswith(prefix) for prefix in ["mcp:", "openid", "profile", "email"]):
                     raise ValueError(f"Invalid scope: {scope}")
         return v
+
+
+# Default proxy configurations that should always exist
+DEFAULT_PROXIES = [
+    {
+        "hostname": "localhost",
+        "target_url": "http://127.0.0.1:9000",
+        "cert_name": "",
+        "enabled": True,
+        "enable_http": True,
+        "enable_https": False,
+        "preserve_host_header": False,
+        "custom_headers": {},
+        "owner_token_hash": "",
+        "auth_enabled": False,
+        "route_mode": "all",
+        "enabled_routes": [],
+        "disabled_routes": []
+    }
+]

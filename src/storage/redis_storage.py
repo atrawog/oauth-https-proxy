@@ -741,6 +741,45 @@ class RedisStorage:
         except Exception as e:
             logger.error(f"Failed to initialize default routes: {e}")
     
+    def initialize_default_proxies(self) -> None:
+        """Initialize default proxy configurations that don't already exist."""
+        try:
+            logger.info("Checking default proxies...")
+            
+            # Import DEFAULT_PROXIES from proxy module
+            from ..proxy.models import DEFAULT_PROXIES, ProxyTarget
+            from datetime import datetime, timezone
+            
+            created_count = 0
+            existing_count = 0
+            
+            for proxy_dict in DEFAULT_PROXIES:
+                hostname = proxy_dict["hostname"]
+                
+                # Check if this proxy already exists
+                if self.get_proxy_target(hostname):
+                    existing_count += 1
+                    continue
+                
+                # Add created_at timestamp
+                proxy_dict["created_at"] = datetime.now(timezone.utc)
+                
+                # Create the missing default proxy
+                proxy = ProxyTarget(**proxy_dict)
+                if self.store_proxy_target(hostname, proxy):
+                    logger.info(f"Created missing default proxy: {hostname}")
+                    created_count += 1
+                else:
+                    logger.error(f"Failed to create default proxy: {hostname}")
+            
+            if created_count > 0:
+                logger.info(f"Created {created_count} missing default proxies")
+            if existing_count > 0:
+                logger.info(f"Found {existing_count} existing default proxies")
+                    
+        except Exception as e:
+            logger.error(f"Failed to initialize default proxies: {e}")
+    
     def count_certificates_by_owner(self, owner_token_hash: str) -> int:
         """Count certificates owned by a specific token."""
         try:

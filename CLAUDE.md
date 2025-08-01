@@ -255,7 +255,7 @@ Priority-based path routing with Redis storage:
   "route_id": "api-v1",
   "path_pattern": "/api/v1/",
   "target_type": "instance",  // port|instance|hostname
-  "target_value": "api-backend",
+  "target_value": "proxy",
   "priority": 90,  // Higher = checked first
   "methods": ["GET", "POST"],
   "enabled": true
@@ -811,7 +811,7 @@ The system supports registering named instances for internal services:
 ### Instance Schema
 ```json
 {
-  "name": "api-backend",
+  "name": "my-service",
   "target_url": "http://service:8080",
   "description": "Backend API service",
   "created_by": "admin",

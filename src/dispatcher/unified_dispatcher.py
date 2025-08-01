@@ -33,41 +33,21 @@ class DomainInstance:
     """Represents a Hypercorn instance serving a specific set of domains."""
     
     def __init__(self, app, domains: List[str], http_port: int, https_port: int, 
-                 cert=None, proxy_configs: Dict = None, is_api_instance: bool = False,
-                 storage=None):
-        self.app = app
+                 cert=None, proxy_configs: Dict = None, storage=None):
         self.domains = domains
         self.http_port = http_port
         self.https_port = https_port
         self.cert = cert
         self.proxy_configs = proxy_configs or {}
-        self.is_api_instance = is_api_instance
         self.storage = storage
         self.http_process = None
         self.https_process = None
         self.cert_file = None
         self.key_file = None
         
-        # For proxy-only instances, create a dedicated app
-        if not is_api_instance and storage:
-            self.app = create_proxy_app(storage)
-        elif is_api_instance and storage:
-            # For API instance, create a simple wrapper that forwards to the FastAPI app
-            # without triggering the lifespan again
-            from starlette.applications import Starlette
-            from starlette.routing import Mount
-            from starlette.middleware import Middleware
-            
-            # Create a simple Starlette app that mounts the FastAPI app
-            # This avoids the lifespan issue while preserving all routes
-            self.app = Starlette(
-                routes=[
-                    Mount("/", app=app),
-                ],
-                middleware=[],
-                on_startup=[],  # No startup handlers
-                on_shutdown=[]  # No shutdown handlers
-            )
+        # Create a proxy app for this instance
+        from ..proxy.app import create_proxy_app
+        self.app = create_proxy_app(storage) if storage else app
         
     async def start(self):
         """Start HTTP and/or HTTPS instances based on proxy configuration."""
@@ -75,19 +55,14 @@ class DomainInstance:
         http_enabled = False
         https_enabled = False
         
-        # Special case for localhost - always enable HTTP for API access
-        if 'localhost' in self.domains or '127.0.0.1' in self.domains:
-            http_enabled = True
-            # No HTTPS for localhost API
-        else:
-            # For other domains, check proxy configs
-            for domain in self.domains:
-                if domain in self.proxy_configs:
-                    config = self.proxy_configs[domain]
-                    if config.enable_http:
-                        http_enabled = True
-                    if config.enable_https:
-                        https_enabled = True
+        # Check proxy configs for all domains
+        for domain in self.domains:
+            if domain in self.proxy_configs:
+                config = self.proxy_configs[domain]
+                if config.enable_http:
+                    http_enabled = True
+                if config.enable_https:
+                    https_enabled = True
         
         # Start HTTP instance if any domain has HTTP enabled
         if http_enabled:
@@ -174,11 +149,7 @@ class DomainInstance:
                 
         self.cleanup()
         
-        # Log appropriately based on instance type
-        if self.is_api_instance:
-            logger.info(f"Stopped API instance for domains: {self.domains}")
-        else:
-            logger.info(f"Stopped proxy instance for domains: {self.domains}")
+        logger.info(f"Stopped instance for domains: {self.domains}")
     
     def cleanup(self):
         """Clean up temporary files."""
@@ -264,6 +235,9 @@ class UnifiedDispatcher:
         try:
             # Initialize default routes if needed
             self.storage.initialize_default_routes()
+            
+            # Initialize default proxies if needed
+            self.storage.initialize_default_proxies()
             
             # Load all routes from storage
             self.routes = self.storage.list_routes()
@@ -724,15 +698,15 @@ class UnifiedDispatcher:
 class UnifiedMultiInstanceServer:
     """Main server that manages domain instances with unified dispatching."""
     
-    def __init__(self, https_server_instance, app, host='0.0.0.0'):
+    def __init__(self, https_server_instance, app=None, host='0.0.0.0'):
         self.https_server = https_server_instance
-        self.app = app
+        self.app = app  # Not used anymore - each instance creates its own proxy app
         self.host = host
         self.instances: List[DomainInstance] = []
         # Pass storage to dispatcher for route management
         storage = https_server_instance.manager.storage if https_server_instance else None
         self.dispatcher = UnifiedDispatcher(host, storage)
-        self.next_http_port = 9000   # Starting port for HTTP instances
+        self.next_http_port = 9001   # Starting port for HTTP instances (9000 reserved for API)
         self.next_https_port = 10000 # Starting port for HTTPS instances
         
     async def create_instance_for_proxy(self, hostname: str):
@@ -758,13 +732,12 @@ class UnifiedMultiInstanceServer:
         
         # Create instance - this is a proxy-only instance
         instance = DomainInstance(
-            app=self.app,
+            app=None,  # Will create its own proxy app
             domains=[hostname],
             http_port=self.next_http_port,
             https_port=self.next_https_port,
             cert=cert,
             proxy_configs={hostname: proxy_target},
-            is_api_instance=False,
             storage=self.https_server.manager.storage
         )
         
@@ -932,42 +905,12 @@ class UnifiedMultiInstanceServer:
                     cert_to_domains['no-cert'] = []
                 cert_to_domains['no-cert'].append(hostname)
         
-        # ALWAYS create a localhost instance for API access
-        localhost_domains = ['localhost', '127.0.0.1']
-        localhost_instance = DomainInstance(
-            app=self.app,
-            domains=localhost_domains,
-            http_port=self.next_http_port,
-            https_port=self.next_https_port,
-            cert=None,  # Will use self-signed
-            proxy_configs={},  # No proxy config for localhost
-            is_api_instance=True,  # This is the API server!
-            storage=self.https_server.manager.storage
-        )
-        
-        self.instances.append(localhost_instance)
-        await localhost_instance.start()
-        
-        # Register localhost with dispatcher - HTTP only for API access
-        self.dispatcher.register_instance(
-            localhost_domains, 
-            self.next_http_port, 
-            self.next_https_port,
-            enable_http=True,    # Enable HTTP for API access
-            enable_https=False   # No HTTPS needed for localhost API
-        )
-        
-        # Register localhost as a named instance for routing
-        self.dispatcher.register_named_instance('localhost', self.next_http_port)
-        self.dispatcher.register_named_instance('api', self.next_http_port)  # Alias for API access
-        
         # Load routes from Redis storage
         self.dispatcher.load_routes_from_storage()
         
-        self.next_http_port += 1
-        self.next_https_port += 1
-        
-        logger.info("Created localhost instance for API access")
+        # Register the API service as a named instance
+        # This is the main FastAPI app that runs on port 9000
+        self.dispatcher.register_named_instance('api', 9000)
         
         if not cert_to_domains and not domain_to_proxy:
             logger.info("No additional certificates or proxy configurations available")
@@ -984,13 +927,12 @@ class UnifiedMultiInstanceServer:
             
             # Create instance - these are proxy domains
             instance = DomainInstance(
-                app=self.app,
+                app=None,  # Will create its own proxy app
                 domains=domains,
                 http_port=self.next_http_port,
                 https_port=self.next_https_port,
                 cert=cert,
                 proxy_configs=proxy_configs,
-                is_api_instance=False,  # These are proxy instances
                 storage=self.https_server.manager.storage
             )
             

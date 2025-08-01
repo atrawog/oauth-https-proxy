@@ -65,7 +65,7 @@ class TestRouteManagement:
             "route_id": test_route_id,
             "path_pattern": f"/api/v1/{test_route_id}/",
             "target_type": "instance",
-            "target_value": "api-backend",
+            "target_value": "proxy",
             "priority": 90,
             "methods": ["GET", "POST", "PUT", "DELETE"],
             "enabled": True,
@@ -324,7 +324,7 @@ class TestRoutePatterns:
             "route_id": route_id,
             "path_pattern": "^/api/v[0-9]+/.*",
             "target_type": "instance",
-            "target_value": "api-backend",
+            "target_value": "proxy",
             "priority": 81,
             "is_regex": True
         }
