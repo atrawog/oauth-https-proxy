@@ -14,6 +14,8 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Instance Registry**: Named service discovery for internal services
 - **Docker Service Management**: Create and manage Docker containers dynamically
 - **MCP Metadata**: Automatic metadata endpoints for MCP-compliant services
+- **Port Management**: Comprehensive port allocation with bind address control
+- **Multi-Port Services**: Services can expose multiple ports with access controls
 
 ### Security Features
 - **Token-Based API**: All administrative operations require bearer tokens
@@ -99,6 +101,54 @@ just proxy-create auth.yourdomain.com http://localhost:9000 $ADMIN_TOKEN
 
 # Enable OAuth on your API proxy
 just proxy-auth-enable api.yourdomain.com $ADMIN_TOKEN auth.yourdomain.com forward
+```
+
+### Docker Service Management
+
+Create and manage Docker containers with automatic port exposure:
+
+```bash
+# Create a service with exposed port on localhost
+just service-create-exposed my-app nginx:alpine 8080 127.0.0.1 $ADMIN_TOKEN
+
+# Create a service accessible from all interfaces
+just service-create-exposed public-api node:18 3000 0.0.0.0 $ADMIN_TOKEN
+
+# Real example: Create mcp-everything service on port 3000
+just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 $ADMIN_TOKEN
+
+# Add additional ports to existing service
+just service-port-add my-app admin 8081 8081 127.0.0.1 $ADMIN_TOKEN
+
+# List all services and their ports
+just service-list
+just service-port-list my-app
+
+# Create proxy for service (optional) - makes it accessible via HTTPS
+just service-proxy-create my-app my-app.yourdomain.com true $ADMIN_TOKEN
+
+# Full example: Service accessible at both localhost:3000 and https://everything.yourdomain.com
+just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 $ADMIN_TOKEN
+just proxy-create everything.yourdomain.com http://mcp-everything:3000 $ADMIN_TOKEN
+just proxy-mcp-enable everything.yourdomain.com $ADMIN_TOKEN /mcp
+```
+
+### Port Management
+
+Control port allocation and access:
+
+```bash
+# View all allocated ports
+just port-list
+
+# Check available port ranges
+just port-available
+
+# Create port access token for specific services/ports
+just port-token-create api-access "my-app,api-service" "8080,8081" 30d
+
+# Revoke port access
+just port-token-revoke api-access
 ```
 
 ### Set Up MCP Echo Servers (Example)
@@ -354,6 +404,17 @@ Authorization: Bearer your-admin-token
 - Service lifecycle control (start/stop/restart)
 - Log retrieval and statistics
 - Automatic proxy creation for services
+- Multi-port configuration with bind address control
+- Port management endpoints:
+  - `GET /api/v1/services/{name}/ports` - List service ports
+  - `POST /api/v1/services/{name}/ports` - Add port to service
+  - `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove port
+
+#### Port Management (`/api/v1/ports/*`)
+- Dynamic port allocation tracking
+- Available port range queries
+- Port access token management
+- Fine-grained access control for exposed ports
 
 ### OAuth Protocol Endpoints (Root Level)
 - `/authorize` - OAuth authorization
@@ -419,6 +480,27 @@ mcp-http-proxy/
 ├── justfile           # Task automation
 └── .env.example       # Example configuration
 ```
+
+## Recent Updates
+
+### Port Management System (NEW)
+- **Multi-Port Services**: Services can now expose multiple ports with different bind addresses
+- **Port Allocation**: Comprehensive port management with automatic allocation and tracking
+- **Access Control**: Optional token-based access control for exposed ports
+- **Bind Address Control**: Choose between localhost-only (127.0.0.1) or public (0.0.0.0) access per port
+- **New Commands**: Added `service-create-exposed` for easy service creation with ports
+- **Port API**: New endpoints for managing service ports dynamically
+
+### Docker Service Enhancements
+- **Improved Schema**: Support for `port_configs` array for multi-port configuration
+- **Backward Compatibility**: Existing `external_port` field still supported
+- **Python-on-whales**: Fixed port publishing format for proper Docker integration
+- **Resource Tracking**: Ports are automatically released when services are deleted
+
+### Command Improvements
+- **Consistent Naming**: All service-related commands now use `service-` prefix
+- **Port Commands**: New `service-port-*` commands for port management
+- **Token Commands**: New `port-token-*` commands for access control
 
 ## Troubleshooting
 

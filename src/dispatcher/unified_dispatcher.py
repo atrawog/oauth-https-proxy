@@ -250,7 +250,7 @@ class UnifiedDispatcher:
         # Store in Redis so proxies can access it
         if self.storage:
             try:
-                self.storage.redis.set(f"instance:{name}", str(port))
+                self.storage.redis_client.set(f"instance:{name}", str(port))
                 logger.debug(f"Stored instance {name} in Redis")
             except Exception as e:
                 logger.error(f"Failed to store instance in Redis: {e}")
@@ -503,7 +503,7 @@ class UnifiedDispatcher:
             proxy_config = None
             if self.storage:
                 try:
-                    proxy_json = await self.storage.redis.get(f"proxy:{hostname}")
+                    proxy_json = self.storage.redis_client.get(f"proxy:{hostname}")
                     if proxy_json:
                         proxy_data = json.loads(proxy_json)
                         proxy_config = ProxyTarget(**proxy_data)

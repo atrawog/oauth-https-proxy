@@ -19,6 +19,7 @@ from ....docker.models import (
 from ....docker.manager import DockerManager
 from ....proxy.models import ProxyTarget
 from ....shared.config import Config
+from ....ports import ServicePort, PortConfiguration
 
 logger = logging.getLogger(__name__)
 
@@ -411,5 +412,150 @@ def create_router(storage) -> APIRouter:
         except Exception as e:
             logger.error(f"Error during cleanup: {e}")
             raise HTTPException(500, f"Error during cleanup: {str(e)}")
+    
+    # Port management endpoints
+    
+    @router.post("/{service_name}/ports", response_model=ServicePort)
+    async def add_service_port(
+        service_name: str,
+        port_config: PortConfiguration,
+        token_info: Dict = Depends(get_token_info_from_header)
+    ):
+        """Add a port to an existing service.
+        
+        This will recreate the container with the new port configuration.
+        """
+        manager = get_docker_manager()
+        
+        try:
+            # Convert PortConfiguration to dict format expected by manager
+            config_dict = {
+                'name': port_config.name,
+                'host': port_config.host,
+                'container': port_config.container,
+                'bind': port_config.bind,
+                'protocol': port_config.protocol,
+                'source_token': port_config.token,
+                'description': port_config.description
+            }
+            
+            # Create source token hash if token provided
+            if port_config.token:
+                import hashlib
+                config_dict['source_token_hash'] = hashlib.sha256(port_config.token.encode()).hexdigest()
+                config_dict['source_token_name'] = f"port-{port_config.name}"
+            
+            service_port = await manager.add_port_to_service(
+                service_name, 
+                config_dict, 
+                token_info["hash"]
+            )
+            return service_port
+            
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            logger.error(f"Error adding port to service {service_name}: {e}")
+            raise HTTPException(500, f"Error adding port: {str(e)}")
+    
+    @router.get("/{service_name}/ports", response_model=List[ServicePort])
+    async def list_service_ports(
+        service_name: str,
+        token_info: Dict = Depends(require_auth)
+    ):
+        """Get all ports for a service."""
+        manager = get_docker_manager()
+        
+        # Check if service exists
+        service_info = await manager.get_service(service_name)
+        if not service_info:
+            raise HTTPException(404, f"Service {service_name} not found")
+        
+        try:
+            ports = await manager.get_service_ports(service_name)
+            return ports
+        except Exception as e:
+            logger.error(f"Error getting ports for service {service_name}: {e}")
+            raise HTTPException(500, f"Error getting ports: {str(e)}")
+    
+    @router.delete("/{service_name}/ports/{port_name}")
+    async def remove_service_port(
+        service_name: str,
+        port_name: str,
+        token_info: Dict = Depends(get_token_info_from_header)
+    ):
+        """Remove a port from a service.
+        
+        This will recreate the container without the specified port.
+        """
+        manager = get_docker_manager()
+        
+        try:
+            success = await manager.remove_port_from_service(
+                service_name, 
+                port_name, 
+                token_info["hash"]
+            )
+            if success:
+                return {"message": f"Port {port_name} removed from service {service_name}"}
+            else:
+                raise HTTPException(404, f"Port {port_name} not found")
+                
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            logger.error(f"Error removing port from service {service_name}: {e}")
+            raise HTTPException(500, f"Error removing port: {str(e)}")
+    
+    @router.put("/{service_name}/ports/{port_name}")
+    async def update_service_port(
+        service_name: str,
+        port_name: str,
+        port_config: PortConfiguration,
+        token_info: Dict = Depends(get_token_info_from_header)
+    ):
+        """Update a port configuration.
+        
+        This will remove the old port and add a new one with updated settings.
+        """
+        manager = get_docker_manager()
+        
+        try:
+            # Remove old port
+            await manager.remove_port_from_service(
+                service_name, 
+                port_name, 
+                token_info["hash"]
+            )
+            
+            # Add new port with updated config
+            config_dict = {
+                'name': port_config.name,
+                'host': port_config.host,
+                'container': port_config.container,
+                'bind': port_config.bind,
+                'protocol': port_config.protocol,
+                'source_token': port_config.token,
+                'description': port_config.description
+            }
+            
+            if port_config.token:
+                import hashlib
+                config_dict['source_token_hash'] = hashlib.sha256(port_config.token.encode()).hexdigest()
+                config_dict['source_token_name'] = f"port-{port_config.name}"
+            
+            service_port = await manager.add_port_to_service(
+                service_name, 
+                config_dict, 
+                token_info["hash"]
+            )
+            
+            return {"message": f"Port {port_name} updated", "port": service_port}
+            
+        except ValueError as e:
+            raise HTTPException(400, str(e))
+        except Exception as e:
+            logger.error(f"Error updating port for service {service_name}: {e}")
+            raise HTTPException(500, f"Error updating port: {str(e)}")
     
     return router

@@ -403,12 +403,26 @@ The system supports creating and managing Docker containers as services:
   "service_name": "my-app",
   "image": "nginx:latest",  // OR use dockerfile_path
   "dockerfile_path": "./dockerfiles/custom.Dockerfile",
-  "external_port": 8080,  // Optional, auto-allocated if not specified
+  "internal_port": 8080,  // Port inside container (auto-detected from image if not specified)
+  "external_port": 8080,  // DEPRECATED - use port_configs for multi-port support
   "memory_limit": "512m",
   "cpu_limit": 1.0,
   "environment": {"KEY": "value"},
   "command": ["npm", "start"],
-  "network": "proxy_network"
+  "networks": ["proxy_network"],
+  "labels": {"custom": "label"},
+  "expose_ports": true,  // Enable port exposure
+  "port_configs": [  // NEW: Multi-port configuration
+    {
+      "name": "http",
+      "host": 8080,
+      "container": 8080,
+      "bind": "127.0.0.1",  // or "0.0.0.0" for all interfaces
+      "protocol": "tcp",
+      "source_token": "optional_access_token"  // For port access control
+    }
+  ],
+  "bind_address": "127.0.0.1"  // Default bind address for ports
 }
 ```
 
@@ -426,10 +440,23 @@ The system supports creating and managing Docker containers as services:
 - `POST /api/v1/services/{name}/proxy` - Create proxy for service
 - `POST /api/v1/services/cleanup` - Clean up orphaned services
 
+#### Port Management Endpoints (NEW)
+- `GET /api/v1/services/{name}/ports` - List all ports for a service
+- `POST /api/v1/services/{name}/ports` - Add a port to existing service
+- `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove a port from service
+
+#### Port Allocation Endpoints (NEW)
+- `GET /api/v1/ports` - List all allocated ports
+- `GET /api/v1/ports/available` - Get available port ranges
+- `POST /api/v1/ports/tokens` - Create port access token
+- `GET /api/v1/ports/tokens` - List port access tokens
+- `DELETE /api/v1/ports/tokens/{name}` - Revoke port access token
+
 ### Service Commands
 ```bash
 # Service lifecycle management
 just service-create <name> <image> [dockerfile] [port] [token] [memory] [cpu] [auto-proxy]
+just service-create-exposed <name> <image> <port> <bind-address> [token] [memory] [cpu]  # NEW: Create with exposed port
 just service-list [owned-only] [token]
 just service-show <name>
 just service-delete <name> [token] [force] [delete-proxy]
@@ -445,10 +472,76 @@ just service-stats <name>
 just service-proxy-create <name> [hostname] [enable-https] [token]
 just service-cleanup
 
+# Port management (NEW)
+just service-port-add <service> <name> <host> <container> [bind] [token] [source-token]
+just service-port-remove <service> <port-name> [token]
+just service-port-list <service>
+just service-port-update <service> <port-name> [options] [token]
+
+# Port allocation management (NEW)
+just port-list
+just port-available
+just port-token-create <name> [services] [ports] [expiry]
+just port-token-list
+just port-token-revoke <name>
+
 # Testing
 just test-docker-services
 just test-docker-api
 ```
+
+## Port Management Architecture (NEW)
+
+### Overview
+The port management system provides comprehensive control over port allocation and access:
+- **Dynamic port allocation** with configurable ranges
+- **Multi-port support** per service
+- **Bind address control** (localhost vs all interfaces)
+- **Source token authentication** for port access
+- **Port ownership tracking** by service
+
+### Port Ranges
+- **Internal HTTP**: 9000-9999 (for internal services)
+- **Internal HTTPS**: 10000-10999 (for internal SSL services)  
+- **Exposed Ports**: 11000-65535 (for user services)
+- **Restricted Ports**: 22, 25, 53, 80, 443, 3306, 5432, 6379, 27017 (system reserved)
+
+### Port Schema
+```json
+{
+  "service_name": "my-app",
+  "port_name": "http",
+  "host_port": 8080,
+  "container_port": 8080,
+  "bind_address": "127.0.0.1",  // or "0.0.0.0"
+  "protocol": "tcp",            // or "udp"
+  "source_token_hash": "sha256:...",  // Optional access control
+  "require_token": false,
+  "owner_token_hash": "sha256:...",
+  "description": "Main HTTP port"
+}
+```
+
+### Port Access Token Schema
+```json
+{
+  "token_name": "api-access",
+  "token_hash": "sha256:...",
+  "allowed_services": ["my-app", "api-service"],  // or ["*"] for all
+  "allowed_ports": [8080, 8443],                  // or ["*"] for all
+  "expires_at": "2024-12-31T23:59:59Z",          // Optional expiry
+  "created_at": "2024-01-01T00:00:00Z",
+  "last_used": "2024-01-15T10:30:00Z",
+  "use_count": 42
+}
+```
+
+### Key Features
+- **Atomic port allocation** - No race conditions
+- **Service isolation** - Ports owned by services
+- **Access control** - Optional token-based port access
+- **Automatic cleanup** - Ports released when service deleted
+- **Bind address flexibility** - Choose localhost or public access
 
 ## OAuth Service
 
@@ -757,6 +850,11 @@ just instance-register-oauth <token>                      # Register OAuth serve
 10. **Docker Management**: Dynamic container creation via Docker socket
 11. **MCP Metadata**: Automatic metadata endpoints for MCP compliance
 12. **Resource Limits**: CPU and memory limits for Docker services
+13. **Port Management**: Comprehensive port allocation with bind address control
+14. **Multi-Port Services**: Services can expose multiple ports with different access controls
+15. **Port Access Tokens**: Fine-grained access control for exposed ports
+16. **Service Port Binding**: Choose between localhost-only or public access per port
+17. **Python-on-whales**: Uses tuples for port publishing: `("host_ip:port", container_port)`
 
 ## MCP 2025-06-18 Compliance Summary
 

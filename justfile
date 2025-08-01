@@ -598,7 +598,21 @@ proxy-list token="":
 
 # Show proxy details
 proxy-show hostname:
-    docker exec {{container_name}} pixi run python scripts/proxy_show.py "{{hostname}}"
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    response=$(curl -s -X GET "${BASE_URL}/api/v1/proxy/targets/{{hostname}}")
+    
+    # Check if proxy was found
+    if echo "$response" | grep -q '"detail".*not found'; then
+        echo "✗ Proxy target '{{hostname}}' not found" >&2
+        exit 1
+    fi
+    
+    # Pretty print the response
+    echo "$response" | jq '.' 2>/dev/null || echo "$response"
 
 # Delete proxy target
 proxy-delete hostname token="" delete-cert="false" force="false":
@@ -1230,6 +1244,362 @@ service-cleanup:
     fi
 
 # ============================================================================
+# PORT MANAGEMENT COMMANDS
+# ============================================================================
+
+# Add a port to an existing service
+service-port-add name port bind-address="127.0.0.1" source-token="" token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${TOKEN:-{{token}}}"
+    
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set TOKEN env var or pass as argument."
+        exit 1
+    fi
+    
+    # Parse port specification (format: host:container or just port)
+    if [[ "{{port}}" =~ ^([0-9]+):([0-9]+)$ ]]; then
+        host_port="${BASH_REMATCH[1]}"
+        container_port="${BASH_REMATCH[2]}"
+    else
+        host_port="{{port}}"
+        container_port="{{port}}"
+    fi
+    
+    # Generate a port name based on the port number
+    port_name="port-${host_port}"
+    
+    # Build JSON payload
+    payload=$(jq -n \
+        --arg name "$port_name" \
+        --argjson host "$host_port" \
+        --argjson container "$container_port" \
+        --arg bind "{{bind-address}}" \
+        --arg token "{{source-token}}" \
+        '{name: $name, host: $host, container: $container, bind: $bind, protocol: "tcp"} |
+        if $token != "" then . + {token: $token} else . end')
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/{{name}}/ports" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "✓ Added port to service {{name}}:"
+        echo "$body" | jq '.'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Remove a port from a service
+service-port-remove name port-name token="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${TOKEN:-{{token}}}"
+    
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set TOKEN env var or pass as argument."
+        exit 1
+    fi
+    
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/services/{{name}}/ports/{{port-name}}" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq -r '.message'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# List ports for a service
+service-port-list name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
+    
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/services/{{name}}/ports" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "Ports for service {{name}}:"
+        echo "$body" | jq -r '.[] | "- \(.port_name): \(.bind_address):\(.host_port) -> :\(.container_port) (\(.protocol))"'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# List all allocated ports globally
+service-ports-global available-only="false":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
+    
+    if [ "{{available-only}}" = "true" ]; then
+        endpoint="/api/v1/ports/available"
+        echo "Available port ranges:"
+    else
+        endpoint="/api/v1/ports"
+        echo "Allocated ports:"
+    fi
+    
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}${endpoint}" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        if [ "{{available-only}}" = "true" ]; then
+            echo "$body" | jq -r '.[] | "- \(.start)-\(.end) (\(.count) ports)"'
+        else
+            echo "$body" | jq -r 'to_entries | .[] | "- Port \(.key): \(.value.service_name // .value.purpose) (\(.value.bind_address))"'
+        fi
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Check if a port is available
+service-port-check port bind-address="127.0.0.1":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
+    
+    payload=$(jq -n \
+        --argjson port {{port}} \
+        --arg bind "{{bind-address}}" \
+        '{port: $port, bind_address: $bind}')
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/ports/check" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        available=$(echo "$body" | jq -r '.available')
+        if [ "$available" = "true" ]; then
+            echo "✓ Port {{port}} is available on {{bind-address}}"
+        else
+            reason=$(echo "$body" | jq -r '.reason // "Unknown reason"')
+            echo "✗ Port {{port}} is not available on {{bind-address}}: $reason"
+        fi
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Create a service with exposed port(s)
+service-create-exposed name image port bind-address="127.0.0.1" token="" memory="512m" cpu="1.0":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${TOKEN:-{{token}}}"
+    
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set TOKEN env var or pass as argument."
+        exit 1
+    fi
+    
+    # Parse port specification
+    if [[ "{{port}}" =~ ^([0-9]+):([0-9]+)$ ]]; then
+        host_port="${BASH_REMATCH[1]}"
+        container_port="${BASH_REMATCH[2]}"
+    else
+        host_port="{{port}}"
+        container_port="{{port}}"
+    fi
+    
+    # Build port configuration
+    port_config=$(jq -n \
+        --arg name "main" \
+        --argjson host "$host_port" \
+        --argjson container "$container_port" \
+        --arg bind "{{bind-address}}" \
+        '[{name: $name, host: $host, container: $container, bind: $bind, protocol: "tcp"}]')
+    
+    # Build service configuration
+    payload=$(jq -n \
+        --arg name "{{name}}" \
+        --arg image "{{image}}" \
+        --argjson internal_port "$container_port" \
+        --arg memory "{{memory}}" \
+        --argjson cpu {{cpu}} \
+        --argjson port_configs "$port_config" \
+        '{
+            service_name: $name,
+            image: $image,
+            internal_port: $internal_port,
+            memory_limit: $memory,
+            cpu_limit: $cpu,
+            expose_ports: true,
+            port_configs: $port_configs,
+            bind_address: "{{bind-address}}"
+        }')
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "✓ Created service {{name}} with exposed port:"
+        echo "$body" | jq '.service | {name: .service_name, status: .status, ports: .exposed_ports}'
+        echo ""
+        echo "Service accessible at {{bind-address}}:{{port}}"
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# ============================================================================
+# PORT ACCESS TOKEN COMMANDS
+# ============================================================================
+
+# Create a port access token
+service-token-create token-name allowed-services="" allowed-ports="" expires-hours="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    if [ -z "$token_value" ]; then
+        echo "Error: Admin token required. Set ADMIN_TOKEN env var."
+        exit 1
+    fi
+    
+    # Build arrays from comma-separated lists
+    if [ -n "{{allowed-services}}" ]; then
+        services_json=$(echo "{{allowed-services}}" | jq -R 'split(",")')
+    else
+        services_json="[]"
+    fi
+    
+    if [ -n "{{allowed-ports}}" ]; then
+        ports_json=$(echo "{{allowed-ports}}" | jq -R 'split(",") | map(tonumber)')
+    else
+        ports_json="[]"
+    fi
+    
+    # Build payload
+    payload=$(jq -n \
+        --arg name "{{token-name}}" \
+        --argjson services "$services_json" \
+        --argjson ports "$ports_json" \
+        --argjson expires "{{expires-hours}}" \
+        '{token_name: $name, allowed_services: $services, allowed_ports: $ports} |
+        if $expires != "" then . + {expires_in_hours: ($expires | tonumber)} else . end')
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/ports/tokens" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "✓ Created port access token:"
+        echo "$body" | jq '.'
+        echo ""
+        echo "Save this token value - it cannot be retrieved again!"
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# List port access tokens
+service-token-list:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    if [ -z "$token_value" ]; then
+        echo "Error: Admin token required. Set ADMIN_TOKEN env var."
+        exit 1
+    fi
+    
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/ports/tokens" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "Port access tokens:"
+        echo "$body" | jq -r '.[] | "- \(.token_name): Services=\(.allowed_services | join(",") // "all"), Ports=\(.allowed_ports | join(",") // "all"), Expires=\(.expires_at // "never")"'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# Revoke a port access token
+service-token-revoke token-name:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    token_value="${ADMIN_TOKEN:-}"
+    
+    if [ -z "$token_value" ]; then
+        echo "Error: Admin token required. Set ADMIN_TOKEN env var."
+        exit 1
+    fi
+    
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/ports/tokens/{{token-name}}" \
+        -H "Authorization: Bearer $token_value")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq -r '.message'
+    else
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+
+# ============================================================================
 # TESTING COMMANDS
 # ============================================================================
 
@@ -1337,6 +1707,14 @@ test-docker-services:
 # Test Docker service API
 test-docker-api:
     docker exec {{container_name}} pixi run pytest tests/test_docker_services.py::TestDockerServiceAPI -v
+
+# Test port management functionality
+test-ports:
+    docker exec {{container_name}} pixi run pytest tests/test_ports.py -v
+
+# Test service port management
+test-service-ports:
+    docker exec {{container_name}} pixi run pytest tests/test_service_ports.py -v
 
 # ============================================================================
 # UTILITY COMMANDS

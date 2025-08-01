@@ -18,6 +18,7 @@ from .models import (
     DockerServiceStats
 )
 from ..storage.redis_storage import RedisStorage
+from ..ports import PortManager, ServicePort
 
 logger = logging.getLogger(__name__)
 
@@ -51,6 +52,9 @@ class DockerManager:
         self.port_range = (11000, 20000)
         self.managed_label = "managed=true"
         
+        # Initialize port manager
+        self.port_manager = PortManager(storage)
+        
     async def create_service(self, config: DockerServiceConfig, token_hash: str) -> DockerServiceInfo:
         """Create and start a new Docker service.
         
@@ -81,11 +85,35 @@ class DockerManager:
                 except Exception as e:
                     logger.warning(f"Failed to detect exposed ports: {e}")
             
+        # Allocate ports if expose_ports is enabled
+        allocated_ports = []
+        if config.expose_ports and config.port_configs:
+            try:
+                for port_config in config.port_configs:
+                    # Allocate the requested port
+                    allocated_port = await self.port_manager.allocate_port(
+                        purpose="exposed",
+                        preferred=port_config['host'],
+                        bind_address=port_config.get('bind', config.bind_address)
+                    )
+                    if allocated_port != port_config['host']:
+                        logger.warning(f"Could not allocate requested port {port_config['host']}, got {allocated_port}")
+                        port_config['host'] = allocated_port
+                    allocated_ports.append(allocated_port)
+            except Exception as e:
+                # Clean up any allocated ports on failure
+                for port in allocated_ports:
+                    await self.port_manager.release_port(port)
+                raise ValueError(f"Failed to allocate ports: {e}")
+        
         # Create container
         try:
             container = await self._create_container(config)
             logger.info(f"Created container {container.id[:12]} for service {config.service_name}")
         except Exception as e:
+            # Clean up allocated ports on container creation failure
+            for port in allocated_ports:
+                await self.port_manager.release_port(port)
             raise
             
         # Store service info in Redis
@@ -95,10 +123,29 @@ class DockerManager:
             container_id=container.id,
             created_at=datetime.now(timezone.utc),
             owner_token_hash=token_hash,
-            allocated_port=0  # Not used anymore - services only accessible via proxy
+            allocated_port=0,  # Deprecated field, kept for backward compatibility
+            exposed_ports=config.port_configs if config.expose_ports else []
         )
         
         await self._store_service_info(service_info)
+        
+        # Register ports with port manager
+        if config.expose_ports and config.port_configs:
+            for port_config in config.port_configs:
+                service_port = ServicePort(
+                    service_name=config.service_name,
+                    port_name=port_config['name'],
+                    host_port=port_config['host'],
+                    container_port=port_config['container'],
+                    bind_address=port_config.get('bind', config.bind_address),
+                    protocol=port_config.get('protocol', 'tcp'),
+                    source_token_hash=port_config.get('source_token_hash'),
+                    source_token_name=port_config.get('source_token_name'),
+                    require_token=bool(port_config.get('source_token')),
+                    owner_token_hash=token_hash,
+                    description=port_config.get('description')
+                )
+                await self.port_manager.add_service_port(service_port)
         
         # Auto-register in instance registry
         await self._register_instance(service_info)
@@ -186,8 +233,30 @@ class DockerManager:
             "envs": config.environment,  # python-on-whales uses 'envs' not 'environment'
             "labels": {**config.labels, "managed": "true"},
             "networks": config.networks if config.networks else ["proxy_network"]
-            # NO PORT PUBLISHING - services should only be accessible via proxy through Docker network
         }
+        
+        # Add port publishing if explicitly enabled
+        if config.expose_ports:
+            if config.port_configs:
+                # Multi-port configuration
+                publish = []
+                for port_config in config.port_configs:
+                    bind_addr = port_config.get('bind', config.bind_address)
+                    host_port = port_config['host']
+                    container_port = port_config['container']
+                    
+                    # python-on-whales format: ("host_ip:host_port", container_port)
+                    if bind_addr != "0.0.0.0":
+                        # Specific bind address
+                        publish.append((f"{bind_addr}:{host_port}", container_port))
+                    else:
+                        # All interfaces - just use (host_port, container_port)
+                        publish.append((host_port, container_port))
+                    
+                container_config["publish"] = publish
+            elif config.external_port:
+                # Single port configuration - backward compatibility
+                container_config["publish"] = [f"{config.bind_address}:{config.external_port}:{config.internal_port}"]
         
         # Add volumes if specified
         if config.volumes:
@@ -389,6 +458,9 @@ class DockerManager:
         except NoSuchContainer:
             logger.warning(f"Container for service {service_name} not found")
             
+        # Clean up exposed ports
+        await self.port_manager.remove_all_service_ports(service_name)
+        
         # Remove from instance registry
         instance_name = f"docker-{service_name}"
         self.storage.redis_client.delete(f"instance_url:{instance_name}")
@@ -543,3 +615,155 @@ class DockerManager:
                 except json.JSONDecodeError:
                     # Old format, just "allocated" string
                     pass
+    
+    # Port management methods
+    
+    async def add_port_to_service(self, service_name: str, port_config: Dict, token_hash: str) -> ServicePort:
+        """Add a port to an existing service.
+        
+        Args:
+            service_name: Service name
+            port_config: Port configuration dictionary
+            token_hash: Token hash for authorization
+            
+        Returns:
+            Created ServicePort object
+        """
+        # Get service info
+        service_info = await self.get_service(service_name)
+        if not service_info:
+            raise ValueError(f"Service {service_name} not found")
+        
+        # Check ownership
+        if service_info.owner_token_hash != token_hash:
+            raise ValueError("Not authorized to modify this service")
+        
+        # Allocate port
+        allocated_port = await self.port_manager.allocate_port(
+            purpose="exposed",
+            preferred=port_config.get('host'),
+            bind_address=port_config.get('bind', '127.0.0.1')
+        )
+        
+        # Create ServicePort object
+        service_port = ServicePort(
+            service_name=service_name,
+            port_name=port_config['name'],
+            host_port=allocated_port,
+            container_port=port_config['container'],
+            bind_address=port_config.get('bind', '127.0.0.1'),
+            protocol=port_config.get('protocol', 'tcp'),
+            source_token_hash=port_config.get('source_token_hash'),
+            source_token_name=port_config.get('source_token_name'),
+            require_token=bool(port_config.get('source_token')),
+            owner_token_hash=token_hash,
+            description=port_config.get('description')
+        )
+        
+        # Register port with port manager
+        success = await self.port_manager.add_service_port(service_port)
+        if not success:
+            await self.port_manager.release_port(allocated_port)
+            raise ValueError("Failed to register port")
+        
+        # Update container to expose the new port
+        await self._update_container_ports(service_name, service_info)
+        
+        # Update service info
+        if not service_info.exposed_ports:
+            service_info.exposed_ports = []
+        service_info.exposed_ports.append({
+            'name': port_config['name'],
+            'host': allocated_port,
+            'container': port_config['container'],
+            'bind': port_config.get('bind', '127.0.0.1'),
+            'protocol': port_config.get('protocol', 'tcp'),
+            'source_token': port_config.get('source_token')
+        })
+        await self._store_service_info(service_info)
+        
+        return service_port
+    
+    async def remove_port_from_service(self, service_name: str, port_name: str, token_hash: str) -> bool:
+        """Remove a port from a service.
+        
+        Args:
+            service_name: Service name
+            port_name: Port name to remove
+            token_hash: Token hash for authorization
+            
+        Returns:
+            True if successful
+        """
+        # Get service info
+        service_info = await self.get_service(service_name)
+        if not service_info:
+            raise ValueError(f"Service {service_name} not found")
+        
+        # Check ownership
+        if service_info.owner_token_hash != token_hash:
+            raise ValueError("Not authorized to modify this service")
+        
+        # Remove port
+        success = await self.port_manager.remove_service_port(service_name, port_name)
+        if not success:
+            return False
+        
+        # Update service info
+        if service_info.exposed_ports:
+            service_info.exposed_ports = [
+                p for p in service_info.exposed_ports 
+                if p.get('name') != port_name
+            ]
+            await self._store_service_info(service_info)
+        
+        # Update container to remove the port binding
+        await self._update_container_ports(service_name, service_info)
+        
+        return True
+    
+    async def get_service_ports(self, service_name: str) -> List[ServicePort]:
+        """Get all ports for a service.
+        
+        Args:
+            service_name: Service name
+            
+        Returns:
+            List of ServicePort objects
+        """
+        return await self.port_manager.get_service_ports(service_name)
+    
+    async def _update_container_ports(self, service_name: str, service_info: DockerServiceInfo):
+        """Update container port bindings.
+        
+        Note: Docker doesn't support dynamic port updates, so we need to recreate the container.
+        
+        Args:
+            service_name: Service name
+            service_info: Service information
+        """
+        try:
+            # Stop and remove old container
+            self.client.container.stop(service_name)
+            self.client.container.remove(service_name)
+            
+            # Update config with new port settings
+            config = DockerServiceConfig(**service_info.dict(exclude={'status', 'container_id', 'created_at', 
+                                                                     'owner_token_hash', 'allocated_port', 
+                                                                     'health_status', 'exposed_ports'}))
+            config.expose_ports = bool(service_info.exposed_ports)
+            config.port_configs = service_info.exposed_ports or []
+            
+            # Recreate container
+            container = await self._create_container(config)
+            
+            # Update service info with new container ID
+            service_info.container_id = container.id
+            service_info.status = "running"
+            await self._store_service_info(service_info)
+            
+            logger.info(f"Recreated container for service {service_name} with updated ports")
+            
+        except Exception as e:
+            logger.error(f"Failed to update container ports: {e}")
+            raise
