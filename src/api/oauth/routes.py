@@ -103,15 +103,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # RFC 8707 Resource Indicators
             "resource_indicators_supported": True,
             "resource_parameter_supported": True,
-            "authorization_response_iss_parameter_supported": True,
-            # MCP-specific metadata
-            "mcp_protocol_version": settings.mcp_protocol_version,
-            "mcp_compliance": {
-                "resource_indicators": "RFC 8707",
-                "protected_resource_metadata": "RFC 9728",
-                "audience_validation": True,
-                "resource_specific_tokens": True
-            }
+            "authorization_response_iss_parameter_supported": True
         }
 
     # JWKS endpoint for RS256 public key distribution

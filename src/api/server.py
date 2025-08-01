@@ -163,11 +163,6 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         if target.mcp_metadata.server_info:
             metadata.update(target.mcp_metadata.server_info)
         
-        # Add MCP-specific metadata
-        metadata["mcp_versions_supported"] = target.mcp_metadata.mcp_versions
-        metadata["mcp_endpoint"] = target.mcp_metadata.endpoint
-        metadata["mcp_stateful"] = target.mcp_metadata.stateful
-        
         return metadata
     
     # Include OAuth protocol router (remains at root level for compliance)
