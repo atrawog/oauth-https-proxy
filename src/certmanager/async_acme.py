@@ -106,14 +106,14 @@ async def create_certificate_task(
             # Store certificate with ownership info
             manager.storage.store_certificate(cert_name, certificate)
             
-            # Update SSL context
-            https_server.update_ssl_context(certificate)
-            
             logger.info(f"Certificate generation completed for {cert_name}")
             
-            # Update instance to enable HTTPS if proxy exists
-            from .unified_dispatcher import unified_server_instance
+            # Update SSL context and instance to enable HTTPS if proxy exists
+            from ..dispatcher.unified_dispatcher import unified_server_instance
             if unified_server_instance:
+                # Update SSL context for the new certificate
+                unified_server_instance.update_ssl_context(certificate)
+                
                 # Certificate may be for multiple domains, update each one
                 for domain in certificate.domains:
                     await unified_server_instance.update_instance_certificate(domain)
@@ -191,14 +191,14 @@ async def create_multi_domain_certificate_task(
             if not stored_cert:
                 raise Exception(f"Multi-domain certificate was generated but not stored in Redis for {cert_name}")
             
-            # Update SSL context
-            https_server.update_ssl_context(certificate)
-            
             logger.info(f"Multi-domain certificate generation completed for {cert_name}")
             
-            # Update instance to enable HTTPS if proxy exists
-            from .unified_dispatcher import unified_server_instance
+            # Update SSL context and instance to enable HTTPS if proxy exists
+            from ..dispatcher.unified_dispatcher import unified_server_instance
             if unified_server_instance:
+                # Update SSL context for the new certificate
+                unified_server_instance.update_ssl_context(certificate)
+                
                 # Certificate may be for multiple domains, update each one
                 for domain in certificate.domains:
                     await unified_server_instance.update_instance_certificate(domain)

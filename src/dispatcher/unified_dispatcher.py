@@ -858,6 +858,40 @@ class UnifiedMultiInstanceServer:
         
         logger.info(f"HTTPS enabled for {hostname} after certificate became available")
     
+    def update_ssl_context(self, certificate):
+        """Update SSL context when a new certificate is created or renewed."""
+        if not certificate or not certificate.domains:
+            logger.warning("Invalid certificate passed to update_ssl_context")
+            return
+            
+        logger.info(f"Updating SSL context for certificate {certificate.cert_name} domains: {certificate.domains}")
+        
+        # For each domain in the certificate, update the instance if it exists
+        for domain in certificate.domains:
+            # Find the instance handling this domain
+            for instance in self.instances:
+                if domain in instance.domains:
+                    # Update the certificate for this instance
+                    instance.cert = certificate
+                    
+                    # If HTTPS is already running, we need to restart it
+                    if instance.https_process and not instance.https_process.done():
+                        logger.info(f"Restarting HTTPS for {domain} to use new certificate")
+                        # Cancel the current HTTPS process
+                        instance.https_process.cancel()
+                        # Clean up old temp files
+                        if instance.cert_file and os.path.exists(instance.cert_file):
+                            os.unlink(instance.cert_file)
+                        if instance.key_file and os.path.exists(instance.key_file):
+                            os.unlink(instance.key_file)
+                        # Start HTTPS with new certificate
+                        asyncio.create_task(instance.start_https())
+                    else:
+                        # HTTPS not running yet, just update the cert
+                        logger.info(f"Certificate updated for {domain}, HTTPS will use it when started")
+                    
+                    break  # Found the instance, move to next domain
+    
     async def run(self):
         """Run the unified multi-instance server architecture."""
         # Set global instance for dynamic management

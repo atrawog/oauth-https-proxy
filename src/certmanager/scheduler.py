@@ -112,9 +112,10 @@ class CertificateScheduler:
             if new_cert:
                 logger.info(f"Successfully renewed certificate: {cert_name}")
                 
-                # Update SSL context if server is available
-                from .server import https_server
-                https_server.update_ssl_context(new_cert)
+                # Update SSL context if unified server is available
+                from ..dispatcher.unified_dispatcher import unified_server_instance
+                if unified_server_instance:
+                    unified_server_instance.update_ssl_context(new_cert)
             else:
                 logger.error(f"Failed to renew certificate: {cert_name}")
         
