@@ -81,18 +81,7 @@ class EnhancedProxyHandler:
                 if route.target_type == RouteTargetType.URL:
                     return await self._handle_url_route(request, route)
                 elif route.target_type == RouteTargetType.INSTANCE:
-                    try:
-                        return await self._handle_instance_route(request, route)
-                    except HTTPException as e:
-                        if e.detail == "HANDLE_LOCALLY":
-                            # This route should be handled by the local FastAPI app
-                            # Continue to normal proxy handling which will fail
-                            # and let the request be handled by the main app
-                            logger.info(f"Route {route.route_id} should be handled locally, skipping proxy")
-                            break
-                        else:
-                            # Re-raise other exceptions
-                            raise
+                    return await self._handle_instance_route(request, route)
                 else:
                     # For other route types, we can't handle them here
                     logger.warning(f"Proxy cannot handle route type {route.target_type}")
@@ -387,17 +376,8 @@ class EnhancedProxyHandler:
         """Handle instance route by looking up the instance target."""
         instance_name = route.target_value
         
-        # CRITICAL: Check if we're trying to route to ourselves
-        # If instance is "api" and we're already in the API service,
-        # this means the request should be handled by the local FastAPI app
-        if instance_name == "api":
-            # This is a special case - the request should be handled by the main app
-            # not proxied. Return a special exception that the caller can handle
-            logger.info(f"Route points to api instance - should be handled locally")
-            raise HTTPException(
-                status_code=404,  # Use 404 to indicate "not found for proxying" 
-                detail="HANDLE_LOCALLY"  # Special marker for local handling
-            )
+        # For domain-specific proxy instances, we need to forward all instance routes
+        # including the "api" instance to the appropriate target port
         
         # Look up instance target from Redis
         instance_target = None

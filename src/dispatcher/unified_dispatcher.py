@@ -558,27 +558,9 @@ class UnifiedDispatcher:
                 except Exception as e:
                     logger.debug(f"Could not get proxy config for {hostname}: {e}")
             
-            # Get applicable routes with filtering
-            applicable_routes = self.get_applicable_routes(proxy_config)
-            
-            # Check generic routes with filtering
-            method, request_path = self.get_request_info(data)
-            if request_path and applicable_routes:
-                for route in applicable_routes:
-                    if route.matches(request_path, method):
-                        target = self.resolve_route_target(route)
-                        if target:
-                            if route.target_type == RouteTargetType.URL:
-                                # For URL routes, forward the HTTP request
-                                await self._forward_http_request(reader, writer, data, str(target), request_path, method)
-                                return
-                            else:
-                                # Regular port-based forwarding
-                                logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target}")
-                                await self._forward_connection(reader, writer, data, '127.0.0.1', target)
-                                return
-                        else:
-                            logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
+            # For HTTPS, we cannot parse HTTP request info from TLS handshake data
+            # Route matching must be handled by the proxy instances after TLS termination
+            # The proxy app will handle route matching at the application level
             
             # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_https_port.get(hostname)

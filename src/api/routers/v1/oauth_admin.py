@@ -39,120 +39,9 @@ def create_router(storage):
         """Automatically configure all required OAuth routes."""
         
         # Define OAuth routes to create
-        oauth_routes = [
-            {
-                "route_id": "oauth-authorize",
-                "path": "/authorize",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth authorization endpoint"
-            },
-            {
-                "route_id": "oauth-token",
-                "path": "/token",
-                "target_type": "hostname", 
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth token endpoint"
-            },
-            {
-                "route_id": "oauth-callback",
-                "path": "/callback",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth callback endpoint"
-            },
-            {
-                "route_id": "oauth-verify",
-                "path": "/verify",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth verification endpoint"
-            },
-            {
-                "route_id": "oauth-metadata",
-                "path": "/.well-known/oauth-authorization-server",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth server metadata"
-            },
-            {
-                "route_id": "oauth-jwks",
-                "path": "/jwks",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth JWKS endpoint"
-            },
-            {
-                "route_id": "oauth-revoke",
-                "path": "/revoke",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth token revocation"
-            },
-            {
-                "route_id": "oauth-introspect",
-                "path": "/introspect",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth token introspection"
-            },
-            {
-                "route_id": "oauth-register",
-                "path": "/register",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 95,
-                "description": "OAuth client registration"
-            },
-            {
-                "route_id": "oauth-error",
-                "path": "/error",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 90,
-                "description": "OAuth error page"
-            },
-            {
-                "route_id": "oauth-success",
-                "path": "/success",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 90,
-                "description": "OAuth success page"
-            },
-            {
-                "route_id": "oauth-clients",
-                "path": "/oauth/clients",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 90,
-                "description": "OAuth client management"
-            },
-            {
-                "route_id": "oauth-sessions",
-                "path": "/oauth/sessions",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 90,
-                "description": "OAuth session management"
-            },
-            {
-                "route_id": "oauth-resources",
-                "path": "/resources",
-                "target_type": "hostname",
-                "target_value": request.oauth_domain,
-                "priority": 90,
-                "description": "MCP resource management"
-            }
-        ]
+        # ONLY the .well-known endpoints are needed as routes
+        # All other OAuth endpoints are handled by the auth domain directly
+        oauth_routes = []
         
         created_routes = []
         skipped_routes = []
@@ -222,12 +111,9 @@ def create_router(storage):
         """Check OAuth route setup status."""
         
         # Expected routes
-        expected_routes = [
-            "oauth-authorize", "oauth-token", "oauth-callback", "oauth-verify",
-            "oauth-metadata", "oauth-jwks", "oauth-revoke", "oauth-introspect",
-            "oauth-register", "oauth-error", "oauth-success", "oauth-clients",
-            "oauth-sessions", "oauth-resources"
-        ]
+        # ONLY the .well-known endpoints are needed as routes
+        # All other OAuth endpoints are handled by the auth domain directly
+        expected_routes = []
         
         # Check which routes exist and point to the correct domain
         configured_routes = []
