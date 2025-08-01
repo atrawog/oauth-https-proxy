@@ -705,9 +705,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             forwarded_path = request.headers.get("x-forwarded-path", "")
             
             # Construct the resource URI if we have the host
+            # For MCP compliance, resource should be the base URL without specific endpoint paths
             resource = None
             if forwarded_host:
-                resource = f"{forwarded_proto}://{forwarded_host}{forwarded_path}"
+                resource = f"{forwarded_proto}://{forwarded_host}"
             
             # Validate token with resource context
             nonlocal require_oauth
