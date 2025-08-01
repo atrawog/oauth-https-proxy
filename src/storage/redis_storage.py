@@ -707,23 +707,36 @@ class RedisStorage:
             return False
     
     def initialize_default_routes(self) -> None:
-        """Initialize default routing rules if none exist."""
+        """Initialize default routing rules that don't already exist."""
         try:
-            # Check if any routes exist
-            if list(self.redis_client.scan_iter(match="route:*", count=1)):
-                logger.info("Routes already exist, skipping default initialization")
-                return
-            
-            logger.info("Initializing default routes...")
+            logger.info("Checking default routes...")
             
             # Import DEFAULT_ROUTES from proxy module
-            from ..proxy.models import DEFAULT_ROUTES
+            from ..proxy.routes import DEFAULT_ROUTES, Route
             
-            for route in DEFAULT_ROUTES:
+            created_count = 0
+            existing_count = 0
+            
+            for route_dict in DEFAULT_ROUTES:
+                route_id = route_dict["route_id"]
+                
+                # Check if this specific default route already exists
+                if self.get_route(route_id):
+                    existing_count += 1
+                    continue
+                
+                # Create the missing default route
+                route = Route(**route_dict)
                 if self.store_route(route):
-                    logger.info(f"Created default route: {route.route_id}")
+                    logger.info(f"Created missing default route: {route.route_id}")
+                    created_count += 1
                 else:
                     logger.error(f"Failed to create default route: {route.route_id}")
+            
+            if created_count > 0:
+                logger.info(f"Created {created_count} missing default routes")
+            if existing_count > 0:
+                logger.info(f"Found {existing_count} existing default routes")
                     
         except Exception as e:
             logger.error(f"Failed to initialize default routes: {e}")

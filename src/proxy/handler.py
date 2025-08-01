@@ -60,13 +60,6 @@ class EnhancedProxyHandler:
         if not target.enabled:
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
         
-        # Check for MCP metadata endpoint interception
-        if request.url.path == "/.well-known/oauth-protected-resource":
-            if target.mcp_metadata and target.mcp_metadata.enabled:
-                # Check if we should generate metadata instead of forwarding
-                if target.mcp_metadata.override_backend or not target.mcp_metadata.backend_implements:
-                    return await self._generate_mcp_metadata(request, target)
-        
         # Check routes FIRST - routes bypass proxy auth!
         from ..proxy.routes import get_applicable_routes, RouteTargetType
         applicable_routes = get_applicable_routes(self.storage, target)
@@ -428,6 +421,11 @@ class EnhancedProxyHandler:
             for header in ['host', 'connection', 'keep-alive', 'transfer-encoding']:
                 headers.pop(header, None)
             
+            # Add X-Forwarded headers
+            headers["x-forwarded-for"] = request.client.host if request.client else "unknown"
+            headers["x-forwarded-proto"] = request.url.scheme
+            headers["x-forwarded-host"] = request.headers.get("host", "")
+            
             # Get request body
             body = await request.body()
             
@@ -574,47 +572,3 @@ class EnhancedProxyHandler:
                 return {}
             return Response(content="Authentication service error", status_code=503)
     
-    async def _generate_mcp_metadata(self, request: Request, target: ProxyTarget) -> Response:
-        """Generate MCP protected resource metadata per RFC 9728."""
-        # Build resource URI - must include the MCP endpoint path
-        host = request.headers.get("host", target.hostname)
-        proto = request.headers.get("x-forwarded-proto", "https")
-        # Include the MCP endpoint in the resource URI to match token audience
-        resource_uri = f"{proto}://{host}{target.mcp_metadata.endpoint}"
-        
-        # Get authorization server URL from auth proxy if configured
-        auth_servers = []
-        if target.auth_enabled and target.auth_proxy:
-            auth_servers.append(f"https://{target.auth_proxy}")
-        
-        # Build metadata response per RFC 9728
-        metadata = {
-            "resource": resource_uri,
-            "authorization_servers": auth_servers,
-            "scopes_supported": target.mcp_metadata.scopes,
-            "bearer_methods_supported": ["header"],
-            "resource_documentation": f"{resource_uri}/docs"
-        }
-        
-        # Add JWKS URI if auth is enabled
-        if auth_servers:
-            metadata["jwks_uri"] = f"{auth_servers[0]}/jwks"
-        
-        # Add server info if configured
-        if target.mcp_metadata.server_info:
-            metadata.update(target.mcp_metadata.server_info)
-        
-        # Add MCP-specific metadata
-        metadata["mcp_versions_supported"] = target.mcp_metadata.mcp_versions
-        metadata["mcp_endpoint"] = target.mcp_metadata.endpoint
-        metadata["mcp_stateful"] = target.mcp_metadata.stateful
-        
-        # Return JSON response
-        return Response(
-            content=json.dumps(metadata, indent=2),
-            status_code=200,
-            headers={
-                "Content-Type": "application/json",
-                "Cache-Control": "public, max-age=3600"
-            }
-        )

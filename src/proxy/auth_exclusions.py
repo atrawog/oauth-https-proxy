@@ -2,11 +2,8 @@
 
 # OAuth 2.1 and MCP metadata endpoints that must be publicly accessible
 DEFAULT_AUTH_EXCLUSIONS = [
-    # OAuth Authorization Server metadata (RFC 8414)
-    "/.well-known/oauth-authorization-server",
-    
-    # OAuth Protected Resource metadata (MCP spec 2025-06-18)
-    "/.well-known/oauth-protected-resource",
+    # All well-known endpoints must be publicly accessible
+    "/.well-known/",  # This will match any path starting with /.well-known/
     
     # JWKS endpoint for token verification
     "/jwks",
@@ -18,7 +15,6 @@ DEFAULT_AUTH_EXCLUSIONS = [
     
     # Health and status endpoints
     "/health",
-    "/.well-known/health",
 ]
 
 def get_default_exclusions():

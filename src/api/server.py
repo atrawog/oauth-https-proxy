@@ -116,6 +116,60 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             logger.warning(f"ACME challenge not found for token: {token}")
             raise HTTPException(status_code=404, detail="Challenge not found")
     
+    # MCP OAuth protected resource metadata endpoint
+    @app.get("/.well-known/oauth-protected-resource")
+    async def oauth_protected_resource(request: Request):
+        """Generate MCP protected resource metadata based on hostname."""
+        # Get hostname from request - check x-forwarded-host first (set by proxy)
+        hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+        if not hostname:
+            # Fallback to host header
+            hostname = request.headers.get("host", "").split(":")[0]
+        if not hostname:
+            raise HTTPException(404, "No host header")
+        
+        # Get proxy target
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"No proxy target configured for {hostname}")
+        
+        # Check if MCP is enabled
+        if not target.mcp_metadata or not target.mcp_metadata.enabled:
+            raise HTTPException(404, "MCP not enabled for this proxy")
+        
+        # Build resource URI
+        proto = request.headers.get("x-forwarded-proto", "https")
+        resource_uri = f"{proto}://{hostname}{target.mcp_metadata.endpoint}"
+        
+        # Get authorization server URL
+        auth_servers = []
+        if target.auth_enabled and target.auth_proxy:
+            auth_servers.append(f"https://{target.auth_proxy}")
+        
+        # Build metadata response per RFC 9728
+        metadata = {
+            "resource": resource_uri,
+            "authorization_servers": auth_servers,
+            "scopes_supported": target.mcp_metadata.scopes,
+            "bearer_methods_supported": ["header"],
+            "resource_documentation": f"{resource_uri}/docs"
+        }
+        
+        # Add JWKS URI if auth is enabled
+        if auth_servers:
+            metadata["jwks_uri"] = f"{auth_servers[0]}/jwks"
+        
+        # Add server info if configured
+        if target.mcp_metadata.server_info:
+            metadata.update(target.mcp_metadata.server_info)
+        
+        # Add MCP-specific metadata
+        metadata["mcp_versions_supported"] = target.mcp_metadata.mcp_versions
+        metadata["mcp_endpoint"] = target.mcp_metadata.endpoint
+        metadata["mcp_stateful"] = target.mcp_metadata.stateful
+        
+        return metadata
+    
     # Include OAuth protocol router (remains at root level for compliance)
     oauth_router = create_oauth_router(oauth_settings, oauth_redis_manager, auth_manager)
     app.include_router(oauth_router)

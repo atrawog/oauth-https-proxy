@@ -94,8 +94,8 @@ token-generate name email="":
         if [ -n "${ADMIN_TOKEN:-}" ]; then
             auth_token="${ADMIN_TOKEN}"
         else
-            # Try to get admin token from docker
-            auth_token=$(docker exec {{container_name}} pixi run python scripts/show_token.py "ADMIN" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
         fi
         
         if [ -n "$auth_token" ]; then
@@ -121,17 +121,43 @@ token-generate name email="":
         fi
     fi
     
-    # Fallback to docker exec
-    docker exec {{container_name}} pixi run python scripts/generate_token.py "{{name}}" "$cert_email"
+    # No API available, exit with error
+    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    exit 1
 
 # Show token value
 token-show name:
     #!/usr/bin/env bash
+    set -euo pipefail
+    
     if [ "{{name}}" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
         echo "Token: ${ADMIN_TOKEN}"
-    else
-        docker exec {{container_name}} pixi run python scripts/show_token.py "{{name}}"
+        exit 0
     fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get admin token for API access
+    auth_token="${ADMIN_TOKEN:-}"
+    if [ -z "$auth_token" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    # Use API to reveal token
+    response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{name}}/reveal" \
+        -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+        if [ -n "$token" ] && [ "$token" != "null" ]; then
+            echo "Token: $token"
+            exit 0
+        fi
+    fi
+    
+    echo "Error: Token '{{name}}' not found" >&2
+    exit 1
 
 # List all tokens
 token-list:
@@ -144,8 +170,8 @@ token-list:
         if [ -n "${ADMIN_TOKEN:-}" ]; then
             auth_token="${ADMIN_TOKEN}"
         else
-            # Try to get admin token from docker
-            auth_token=$(docker exec {{container_name}} pixi run python scripts/show_token.py "ADMIN" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
         fi
         
         if [ -n "$auth_token" ]; then
@@ -158,8 +184,9 @@ token-list:
         fi
     fi
     
-    # Fallback to docker exec
-    docker exec {{container_name}} pixi run python scripts/list_tokens.py
+    # No API available, exit with error
+    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    exit 1
 
 # Delete token and owned resources
 token-delete name:
@@ -171,7 +198,25 @@ token-delete name:
     echo
     [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     
-    docker exec {{container_name}} pixi run python scripts/delete_token.py "{{name}}"
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get admin token
+    auth_token="${ADMIN_TOKEN:-}"
+    if [ -z "$auth_token" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    # Delete token via API
+    response=$(curl -sf -X DELETE "${BASE_URL}/api/v1/tokens/{{name}}" \
+        -H "Authorization: Bearer $auth_token" 2>&1)
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Token '{{name}}' deleted successfully"
+    else
+        echo "Error deleting token: $response" >&2
+        exit 1
+    fi
 
 # Update certificate email for token
 token-email-update name email token="":
@@ -197,9 +242,19 @@ token-email-update name email token="":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -240,9 +295,27 @@ generate-admin-token:
         read -p "Admin email: " admin_email
     fi
     
-    docker exec {{container_name}} pixi run python scripts/generate_token.py "ADMIN" "$admin_email" | tee admin_token.txt
-    echo
-    echo "Save the token above as ADMIN_TOKEN in your .env file"
+    # Use API to generate admin token
+    response=$(curl -sf -X POST "${BASE_URL}/api/v1/tokens/generate" \
+        -H "Content-Type: application/json" \
+        -d "{\"name\": \"ADMIN\", \"cert_email\": \"$admin_email\"}" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+        if [ -n "$token" ] && [ "$token" != "null" ]; then
+            echo "Generated new ADMIN token:"
+            echo "Token: $token"
+            echo "$token" > admin_token.txt
+            echo
+            echo "Save the token above as ADMIN_TOKEN in your .env file"
+        else
+            echo "Error: Failed to generate admin token" >&2
+            exit 1
+        fi
+    else
+        echo "Error: API not available. Please ensure proxy is running." >&2
+        exit 1
+    fi
 
 # ============================================================================
 # CERTIFICATE MANAGEMENT  
@@ -269,9 +342,19 @@ cert-create name domain email="" token="" staging="false":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -349,9 +432,19 @@ cert-list token="":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -394,9 +487,19 @@ cert-show name token="" pem="false":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -434,9 +537,19 @@ cert-delete name token="" force="false":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -490,9 +603,19 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -576,9 +699,19 @@ proxy-list token="":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -593,8 +726,9 @@ proxy-list token="":
         fi
     fi
     
-    # Fallback to Python script
-    docker exec {{container_name}} pixi run python scripts/proxy_list.py "$token_value"
+    # No API available, show error
+    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    exit 1
 
 # Show proxy details
 proxy-show hostname:
@@ -635,9 +769,19 @@ proxy-delete hostname token="" delete-cert="false" force="false":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -677,6 +821,8 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
     #!/usr/bin/env bash
     set -euo pipefail
     
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
         token_value="${ADMIN_TOKEN:-}"
@@ -700,8 +846,9 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d '{
+            "enabled": true,
             "auth_proxy": "'$auth_proxy_value'",
-            "auth_mode": "{{mode}}"
+            "mode": "{{mode}}"
         }')
     
     http_code=$(echo "$response" | tail -n1)
@@ -720,6 +867,8 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
 proxy-auth-disable hostname token="":
     #!/usr/bin/env bash
     set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -920,9 +1069,19 @@ service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -981,9 +1140,19 @@ service-list owned-only="false" token="":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -1024,9 +1193,19 @@ service-delete name token="" force="false" delete-proxy="true":
     elif [[ "{{token}}" == acm_* ]]; then
         token_value="{{token}}"
     else
-        token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
-        if [ -z "$token_value" ]; then
-            echo "Error: Token '{{token}}' not found" >&2
+        # Use API to get token value
+        BASE_URL="${BASE_URL:-{{default_base_url}}}"
+        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+            -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
+                echo "Error: Token '{{token}}' not found" >&2
+                exit 1
+            fi
+        else
+            echo "Error: Failed to retrieve token '{{token}}'" >&2
             exit 1
         fi
     fi
@@ -1771,7 +1950,34 @@ docs-build:
 
 # Clean up orphaned resources
 cleanup-orphaned:
-    docker exec {{container_name}} pixi run python scripts/cleanup_orphaned.py
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get admin token
+    auth_token="${ADMIN_TOKEN:-}"
+    if [ -z "$auth_token" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    echo "Cleaning up orphaned resources..."
+    
+    # Call cleanup endpoints
+    # Clean up orphaned certificates
+    curl -sf -X POST "${BASE_URL}/api/v1/certificates/cleanup" \
+        -H "Authorization: Bearer $auth_token" || echo "Certificate cleanup failed"
+    
+    # Clean up orphaned proxies
+    curl -sf -X POST "${BASE_URL}/api/v1/proxy/cleanup" \
+        -H "Authorization: Bearer $auth_token" || echo "Proxy cleanup failed"
+    
+    # Clean up orphaned Docker services
+    curl -sf -X POST "${BASE_URL}/api/v1/services/cleanup" \
+        -H "Authorization: Bearer $auth_token" || echo "Docker services cleanup failed"
+    
+    echo "Cleanup completed"
 
 # OAuth Commands
 # Generate RSA private key for OAuth JWT signing
@@ -1852,8 +2058,10 @@ oauth-routes-setup domain token="":
         fi
     fi
     
-    # Fallback to docker exec
-    docker exec {{container_name}} pixi run python scripts/oauth_routes_setup.py "{{domain}}" "$token_value"
+    # No API available, show error
+    echo "Error: OAuth routes setup API not available" >&2
+    echo "Please ensure the proxy service is running and accessible" >&2
+    exit 1
 
 # OAuth Client Testing Commands
 # Register a new OAuth client for testing
@@ -1940,16 +2148,79 @@ mcp-test-auth:
 # OAuth Status Commands
 # List OAuth clients
 oauth-clients-list active-only="":
-    docker exec -e ADMIN_TOKEN="${ADMIN_TOKEN}" {{container_name}} pixi run python scripts/oauth_clients_list.py {{active-only}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    auth_token="${ADMIN_TOKEN:-}"
+    
+    if [ -z "$auth_token" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    # Build query parameter
+    query=""
+    if [ "{{active-only}}" = "true" ]; then
+        query="?active_only=true"
+    fi
+    
+    response=$(curl -sf -X GET "${BASE_URL}/api/v1/oauth/clients${query}" \
+        -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        echo "$response" | jq '.' 2>/dev/null || echo "$response"
+    else
+        echo "Error: Failed to list OAuth clients" >&2
+        exit 1
+    fi
 
 # List active OAuth sessions
 oauth-sessions-list:
-    docker exec -e ADMIN_TOKEN="${ADMIN_TOKEN}" {{container_name}} pixi run python scripts/oauth_sessions_list.py
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    auth_token="${ADMIN_TOKEN:-}"
+    
+    if [ -z "$auth_token" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    response=$(curl -sf -X GET "${BASE_URL}/api/v1/oauth/sessions" \
+        -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        echo "$response" | jq '.' 2>/dev/null || echo "$response"
+    else
+        echo "Error: Failed to list OAuth sessions" >&2
+        exit 1
+    fi
 
 # MCP Resource Commands
 # List MCP resources
 resource-list:
-    docker exec -e ADMIN_TOKEN="${ADMIN_TOKEN}" {{container_name}} pixi run python scripts/resource_list.py
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    auth_token="${ADMIN_TOKEN:-}"
+    
+    if [ -z "$auth_token" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    response=$(curl -sf -X GET "${BASE_URL}/api/v1/resources" \
+        -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        echo "$response" | jq '.' 2>/dev/null || echo "$response"
+    else
+        echo "Error: Failed to list MCP resources" >&2
+        exit 1
+    fi
 
 # Run full MCP client test suite
 mcp-test-all:
@@ -2121,12 +2392,25 @@ route-list:
         fi
     fi
     
-    # Fallback to docker exec
-    docker exec {{container_name}} pixi run python scripts/route_list.py
+    # No API available, show error
+    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    exit 1
 
 # Show route details
 route-show route-id:
-    docker exec {{container_name}} pixi run python scripts/route_show.py {{route-id}}
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    response=$(curl -sf -X GET "${BASE_URL}/api/v1/routes/{{route-id}}" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        echo "$response" | jq '.' 2>/dev/null || echo "$response"
+    else
+        echo "Error: Route '{{route-id}}' not found or API not available" >&2
+        exit 1
+    fi
 
 # Create a new route
 route-create path target-type target-value token="" priority="50" methods="*" is-regex="false" description="":
@@ -2150,15 +2434,48 @@ route-create path target-type target-value token="" priority="50" methods="*" is
         token_value="{{token}}"
     fi
     
-    docker exec {{container_name}} pixi run python scripts/route_create.py \
-        "{{path}}" \
-        "{{target-type}}" \
-        "{{target-value}}" \
-        "$token_value" \
-        "{{priority}}" \
-        "{{methods}}" \
-        "{{is-regex}}" \
-        "{{description}}"
+    # Create route via API
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build the JSON payload
+    json_payload='{'
+    json_payload="${json_payload}\"path_pattern\": \"{{path}}\","
+    json_payload="${json_payload}\"target_type\": \"{{target-type}}\","
+    json_payload="${json_payload}\"target_value\": \"{{target-value}}\","
+    json_payload="${json_payload}\"priority\": {{priority}},"
+    json_payload="${json_payload}\"is_regex\": {{is-regex}},"
+    json_payload="${json_payload}\"description\": \"{{description}}\""
+    json_payload="${json_payload}}"
+    
+    # Add methods if specified and not "*"
+    if [ -n "{{methods}}" ] && [ "{{methods}}" != "*" ]; then
+        methods_array=$(echo "{{methods}}" | sed 's/,/","/g' | sed 's/^/["/;s/$/"]/')
+        json_payload=$(echo "$json_payload" | jq ". + {methods: $methods_array}")
+    fi
+    
+    json_payload=$(echo "$json_payload" | jq -c '.')
+    
+    # Debug output
+    if [ "${DEBUG:-}" = "1" ]; then
+        echo "DEBUG: JSON payload: $json_payload" >&2
+        echo "DEBUG: API URL: ${BASE_URL}/api/v1/routes/" >&2
+    fi
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/routes/" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+    else
+        echo "Error creating route: HTTP $http_code" >&2
+        echo "$body" | jq '.' 2>/dev/null || echo "$body" >&2
+        exit 1
+    fi
 
 # Delete a route
 route-delete route-id token="":
@@ -2182,9 +2499,18 @@ route-delete route-id token="":
         token_value="{{token}}"
     fi
     
-    docker exec {{container_name}} pixi run python scripts/route_delete.py \
-        "{{route-id}}" \
-        "$token_value"
+    # Delete route via API
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    response=$(curl -sf -X DELETE "${BASE_URL}/api/v1/routes/{{route-id}}" \
+        -H "Authorization: Bearer $token_value" 2>&1)
+    
+    if [ $? -eq 0 ]; then
+        echo "✓ Route '{{route-id}}' deleted successfully"
+    else
+        echo "Error deleting route: $response" >&2
+        exit 1
+    fi
 
 # ============================================================================
 # SERVICE NAME MIGRATION

@@ -153,6 +153,24 @@ DEFAULT_ROUTES = [
         "enabled": True
     },
     {
+        "route_id": "oauth-protected-resource",
+        "path_pattern": "/.well-known/oauth-protected-resource",
+        "target_type": RouteTargetType.INSTANCE,
+        "target_value": "localhost",
+        "priority": 100,
+        "description": "MCP OAuth protected resource metadata",
+        "enabled": True
+    },
+    {
+        "route_id": "oauth-authorization-server",
+        "path_pattern": "/.well-known/oauth-authorization-server",
+        "target_type": RouteTargetType.INSTANCE,
+        "target_value": "auth",
+        "priority": 95,
+        "description": "OAuth authorization server metadata",
+        "enabled": True
+    },
+    {
         "route_id": "health",
         "path_pattern": "/health",
         "target_type": RouteTargetType.INSTANCE,

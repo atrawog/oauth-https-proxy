@@ -296,6 +296,34 @@ def create_router(storage, cert_manager):
         if not storage.store_proxy_target(hostname, target):
             raise HTTPException(500, "Failed to update proxy target")
         
+        # When enabling auth, create a route for OAuth metadata endpoint
+        if config.enabled and config.auth_proxy:
+            # Create a route to forward OAuth metadata requests to the auth instance
+            from ....proxy.routes import Route, RouteTargetType
+            
+            route_id = f"oauth-metadata-{hostname.replace('.', '-')}"
+            oauth_route = Route(
+                route_id=route_id,
+                path_pattern="/.well-known/oauth-authorization-server",
+                target_type=RouteTargetType.INSTANCE,
+                target_value="auth",  # Route to auth instance, not hostname
+                priority=90,  # High priority but below system routes
+                enabled=True,
+                description=f"OAuth metadata for {hostname}",
+                owner_token_hash=target.owner_token_hash
+            )
+            
+            # Store the route
+            storage.store_route(oauth_route)
+            logger.info(f"Created OAuth metadata route {route_id} for {hostname}")
+            
+            # Add to proxy's enabled routes if using selective mode
+            if target.route_mode == "selective":
+                if route_id not in target.enabled_routes:
+                    target.enabled_routes.append(route_id)
+                    storage.store_proxy_target(hostname, target)
+                    logger.info(f"Added route {route_id} to enabled routes for {hostname}")
+        
         logger.info(f"Auth configured for proxy {hostname}: enabled={config.enabled}")
         
         return {"status": "Auth configured", "proxy_target": target}
@@ -320,6 +348,17 @@ def create_router(storage, cert_manager):
         # Store updated target
         if not storage.store_proxy_target(hostname, target):
             raise HTTPException(500, "Failed to update proxy target")
+        
+        # Remove OAuth metadata route when disabling auth
+        route_id = f"oauth-metadata-{hostname.replace('.', '-')}"
+        if storage.get_route(route_id):
+            storage.delete_route(route_id)
+            logger.info(f"Removed OAuth metadata route {route_id} for {hostname}")
+            
+            # Also remove from proxy's enabled routes if present
+            if target.route_mode == "selective" and route_id in target.enabled_routes:
+                target.enabled_routes.remove(route_id)
+                storage.store_proxy_target(hostname, target)
         
         logger.info(f"Auth disabled for proxy {hostname}")
         
