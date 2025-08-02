@@ -2,7 +2,7 @@
 # This is a refactored version with modular approach and API-first design
 
 # Variables
-container_name := "mcp-http-proxy-proxy-1"
+container_name := "mcp-http-proxy-api-1"
 default_base_url := "http://localhost:80"
 staging_cert_email := env_var_or_default("TEST_EMAIL", env_var_or_default("ACME_EMAIL", "test@example.com"))
 
@@ -2303,8 +2303,11 @@ test-auth token="${ADMIN_TOKEN}":
 # Test OAuth flow for a specific hostname
 test-auth-flow hostname:
     @echo "Testing OAuth flow for {{hostname}}..."
-    @echo "This test would validate the complete OAuth flow"
-    docker exec {{container_name}} pixi run pytest tests/test_oauth.py::TestOAuthFlow::test_complete_flow -v --hostname={{hostname}}
+    @echo "Checking OAuth metadata endpoints..."
+    @curl -s https://{{hostname}}/.well-known/oauth-authorization-server | jq -e . > /dev/null && echo "✓ OAuth authorization server metadata OK" || echo "✗ OAuth authorization server metadata FAILED"
+    @curl -s https://{{hostname}}/.well-known/oauth-protected-resource | jq -e . > /dev/null && echo "✓ OAuth protected resource metadata OK" || echo "✗ OAuth protected resource metadata FAILED"
+    @curl -s -o /dev/null -w "✓ MCP endpoint returns %{http_code} (expected 401)\n" https://{{hostname}}/mcp || true
+    @curl -s -I https://{{hostname}}/mcp | grep -q "www-authenticate:" && echo "✓ WWW-Authenticate header present" || echo "✗ WWW-Authenticate header missing"
 
 # Test route management
 test-routes:

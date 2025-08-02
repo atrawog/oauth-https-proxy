@@ -22,6 +22,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **OAuth Protection**: Protect any proxied service with OAuth authentication
 - **Certificate Isolation**: Multi-domain certificates with ownership tracking
 - **Redis-Only Storage**: No filesystem persistence for enhanced security
+- **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
 
 ### Developer Experience
 - **Web UI**: Built-in management interface at http://localhost
@@ -185,6 +186,26 @@ just mcp-echo-setup
               └──────────┘     └──────────┘    └──────────┘
 ```
 
+#### PROXY Protocol Support
+
+```
+┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ External LB   │────▶│ Port 10001      │────▶│ Port 9000       │
+│ w/ PROXY v1   │     │ PROXY Handler   │     │ Hypercorn/API   │
+└───────────────┘     └─────────────────┘     └─────────────────┘
+                              │
+                              ▼
+                          Redis Cache
+                     (Client IP storage)
+```
+
+The PROXY protocol handler:
+- Listens on port 10001 for connections with PROXY headers
+- Parses and strips PROXY protocol v1 headers
+- Stores real client IP in Redis with connection identifiers
+- Forwards clean traffic to port 9000 (Hypercorn)
+- ASGI middleware retrieves client IP and injects headers
+
 - **Proxy Service**: All-in-one container with HTTP/HTTPS gateway, OAuth server, certificate manager, and Docker management
 - **Redis**: Stores all configuration, certificates, tokens, and session data
 - **Docker Socket**: Enables dynamic container creation and management
@@ -198,6 +219,15 @@ just mcp-echo-setup
 4. **Certificate** → Loads SSL certificate for HTTPS
 5. **Forward** → Proxies request to backend service
 6. **Response** → Returns backend response to client
+
+### PROXY Protocol Flow (for Load Balancers)
+
+1. **LB Connection** → External LB connects to port 10001 with PROXY header
+2. **Header Parsing** → PROXY handler extracts real client IP from header
+3. **IP Storage** → Client info stored in Redis with connection identifiers
+4. **Clean Forward** → Strips PROXY header, forwards to port 9000
+5. **Middleware** → ASGI middleware retrieves client IP from Redis
+6. **Header Injection** → Adds X-Real-IP and X-Forwarded-For headers
 
 ## MCP (Model Context Protocol) Support
 
@@ -253,6 +283,7 @@ Key configuration in `.env`:
 # Domain Configuration
 BASE_DOMAIN=yourdomain.com          # Your base domain
 ADMIN_EMAIL=admin@yourdomain.com   # Email for certificates
+BASE_URL=http://localhost:9000      # Base URL for API endpoints
 
 # Security
 REDIS_PASSWORD=<strong-password>    # Redis password (required)
@@ -273,6 +304,10 @@ ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
 HTTP_PORT=80
 HTTPS_PORT=443
 LOG_LEVEL=INFO
+
+# Internal Ports (for PROXY protocol support)
+# Port 9000: Direct API access (localhost-only)
+# Port 10001: PROXY protocol endpoint (accepts connections from load balancers)
 ```
 
 ### Route Configuration
@@ -358,6 +393,8 @@ just service-proxy-create my-app app.domain.com true $ADMIN_TOKEN
 ### Base URL
 All API endpoints are served under `/api/v1/` prefix, except for OAuth protocol endpoints which are at the root level.
 
+**Note**: When accessing the API directly, use port 9000 (e.g., `http://localhost:9000/api/v1/`). Port 80/443 is for proxied traffic only.
+
 ### Authentication
 All write operations require a Bearer token in the Authorization header:
 ```
@@ -426,7 +463,8 @@ Authorization: Bearer your-admin-token
 
 ### Interactive API Documentation
 Access the full interactive API documentation at:
-- Local: http://localhost/docs
+- Local: http://localhost:9000/docs (direct API access)
+- Local via proxy: http://localhost/docs
 - Production: https://yourdomain.com/docs
 
 ## Development
@@ -482,6 +520,14 @@ mcp-http-proxy/
 ```
 
 ## Recent Updates
+
+### PROXY Protocol Support (NEW)
+- **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
+- **Unified HTTP/HTTPS**: Same mechanism works for both HTTP and HTTPS traffic
+- **Redis Side Channel**: Connection-based client info storage with 60s TTL
+- **TCP-Level Handler**: Parses and strips PROXY headers before forwarding
+- **ASGI Middleware**: Automatically injects X-Real-IP and X-Forwarded-For headers
+- **Port Configuration**: Port 10001 accepts PROXY protocol, forwards to port 9000
 
 ### Port Management System (NEW)
 - **Multi-Port Services**: Services can now expose multiple ports with different bind addresses

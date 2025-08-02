@@ -15,12 +15,18 @@
 ### Logging
 - `LOG_LEVEL` - Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
 
+### PROXY Protocol Support
+- Port 9000: Direct API access (localhost-only, no PROXY protocol)
+- Port 10001: PROXY protocol v1 enabled (for external load balancers/reverse proxies)
+- Client IP preservation through Redis side channel for unified HTTP/HTTPS handling
+
 ### Directory Structure
 ```
 ./analysis/    # All plans and code or issue analysis (add to .gitignore) 
 ./scripts/     # All executable scripts
 ./docs/        # JupyterBook documentation only
 ./tests/       # Pytest tests only
+./src/middleware/  # Middleware components including PROXY protocol handler
 ```
 
 ### Root Cause Analysis (Required Before any Code or Configuration Change)
@@ -83,9 +89,27 @@ just token-email-update <n> <email>      # Update token cert email
 
 ### Docker Services
 - **proxy**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API  
-- **redis**: State storage for all services
+- **redis**: State storage for all services (including PROXY protocol client info)
 
 **Note**: OAuth functionality is now integrated directly into the proxy service - there is no separate auth service.
+
+### PROXY Protocol Architecture
+The system supports HAProxy PROXY protocol v1 for preserving real client IPs:
+
+```
+External LB → Port 10001 (PROXY handler) → Port 9000 (Hypercorn)
+              ↓
+        Parses & strips PROXY header
+        Stores client info in Redis
+              ↓
+        ASGI middleware retrieves client IP
+        Injects X-Real-IP/X-Forwarded-For headers
+```
+
+#### Key Components:
+- **proxy_protocol_handler.py**: TCP-level handler that parses PROXY headers
+- **proxy_client_middleware.py**: ASGI middleware that injects client IPs
+- **Redis side channel**: Stores client info keyed by `proxy:client:{server_port}:{client_port}`
 
 ### Unified Multi-Instance Dispatcher
 **CRITICAL**: UnifiedDispatcher is THE server - FastAPI is just another instance!
@@ -95,7 +119,10 @@ just token-email-update <n> <email>      # Update token cert email
 - `HTTPS_PORT` - HTTPS server port (default: 443)
 - `SERVER_HOST` - Server bind address (default: 0.0.0.0)
 - `SELF_SIGNED_CN` - Common name for self-signed certificates (default: localhost)
-- `BASE_URL` - Base URL for API endpoints (default: http://localhost:80)
+- `BASE_URL` - Base URL for API endpoints (default: http://localhost:9000)
+- **Internal Ports**:
+  - Port 9000: Direct API access (localhost-only)
+  - Port 10001: PROXY protocol endpoint (forwards to 9000)
 
 ```
 Client → Port 80/443 → UnifiedDispatcher
@@ -105,6 +132,9 @@ Client → Port 80/443 → UnifiedDispatcher
          ├→ localhost → FastAPI App (API/GUI)
          ├→ proxy1.com → Proxy App (forwarding only)
          └→ proxy2.com → Proxy App (forwarding only)
+
+For PROXY protocol support:
+External LB → Port 10001 → PROXY Handler → Port 9000 → UnifiedDispatcher
 ```
 
 ### Dual App Architecture
@@ -137,6 +167,8 @@ class DomainInstance:
 - Instance isolation - delete proxy without affecting others
 - Clean resource management per instance
 - Dynamic add/remove without side effects
+- Preserves real client IPs through PROXY protocol
+- Unified HTTP/HTTPS client IP handling via Redis
 
 ## Certificate Manager
 
@@ -855,6 +887,9 @@ just instance-register-oauth <token>                      # Register OAuth serve
 15. **Port Access Tokens**: Fine-grained access control for exposed ports
 16. **Service Port Binding**: Choose between localhost-only or public access per port
 17. **Python-on-whales**: Uses tuples for port publishing: `("host_ip:port", container_port)`
+18. **PROXY Protocol**: TCP-level handler preserves client IPs for both HTTP and HTTPS
+19. **Redis Side Channel**: Connection-based client info storage with 60s TTL
+20. **Unified IP Handling**: Same mechanism works for HTTP header injection and HTTPS
 
 ## MCP 2025-06-18 Compliance Summary
 

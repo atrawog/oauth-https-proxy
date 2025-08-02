@@ -514,6 +514,9 @@ class RedisStorage:
         try:
             targets = []
             for key in self.redis_client.scan_iter(match="proxy:*"):
+                # Skip client info keys (proxy:client:*)
+                if ":client:" in key:
+                    continue
                 hostname = key.split(":", 1)[1]
                 target = self.get_proxy_target(hostname)
                 if target:
