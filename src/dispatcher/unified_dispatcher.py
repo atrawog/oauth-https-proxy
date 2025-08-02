@@ -17,6 +17,7 @@ from datetime import datetime
 
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
+from ..middleware.proxy_protocol_handler import create_proxy_protocol_server
 
 from ..proxy.models import ProxyTarget
 from ..proxy.routes import Route, RouteTargetType
@@ -40,8 +41,8 @@ class DomainInstance:
     def __init__(self, app, domains: List[str], http_port: int, https_port: int, 
                  cert=None, proxy_configs: Dict = None, storage=None):
         self.domains = domains
-        self.http_port = http_port
-        self.https_port = https_port
+        self.http_port = http_port  # Port with PROXY protocol enabled
+        self.https_port = https_port  # Port with PROXY protocol enabled
         self.cert = cert
         self.proxy_configs = proxy_configs or {}
         self.storage = storage
@@ -49,10 +50,12 @@ class DomainInstance:
         self.https_process = None
         self.cert_file = None
         self.key_file = None
+        self.proxy_handler = None
+        self.proxy_handler_https = None
         
         # Create a proxy app for this instance
         from ..proxy.app import create_proxy_app
-        self.app = create_proxy_app(storage) if storage else app
+        self.app = create_proxy_app(storage, domains) if storage else app
         
     async def start(self):
         """Start HTTP and/or HTTPS instances based on proxy configuration."""
@@ -85,27 +88,40 @@ class DomainInstance:
             logger.info(f"HTTPS disabled for domains {self.domains}")
     
     async def start_http(self):
-        """Start HTTP instance."""
+        """Start HTTP instance with PROXY protocol enabled."""
         try:
-            # Configure Hypercorn for HTTP
-            config = HypercornConfig()
-            config.bind = [f"127.0.0.1:{self.http_port}"]
             log_level = os.getenv('LOG_LEVEL')
             if not log_level:
                 raise ValueError("LOG_LEVEL not set in environment - required for server configuration")
+            
+            # Start internal Hypercorn on a different port
+            internal_port = self.http_port + 2000  # e.g., 10002 -> 12002
+            config = HypercornConfig()
+            config.bind = [f"127.0.0.1:{internal_port}"]
             config.loglevel = log_level.upper()
             
-            logger.info(f"Starting HTTP instance on port {self.http_port} for domains: {self.domains}")
+            logger.info(f"Starting internal HTTP instance on port {internal_port} for domains: {self.domains}")
             
-            # Start the server in a background task
+            # Start internal server
             self.http_process = asyncio.create_task(serve(self.app, config))
+            
+            # Start PROXY protocol handler
+            logger.info(f"Starting PROXY protocol handler on port {self.http_port} -> {internal_port}")
+            proxy_server = await create_proxy_protocol_server(
+                backend_host="127.0.0.1",
+                backend_port=internal_port,
+                listen_host="127.0.0.1",
+                listen_port=self.http_port,
+                redis_client=self.storage.redis_client if self.storage else None
+            )
+            self.proxy_handler = asyncio.create_task(proxy_server.serve_forever())
             
         except Exception as e:
             logger.error(f"Failed to start HTTP instance: {e}")
             raise
     
     async def start_https(self):
-        """Start HTTPS instance with certificate."""
+        """Start HTTPS instance with PROXY protocol enabled."""
         try:
             # Write certificate to temp files
             with tempfile.NamedTemporaryFile(mode='w', suffix='.pem', delete=False) as cf:
@@ -116,20 +132,33 @@ class DomainInstance:
                 kf.write(self.cert.private_key_pem)
                 self.key_file = kf.name
             
-            # Configure Hypercorn for HTTPS
-            config = HypercornConfig()
-            config.bind = [f"127.0.0.1:{self.https_port}"]
-            config.certfile = self.cert_file
-            config.keyfile = self.key_file
             log_level = os.getenv('LOG_LEVEL')
             if not log_level:
                 raise ValueError("LOG_LEVEL not set in environment - required for server configuration")
+            
+            # Start internal Hypercorn on a different port 
+            internal_port = self.https_port + 2000  # e.g., 11000 -> 13000
+            config = HypercornConfig()
+            config.bind = [f"127.0.0.1:{internal_port}"]
+            config.certfile = self.cert_file
+            config.keyfile = self.key_file
             config.loglevel = log_level.upper()
             
-            logger.info(f"Starting HTTPS instance on port {self.https_port} for domains: {self.domains}")
+            logger.info(f"Starting internal HTTPS instance on port {internal_port} for domains: {self.domains}")
             
-            # Start the server in a background task
+            # Start internal server
             self.https_process = asyncio.create_task(serve(self.app, config))
+            
+            # Start PROXY protocol handler
+            logger.info(f"Starting PROXY protocol handler on port {self.https_port} -> {internal_port}")
+            proxy_server = await create_proxy_protocol_server(
+                backend_host="127.0.0.1",
+                backend_port=internal_port,
+                listen_host="127.0.0.1",
+                listen_port=self.https_port,
+                redis_client=self.storage.redis_client if self.storage else None
+            )
+            self.proxy_handler_https = asyncio.create_task(proxy_server.serve_forever())
             
         except Exception as e:
             logger.error(f"Failed to start HTTPS instance: {e}")
@@ -137,7 +166,8 @@ class DomainInstance:
             raise
     
     async def stop(self):
-        """Stop both HTTP and HTTPS instances."""
+        """Stop all HTTP and HTTPS instances."""
+        # Stop instances
         if self.http_process:
             self.http_process.cancel()
             try:
@@ -215,9 +245,11 @@ class UnifiedDispatcher:
         """Register a domain instance for specific domains and protocols."""
         for domain in domains:
             if enable_http:
+                # Register port for dispatcher connections (all have PROXY protocol)
                 self.hostname_to_http_port[domain] = http_port
                 logger.info(f"Registered {domain} -> HTTP:{http_port}")
             if enable_https:
+                # Register port for dispatcher connections (all have PROXY protocol)
                 self.hostname_to_https_port[domain] = https_port
                 logger.info(f"Registered {domain} -> HTTPS:{https_port}")
             if not enable_http and not enable_https:
@@ -283,6 +315,7 @@ class UnifiedDispatcher:
         elif route.target_type == RouteTargetType.INSTANCE:
             return self.named_instances.get(route.target_value)
         elif route.target_type == RouteTargetType.HOSTNAME:
+            # hostname_to_http_port contains ports with PROXY protocol enabled
             return self.hostname_to_http_port.get(route.target_value)
         elif route.target_type == RouteTargetType.URL:
             return route.target_value  # Return URL as-is
@@ -466,10 +499,13 @@ class UnifiedDispatcher:
         """Handle incoming HTTP connection and forward to appropriate instance."""
         client_addr = writer.get_extra_info('peername')
         client_ip = client_addr[0] if client_addr else 'unknown'
+        client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
         # Generate correlation ID for this request
         correlation_id = await correlation_generator.generate("http")
         correlation_id_var.set(correlation_id)
+        
+        # No need to store IP mappings - PROXY protocol handles this
         
         logger.debug(
             "New HTTP connection",
@@ -535,8 +571,13 @@ class UnifiedDispatcher:
                                 return
                             else:
                                 # Regular port-based forwarding
+                                instance_name = route.target_value if route.target_type == RouteTargetType.INSTANCE else None
                                 logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target}")
-                                await self._forward_connection(reader, writer, data, '127.0.0.1', target, client_ip)
+                                await self._forward_connection(
+                                    reader, writer, data, '127.0.0.1', target, 
+                                    client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
+                                    hostname=hostname, instance_name=instance_name
+                                )
                                 return
                         else:
                             logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
@@ -553,15 +594,20 @@ class UnifiedDispatcher:
                 await writer.wait_closed()
                 return
             
-            logger.debug(
-                "Forwarding HTTP connection",
-                ip=client_ip,
-                hostname=hostname,
-                target_port=target_port,
-                correlation_id=correlation_id            )
             
-            # Forward to the target instance
-            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port, client_ip)
+            # Determine if this is a named instance or proxy target
+            instance_name = None
+            for name, port in self.named_instances.items():
+                if port == target_port:
+                    instance_name = name
+                    break
+            
+            # Forward to the target instance with PROXY protocol enabled
+            await self._forward_connection(
+                reader, writer, data, '127.0.0.1', target_port, 
+                client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
+                hostname=hostname, instance_name=instance_name
+            )
             
         except Exception as e:
             logger.error(f"Error handling HTTP connection: {e}")
@@ -573,10 +619,13 @@ class UnifiedDispatcher:
         """Handle incoming HTTPS connection and forward to appropriate instance."""
         client_addr = writer.get_extra_info('peername')
         client_ip = client_addr[0] if client_addr else 'unknown'
+        client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
         # Generate correlation ID for this connection
         correlation_id = await correlation_generator.generate("https")
         correlation_id_var.set(correlation_id)
+        
+        # No need to store IP mappings - PROXY protocol handles this
         
         logger.debug(
             "New HTTPS connection",
@@ -639,16 +688,35 @@ class UnifiedDispatcher:
                     wildcard = f"*.{'.'.join(parts[1:])}"
                     target_port = self.hostname_to_https_port.get(wildcard)
             
-            if not target_port:
-                logger.warning(f"No HTTPS instance found for hostname: {hostname}")
+            # Special handling for localhost - route to API instance
+            if not target_port and hostname in ['localhost', '127.0.0.1']:
+                # Route localhost to the API instance via named instance (HTTPS not available, use HTTP)
+                logger.warning(f"HTTPS requested for localhost, but API doesn't have HTTPS configured")
                 writer.close()
                 await writer.wait_closed()
                 return
             
-            logger.debug(f"Forwarding HTTPS {hostname} to localhost:{target_port}")
+            if not target_port:
+                logger.warning(f"No HTTPS instance found for hostname: {hostname}")
+                logger.warning(f"Available HTTPS ports: {list(self.hostname_to_https_port.keys())}")
+                writer.close()
+                await writer.wait_closed()
+                return
             
-            # Forward to the target instance
-            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port, client_ip)
+            # Determine if this is a named instance or proxy target
+            instance_name = None
+            for name, port in self.named_instances.items():
+                if port == target_port:
+                    instance_name = name
+                    break
+            
+            
+            # Forward to the target instance with PROXY protocol enabled for HTTPS
+            await self._forward_connection(
+                reader, writer, data, '127.0.0.1', target_port, 
+                client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
+                hostname=hostname, instance_name=instance_name
+            )
             
         except Exception as e:
             logger.error(f"Error handling HTTPS connection: {e}")
@@ -656,93 +724,57 @@ class UnifiedDispatcher:
             writer.close()
             await writer.wait_closed()
     
-    def _inject_correlation_id_header(self, http_data: bytes, correlation_id: str) -> bytes:
-        """Inject correlation ID header into HTTP request data."""
+
+    async def _send_proxy_protocol_header(self, writer: asyncio.StreamWriter, client_ip: str, client_port: int, server_port: int):
+        """Send PROXY protocol v1 header to preserve client IP for HTTPS connections.
+        
+        Format: PROXY TCP4 <client_ip> <proxy_ip> <client_port> <proxy_port>\r\n
+        Example: PROXY TCP4 192.168.1.100 127.0.0.1 56789 443\r\n
+        """
         try:
-            # Convert to string to manipulate
-            data_str = http_data.decode('utf-8', errors='ignore')
-            lines = data_str.split('\r\n')
+            # Determine protocol version based on IP format
+            protocol = "TCP4" if "." in client_ip else "TCP6"
             
-            # Find the end of headers
-            header_end = -1
-            for i, line in enumerate(lines):
-                if line == '':  # Empty line marks end of headers
-                    header_end = i
-                    break
+            # Build PROXY protocol v1 header
+            proxy_header = f"PROXY {protocol} {client_ip} 127.0.0.1 {client_port} {server_port}\r\n"
             
-            if header_end > 0:
-                # Insert correlation ID header before the empty line
-                correlation_header = f"{Config.LOG_CORRELATION_ID_HEADER}: {correlation_id}"
-                lines.insert(header_end, correlation_header)
-                
-                # Rebuild the request
-                return '\r\n'.join(lines).encode('utf-8')
             
-            return http_data
+            # Send the header
+            writer.write(proxy_header.encode('ascii'))
+            await writer.drain()
+            
         except Exception as e:
-            logger.debug(f"Error injecting correlation ID: {e}")
-            return http_data
-    
-    def _inject_client_ip_headers(self, http_data: bytes, client_ip: str) -> bytes:
-        """Inject X-Forwarded-For and X-Real-IP headers into HTTP request data."""
-        try:
-            # Convert to string to manipulate
-            data_str = http_data.decode('utf-8', errors='ignore')
-            lines = data_str.split('\r\n')
-            
-            # Find the end of headers
-            header_end = -1
-            for i, line in enumerate(lines):
-                if line == '':  # Empty line marks end of headers
-                    header_end = i
-                    break
-            
-            if header_end > 0:
-                # Check if headers already exist
-                has_forwarded_for = False
-                has_real_ip = False
-                
-                for i, line in enumerate(lines[:header_end]):
-                    if line.lower().startswith('x-forwarded-for:'):
-                        has_forwarded_for = True
-                    elif line.lower().startswith('x-real-ip:'):
-                        has_real_ip = True
-                
-                # Insert headers before the empty line
-                if not has_forwarded_for:
-                    lines.insert(header_end, f"X-Forwarded-For: {client_ip}")
-                if not has_real_ip:
-                    lines.insert(header_end, f"X-Real-IP: {client_ip}")
-                
-                # Rebuild the request
-                return '\r\n'.join(lines).encode('utf-8')
-            
-            return http_data
-        except Exception as e:
-            logger.debug(f"Error injecting client IP headers: {e}")
-            return http_data
+            logger.error(f"Error sending PROXY protocol header: {e}")
+            # Continue without PROXY protocol on error
 
     async def _forward_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                                  initial_data: bytes, target_host: str, target_port: int, client_ip: str = None):
-        """Forward a connection to target host:port."""
+                                  initial_data: bytes, target_host: str, target_port: int, 
+                                  client_ip: str = None, client_port: int = None, use_proxy_protocol: bool = False,
+                                  hostname: str = None, instance_name: str = None):
+        """Forward a connection to target host:port with optional PROXY protocol support."""
         try:
             # Connect to the target
             target_reader, target_writer = await asyncio.open_connection(target_host, target_port)
             
-            # Inject headers if this is HTTP data
-            if (initial_data.startswith(b'GET ') or initial_data.startswith(b'POST ') or 
-                initial_data.startswith(b'PUT ') or initial_data.startswith(b'DELETE ') or 
-                initial_data.startswith(b'HEAD ') or initial_data.startswith(b'OPTIONS ') or 
-                initial_data.startswith(b'PATCH ')):
+            # Send PROXY protocol header to preserve real client IP
+            if use_proxy_protocol:
+                # Use defaults if not provided
+                if not client_ip or client_ip == 'unknown':
+                    client_ip = '127.0.0.1'
+                if not client_port:
+                    client_port = 0
                 
-                # Inject correlation ID header if we have one
-                correlation_id = correlation_id_var.get()
-                if correlation_id:
-                    initial_data = self._inject_correlation_id_header(initial_data, correlation_id)
-                
-                # Inject client IP headers if we have one
-                if client_ip and client_ip != 'unknown':
-                    initial_data = self._inject_client_ip_headers(initial_data, client_ip)
+                # Enhanced logging with hostname and instance
+                instance_info = f" (instance: {instance_name})" if instance_name else ""
+                logger.info(
+                    f"Forwarding connection - Client: {client_ip}:{client_port} -> "
+                    f"Hostname: {hostname or 'unknown'} -> "
+                    f"Target: {target_host}:{target_port}{instance_info} "
+                    f"[PROXY protocol: {'enabled' if use_proxy_protocol else 'disabled'}]"
+                )
+                await self._send_proxy_protocol_header(target_writer, client_ip, client_port, target_port)
+            
+            # No header injection - using PROXY protocol instead
             
             # Send the initial data we already read
             target_writer.write(initial_data)
@@ -837,8 +869,8 @@ class UnifiedMultiInstanceServer:
         # Pass storage to dispatcher for route management
         storage = https_server_instance.manager.storage if https_server_instance else None
         self.dispatcher = UnifiedDispatcher(host, storage)
-        self.next_http_port = 9001   # Starting port for HTTP instances (9000 reserved for API)
-        self.next_https_port = 10000 # Starting port for HTTPS instances
+        self.next_http_port = 10002   # Starting port for HTTP instances (10001 reserved for API)
+        self.next_https_port = 11000  # Starting port for HTTPS instances
         
     async def create_instance_for_proxy(self, hostname: str):
         """Dynamically create and start an instance for a proxy target."""
@@ -998,6 +1030,8 @@ class UnifiedMultiInstanceServer:
     
     async def run(self):
         """Run the unified multi-instance server architecture."""
+        logger.info("UnifiedMultiInstanceServer.run() started")
+        
         # Set global instance for dynamic management
         global unified_server_instance
         unified_server_instance = self
@@ -1006,9 +1040,14 @@ class UnifiedMultiInstanceServer:
             logger.warning("No HTTPS server instance available")
             return
         
+        logger.info("HTTPS server available, listing proxy targets")
+        
         # Get proxy configurations first
         proxy_targets = self.https_server.manager.storage.list_proxy_targets()
         domain_to_proxy = {pt.hostname: pt for pt in proxy_targets if pt.enabled}
+        
+        logger.info(f"Found {len(proxy_targets)} proxy targets, {len(domain_to_proxy)} enabled")
+        logger.info(f"Enabled proxy targets: {list(domain_to_proxy.keys())}")
         
         # Group domains by the certificate they're configured to use (from proxy config)
         cert_to_domains: Dict[str, List[str]] = {}
@@ -1020,6 +1059,11 @@ class UnifiedMultiInstanceServer:
         
         # Group domains based on proxy configuration
         for hostname, proxy_target in domain_to_proxy.items():
+            # Skip localhost - it's handled by the API directly
+            if hostname in ['localhost', '127.0.0.1']:
+                logger.info(f"Skipping instance creation for {hostname} - handled by API")
+                continue
+                
             cert_name = proxy_target.cert_name
             
             if cert_name and cert_name in all_certs:
@@ -1040,8 +1084,11 @@ class UnifiedMultiInstanceServer:
         self.dispatcher.load_routes_from_storage()
         
         # Register the API service as a named instance
-        # This is the main FastAPI app that runs on port 9000
-        self.dispatcher.register_named_instance('api', 9000)
+        # The API runs on port 10001 with PROXY protocol
+        self.dispatcher.register_named_instance('api', 10001)
+        
+        # Register localhost to route to the API instance
+        self.dispatcher.register_instance(['localhost', '127.0.0.1'], 10001, 10001, enable_http=True, enable_https=False)
         
         if not cert_to_domains and not domain_to_proxy:
             logger.info("No additional certificates or proxy configurations available")
@@ -1068,6 +1115,8 @@ class UnifiedMultiInstanceServer:
             )
             
             self.instances.append(instance)
+            
+            logger.info(f"Starting instance for domains: {domains}, cert: {cert_name}")
             
             # Start the instance
             await instance.start()
@@ -1101,6 +1150,8 @@ class UnifiedMultiInstanceServer:
             self.next_https_port += 1
         
         logger.info(f"Started {len(self.instances)} domain instances")
+        for instance in self.instances:
+            logger.info(f"Instance domains: {instance.domains}, HTTP port: {instance.http_port}, HTTPS port: {instance.https_port}")
         
         # Start the dispatcher (non-blocking now!)
         await self.dispatcher.start()

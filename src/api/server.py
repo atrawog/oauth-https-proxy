@@ -63,6 +63,13 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         allow_headers=["*"],
     )
     
+    # Add middleware to identify instance
+    @app.middleware("http")
+    async def add_instance_name(request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Instance-Name"] = "api"
+        return response
+    
     # Mount static files
     static_path = os.path.join(os.path.dirname(__file__), "static")
     app.mount("/static", StaticFiles(directory=static_path), name="static")

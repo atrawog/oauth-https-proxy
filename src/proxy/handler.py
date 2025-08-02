@@ -50,6 +50,9 @@ class EnhancedProxyHandler:
         """Handle incoming proxy request."""
         start_time = time.time()
         
+        # Debug logging to trace requests
+        logger.info(f"Proxy handler received request: {request.method} {request.url} from {request.client}")
+        
         # Extract correlation ID from headers or generate new one
         correlation_id = request.headers.get(Config.LOG_CORRELATION_ID_HEADER)
         if correlation_id:
@@ -58,10 +61,20 @@ class EnhancedProxyHandler:
             # If no correlation ID from dispatcher, use the one from context (if set)
             correlation_id = correlation_id_var.get()
         
-        # Extract client IP from headers or connection
-        client_ip = request.headers.get("X-Forwarded-For", 
-                                       request.headers.get("X-Real-IP", 
-                                                         request.client.host if request.client else "unknown"))
+        # Extract client IP from headers first (injected by PROXY protocol handler)
+        client_ip = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for")
+        if client_ip:
+            # X-Forwarded-For may contain multiple IPs, take the first one
+            client_ip = client_ip.split(",")[0].strip()
+        else:
+            # Fallback to connection info
+            client_ip = request.client.host if request.client else "unknown"
+        
+        # Log the client IP to verify PROXY protocol is working
+        logger.info(
+            f"Proxy handler received request from {client_ip} "
+            f"(via {'X-Real-IP/X-Forwarded-For headers' if request.headers.get('x-real-ip') or request.headers.get('x-forwarded-for') else 'connection info'})"
+        )
         
         # Extract hostname from request
         hostname = request.headers.get("host", "").split(":")[0]
@@ -531,6 +544,8 @@ class EnhancedProxyHandler:
             # First try to get it as a port (for localhost instances)
             port = self.storage.redis_client.get(f"instance:{instance_name}")
             if port:
+                # Instance ports in Redis have PROXY protocol enabled
+                # But the proxy handler doesn't need to know - it just forwards
                 instance_target = f"http://localhost:{port}"
             else:
                 # Try to get it as a service URL

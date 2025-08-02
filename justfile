@@ -1183,12 +1183,21 @@ proxy-list token="":
     fi
     
     # Try API first if available
-    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
-        # Try API call
-        response=$(curl -sf -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/proxy/targets/formatted" 2>/dev/null || true)
+    if [ "${USE_API:-true}" = "true" ]; then
+        # Try internal port first (for local development)
+        response=$(curl -sf -H "Authorization: Bearer $token_value" "http://localhost:9000/api/v1/proxy/targets/formatted" 2>/dev/null || true)
         if [ -n "$response" ]; then
             echo "$response"
             exit 0
+        fi
+        
+        # Fall back to BASE_URL if set
+        if [ -n "${BASE_URL:-}" ]; then
+            response=$(curl -sf -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/proxy/targets/formatted" 2>/dev/null || true)
+            if [ -n "$response" ]; then
+                echo "$response"
+                exit 0
+            fi
         fi
     fi
     

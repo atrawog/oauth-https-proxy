@@ -75,16 +75,37 @@ async def run_server(config: Config) -> None:
     scheduler.start()
     
     try:
-        # Start the FastAPI app on port 9000
+        # Start the FastAPI app on dual ports
         from hypercorn.asyncio import serve
         from hypercorn.config import Config as HypercornConfig
+        from .middleware.proxy_protocol_handler import create_proxy_protocol_server
         
+        # Port 9000 without PROXY protocol (for health checks and direct access)
         api_config = HypercornConfig()
-        api_config.bind = ["127.0.0.1:9000"]
+        api_config.bind = ["0.0.0.0:9000"]
         api_config.loglevel = config.LOG_LEVEL.upper()
         
-        logger.info("Starting FastAPI app on port 9000")
+        logger.info("Starting FastAPI app on port 9000 (no PROXY protocol)")
         api_task = asyncio.create_task(serve(app, api_config))
+        
+        # Port 9001 - internal Hypercorn without PROXY protocol
+        internal_config = HypercornConfig()
+        internal_config.bind = ["127.0.0.1:9001"]
+        internal_config.loglevel = config.LOG_LEVEL.upper()
+        
+        logger.info("Starting internal FastAPI app on port 9001")
+        internal_task = asyncio.create_task(serve(app, internal_config))
+        
+        # Port 10001 - PROXY protocol handler forwarding to 9001
+        logger.info("Starting PROXY protocol handler on port 10001 -> 9001")
+        proxy_server = await create_proxy_protocol_server(
+            backend_host="127.0.0.1",
+            backend_port=9001,
+            listen_host="127.0.0.1", 
+            listen_port=10001,
+            redis_client=manager.storage.redis_client
+        )
+        proxy_task = asyncio.create_task(proxy_server.serve_forever())
         
         # Run unified multi-instance server for proxy domains
         unified_server = UnifiedMultiInstanceServer(

@@ -11,8 +11,10 @@ from starlette.requests import Request
 from starlette.responses import Response, PlainTextResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
+from starlette.middleware.base import BaseHTTPMiddleware
 from .handler import EnhancedProxyHandler
 from ..shared.logging import get_logger
+from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 
 logger = get_logger(__name__)
 
@@ -20,30 +22,23 @@ logger = get_logger(__name__)
 class ProxyOnlyApp:
     """Minimal proxy application without FastAPI overhead."""
     
-    def __init__(self, storage):
+    def __init__(self, storage, domains=None):
         """Initialize proxy-only app with its own resources."""
         self.storage = storage
+        self.domains = domains or []
         
-        # Check if logging is already configured to avoid duplicate handlers
+        # Always configure Redis logging for proxy instances
+        # Each Hypercorn instance needs its own Redis handler
         import logging as std_logging
         from ..shared.logging import configure_logging, AsyncRedisLogHandler
         
-        root_logger = std_logging.getLogger()
-        has_redis_handler = any(
-            isinstance(h, AsyncRedisLogHandler) for h in root_logger.handlers
-        )
-        
-        if has_redis_handler:
-            # Logging already configured, reuse it
-            self.logging_components = None
-            logger.info("Proxy instance using existing Redis logging configuration")
-        elif storage and storage.redis_client:
-            # Configure logging only if not already done
+        if storage and storage.redis_client:
+            # Always create new Redis logging configuration
             self.logging_components = configure_logging(storage.redis_client)
-            logger.info("Proxy instance configured with Redis logging")
+            logger.info("Proxy instance configured with dedicated Redis logging")
         else:
             self.logging_components = None
-            logger.warning("Proxy instance running without Redis logging")
+            logger.warning("Proxy instance running without Redis logging - no storage/redis_client")
             
         # Each instance gets its own proxy handler with isolated httpx client
         self.proxy_handler = EnhancedProxyHandler(storage)
@@ -56,6 +51,19 @@ class ProxyOnlyApp:
             on_startup=[self.startup],
             on_shutdown=[self.shutdown]
         )
+        
+        # Add middleware to inject client IP from PROXY protocol
+        redis_client = storage.redis_client if storage else None
+        self.app.add_middleware(ProxyClientMiddleware, redis_client=redis_client)
+        
+        # Add middleware to identify instance
+        async def add_instance_header(request: Request, call_next):
+            response = await call_next(request)
+            instance_name = ','.join(self.domains) if self.domains else 'proxy'
+            response.headers["X-Instance-Name"] = instance_name
+            return response
+        
+        self.app.add_middleware(BaseHTTPMiddleware, dispatch=add_instance_header)
     
     async def startup(self):
         """Minimal startup - no lifespan complexity."""
@@ -100,7 +108,7 @@ class ProxyOnlyApp:
         return self.app
 
 
-def create_proxy_app(storage):
+def create_proxy_app(storage, domains=None):
     """Factory function to create a proxy-only ASGI app."""
-    proxy_app = ProxyOnlyApp(storage)
+    proxy_app = ProxyOnlyApp(storage, domains)
     return proxy_app.get_asgi_app()
