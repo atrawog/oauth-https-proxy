@@ -47,7 +47,6 @@ class LogEntry(BaseModel):
     level: str
     component: str
     message: str
-    correlation_id: Optional[str] = None
     ip: Optional[str] = None
     client_id: Optional[str] = None
     hostname: Optional[str] = None
@@ -69,9 +68,9 @@ class LogQueryResponse(BaseModel):
     query_params: Dict
 
 
-class CorrelationFlowResponse(BaseModel):
-    """Correlation flow response model."""
-    correlation_id: str
+class IPFlowResponse(BaseModel):
+    """IP flow response model."""
+    ip: str
     total_requests: int
     duration_ms: Optional[float] = None
     start_time: Optional[float] = None
@@ -157,7 +156,6 @@ def create_router(storage: RedisStorage) -> APIRouter:
                     "level": "ERROR" if int(req.get("status", 0)) >= 500 else "INFO",
                     "component": "http.request",
                     "message": f"{req.get('method', '')} {req.get('path', '')} -> {req.get('status', '')}",
-                    "correlation_id": req.get("correlation_id"),
                     "ip": req.get("ip"),
                     "hostname": req.get("hostname"),
                     "method": req.get("method"),
@@ -168,7 +166,9 @@ def create_router(storage: RedisStorage) -> APIRouter:
                     "context": {
                         "user_agent": req.get("user_agent", ""),
                         "auth_user": req.get("auth_user", ""),
-                        "query": req.get("query", "")
+                        "query": req.get("query", ""),
+                        # Add all OAuth fields
+                        **{k: v for k, v in req.items() if k.startswith("oauth_") and v}
                     }
                 }
                 
@@ -297,80 +297,7 @@ def create_router(storage: RedisStorage) -> APIRouter:
             }
         )
     
-    @router.get("/correlation/{correlation_id}", response_model=CorrelationFlowResponse)
-    async def get_correlation_flow(
-        correlation_id: str,
-        include_sub_requests: bool = Query(True, description="Include sub-requests in the flow"),
-        _token: Dict = Depends(verify_admin_token)
-    ):
-        """Get complete request flow by correlation ID.
-        
-        Returns all log entries that are part of the same request flow,
-        including OAuth authorization, token generation, and subsequent API calls.
-        """
-        logger.info(f"Retrieving correlation flow: {correlation_id}")
-        
-        # Query all logs for this correlation ID
-        logs = []
-        
-        # Look for logs indexed by correlation
-        index_key = f"logs:index:correlation:{correlation_id}"
-        log_ids = redis_client.zrange(index_key, 0, -1)
-        
-        for log_id in log_ids:
-            log_key = f"logs:entry:{log_id}"
-            log_data = redis_client.get(log_key)
-            if log_data:
-                logs.append(json.loads(log_data))
-        
-        # Also check for sub-requests if requested
-        if include_sub_requests:
-            parent_pattern = f"logs:entry:{correlation_id}*"
-            for key in redis_client.scan_iter(match=parent_pattern, count=100):
-                log_data = redis_client.get(key)
-                if log_data:
-                    log_entry = json.loads(log_data)
-                    if log_entry not in logs:
-                        logs.append(log_entry)
-        
-        if not logs:
-            raise HTTPException(
-                status_code=404,
-                detail=f"No logs found for correlation ID: {correlation_id}"
-            )
-        
-        # Sort by timestamp
-        logs.sort(key=lambda x: x.get("timestamp", 0))
-        
-        # Calculate flow metrics
-        start_time = min(log["timestamp"] for log in logs)
-        end_time = max(log["timestamp"] for log in logs)
-        duration_ms = (end_time - start_time) * 1000
-        
-        # Build flow summary
-        flow_summary = {
-            "total_requests": len(logs),
-            "error_count": sum(1 for log in logs if log.get("level") in ["ERROR", "CRITICAL"]),
-            "warning_count": sum(1 for log in logs if log.get("level") == "WARNING"),
-            "unique_ips": list(set(log.get("ip") for log in logs if log.get("ip"))),
-            "unique_hosts": list(set(log.get("hostname") for log in logs if log.get("hostname"))),
-            "events": {}
-        }
-        
-        # Count events
-        for log in logs:
-            event = log.get("event", "unknown")
-            flow_summary["events"][event] = flow_summary["events"].get(event, 0) + 1
-        
-        return CorrelationFlowResponse(
-            correlation_id=correlation_id,
-            total_requests=len(logs),
-            duration_ms=duration_ms,
-            start_time=start_time,
-            end_time=end_time,
-            logs=[LogEntry(**log) for log in logs],
-            flow_summary=flow_summary
-        )
+    # Removed correlation endpoint - using IP-based queries instead
     
     @router.get("/search", response_model=LogQueryResponse)
     async def search_logs(

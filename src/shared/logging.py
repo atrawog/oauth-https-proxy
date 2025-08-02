@@ -15,7 +15,7 @@ import os
 import re
 import secrets
 import time
-from contextvars import ContextVar
+# Removed ContextVar import - no longer using correlation IDs
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Union
@@ -27,8 +27,7 @@ from structlog.stdlib import BoundLogger
 
 from .config import Config
 
-# Context variable for correlation ID tracking
-correlation_id_var: ContextVar[Optional[str]] = ContextVar("correlation_id", default=None)
+# Removed correlation ID tracking - using IP as primary identifier
 
 # Sensitive data patterns to mask
 SENSITIVE_PATTERNS = [
@@ -42,35 +41,7 @@ SENSITIVE_PATTERNS = [
 ]
 
 
-class CorrelationIDGenerator:
-    """Generates unique correlation IDs for request tracking."""
-    
-    def __init__(self):
-        self._counter = 0
-        self._lock = asyncio.Lock()
-    
-    async def generate(self, source: str = "unknown") -> str:
-        """Generate a unique correlation ID.
-        
-        Format: {timestamp}-{source}-{random}-{sequence}
-        Example: 1735689600-https-a7b3c9d2-001
-        """
-        async with self._lock:
-            self._counter = (self._counter + 1) % 1000
-            
-        timestamp = int(time.time())
-        random_part = secrets.token_hex(4)
-        sequence = f"{self._counter:03d}"
-        
-        return f"{timestamp}-{source}-{random_part}-{sequence}"
-    
-    def extract_parent_id(self, correlation_id: str) -> str:
-        """Extract parent correlation ID for sub-requests."""
-        parts = correlation_id.split("-")
-        if len(parts) >= 4:
-            # Keep timestamp, source, and random parts
-            return "-".join(parts[:3])
-        return correlation_id
+# Removed CorrelationIDGenerator - using IP as primary identifier
 
 
 class SensitiveDataMasker:
@@ -134,12 +105,6 @@ class RedisLogStorage:
     
     async def _create_indexes(self, log_id: str, entry: Dict[str, Any]):
         """Create indexes for efficient querying."""
-        # Index by correlation ID
-        if correlation_id := entry.get("correlation_id"):
-            index_key = f"{self.index_prefix}correlation:{correlation_id}"
-            await self.redis.zadd(index_key, {log_id: entry["timestamp"]})
-            await self.redis.expire(index_key, self.ttl_seconds)
-        
         # Index by IP
         if ip := entry.get("ip"):
             index_key = f"{self.index_prefix}ip:{ip}"
@@ -172,33 +137,7 @@ class RedisLogStorage:
         """Query logs by OAuth client ID."""
         return await self._query_by_index(f"client:{client_id}", hours)
     
-    async def query_by_correlation(self, correlation_id: str) -> List[Dict[str, Any]]:
-        """Query all logs for a correlation ID flow."""
-        index_key = f"{self.index_prefix}correlation:{correlation_id}"
-        log_ids = await self.redis.zrange(index_key, 0, -1)
-        
-        logs = []
-        for log_id in log_ids:
-            log_key = f"logs:entry:{log_id.decode() if isinstance(log_id, bytes) else log_id}"
-            if data := await self.redis.get(log_key):
-                logs.append(json.loads(data))
-        
-        # Also get sub-requests
-        parent_pattern = f"logs:entry:{correlation_id}*"
-        cursor = 0
-        while True:
-            cursor, keys = await self.redis.scan(
-                cursor, match=parent_pattern, count=100
-            )
-            for key in keys:
-                if data := await self.redis.get(key):
-                    log_entry = json.loads(data)
-                    if log_entry not in logs:
-                        logs.append(log_entry)
-            if cursor == 0:
-                break
-        
-        return sorted(logs, key=lambda x: x.get("timestamp", 0))
+    # Removed query_by_correlation - using IP as primary identifier
     
     async def _query_by_index(self, index_suffix: str, hours: int) -> List[Dict[str, Any]]:
         """Query logs using an index."""
@@ -237,7 +176,6 @@ class AsyncRedisLogHandler(logging.Handler):
                 "level": record.levelname,
                 "component": record.name,
                 "message": record.getMessage(),
-                "correlation_id": getattr(record, "correlation_id", None),
                 "ip": getattr(record, "ip", None),
                 "client_id": getattr(record, "client_id", None),
                 "hostname": getattr(record, "hostname", None),
@@ -313,11 +251,7 @@ class AsyncRedisLogHandler(logging.Handler):
                 await asyncio.sleep(1)
 
 
-def inject_correlation_id(logger, method_name, event_dict):
-    """Inject correlation ID into all log entries."""
-    if correlation_id := correlation_id_var.get():
-        event_dict["correlation_id"] = correlation_id
-    return event_dict
+# Removed inject_correlation_id - using IP as primary identifier
 
 
 def inject_request_context(logger, method_name, event_dict):
@@ -354,7 +288,6 @@ def configure_logging(redis_client: Optional[redis.Redis] = None) -> Dict[str, A
         structlog.stdlib.filter_by_level,
         structlog.stdlib.add_logger_name,
         structlog.stdlib.add_log_level,
-        inject_correlation_id,
         inject_request_context,
         structlog.stdlib.PositionalArgumentsFormatter(),
         TimeStamper(fmt="iso"),
@@ -383,7 +316,6 @@ def configure_logging(redis_client: Optional[redis.Redis] = None) -> Dict[str, A
     )
     
     # Create components
-    correlation_generator = CorrelationIDGenerator()
     masker = SensitiveDataMasker() if config["mask_sensitive"] else None
     redis_handler = None
     log_storage = None
@@ -403,7 +335,6 @@ def configure_logging(redis_client: Optional[redis.Redis] = None) -> Dict[str, A
     
     return {
         "logger": structlog.get_logger(),
-        "correlation_generator": correlation_generator,
         "masker": masker,
         "log_storage": log_storage,
         "redis_handler": redis_handler,
@@ -432,7 +363,6 @@ def set_request_logger(logger):
 async def log_request(
     logger: BoundLogger,
     request: Any,
-    correlation_id: str,
     ip: str,
     **extra_context
 ) -> Dict[str, Any]:
@@ -440,7 +370,6 @@ async def log_request(
     config = get_logger_config()
     
     log_data = {
-        "correlation_id": correlation_id,
         "ip": ip,
         "method": request.method,
         "path": str(request.url.path),
@@ -464,10 +393,10 @@ async def log_request(
     
     # Also log to RequestLogger if available
     request_logger = get_request_logger()
+    request_key = None
     if request_logger:
         try:
-            await request_logger.log_request(
-                correlation_id=correlation_id,
+            request_key = await request_logger.log_request(
                 ip=ip,
                 hostname=log_data.get("hostname", ""),
                 method=log_data.get("method", ""),
@@ -477,6 +406,7 @@ async def log_request(
                 auth_user=extra_context.get("auth_user"),
                 **{k: v for k, v in extra_context.items() if k not in ["hostname", "auth_user"]}
             )
+            log_data["_request_key"] = request_key  # Store for later use
         except Exception as e:
             logger.error(f"Failed to log request to RequestLogger: {e}")
     
@@ -487,14 +417,12 @@ async def log_response(
     logger: BoundLogger,
     response: Any,
     duration_ms: float,
-    correlation_id: str,
     **extra_context
 ) -> Dict[str, Any]:
     """Log HTTP response details."""
     config = get_logger_config()
     
     log_data = {
-        "correlation_id": correlation_id,
         "status": getattr(response, "status_code", None),
         "duration_ms": round(duration_ms, 2),
         **extra_context
@@ -515,10 +443,13 @@ async def log_response(
     level = "error" if log_data.get("status", 0) >= 500 else "info"
     getattr(logger, level)("Response sent", **log_data)
     
-    # Also log to RequestLogger if available
+    # Log to RequestLogger if available
     request_logger = get_request_logger()
     if request_logger:
         try:
+            # Extract IP from extra_context
+            ip = extra_context.get("ip", "unknown")
+            
             error = None
             if log_data.get("status", 0) >= 400:
                 error = {
@@ -527,12 +458,12 @@ async def log_response(
                 }
             
             await request_logger.log_response(
-                correlation_id=correlation_id,
+                ip=ip,
                 status=log_data.get("status", 0),
                 duration_ms=duration_ms,
                 response_size=len(log_data.get("response_body", "")),
                 error=error,
-                **{k: v for k, v in extra_context.items() if k not in ["hostname", "status"]}
+                **{k: v for k, v in extra_context.items() if k not in ["ip", "status"]}
             )
         except Exception as e:
             logger.error(f"Failed to log response to RequestLogger: {e}")

@@ -23,13 +23,12 @@ from ..proxy.models import ProxyTarget
 from ..proxy.routes import Route, RouteTargetType
 from ..proxy.app import create_proxy_app
 from .models import DomainInstance
-from ..shared.logging import get_logger, correlation_id_var, CorrelationIDGenerator, configure_logging
+from ..shared.logging import get_logger, configure_logging
 from ..shared.config import Config
 
 logger = get_logger(__name__)
 
-# Initialize correlation ID generator
-correlation_generator = CorrelationIDGenerator()
+# Removed correlation ID generator - using IP as primary identifier
 
 # Global instance for dynamic management
 unified_server_instance = None
@@ -501,16 +500,11 @@ class UnifiedDispatcher:
         client_ip = client_addr[0] if client_addr else 'unknown'
         client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
-        # Generate correlation ID for this request
-        correlation_id = await correlation_generator.generate("http")
-        correlation_id_var.set(correlation_id)
-        
         # No need to store IP mappings - PROXY protocol handles this
         
         logger.debug(
             "New HTTP connection",
-            ip=client_ip,
-            correlation_id=correlation_id
+            ip=client_ip
         )
         
         try:
@@ -621,16 +615,12 @@ class UnifiedDispatcher:
         client_ip = client_addr[0] if client_addr else 'unknown'
         client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
-        # Generate correlation ID for this connection
-        correlation_id = await correlation_generator.generate("https")
-        correlation_id_var.set(correlation_id)
-        
         # No need to store IP mappings - PROXY protocol handles this
         
         logger.debug(
             "New HTTPS connection",
-            ip=client_ip,
-            correlation_id=correlation_id        )
+            ip=client_ip
+        )
         
         try:
             # Peek at the data to get SNI hostname

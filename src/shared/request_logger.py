@@ -29,7 +29,6 @@ class RequestLogger:
         
     async def log_request(
         self,
-        correlation_id: str,
         ip: str,
         hostname: str,
         method: str,
@@ -45,7 +44,6 @@ class RequestLogger:
         # Create request data
         request_data = {
             "timestamp": timestamp,
-            "correlation_id": correlation_id,
             "ip": ip,
             "hostname": hostname,
             "method": method,
@@ -57,8 +55,9 @@ class RequestLogger:
             **extra_fields
         }
         
-        # Store as hash for efficient retrieval
-        request_key = f"req:{correlation_id}"
+        # Generate unique key using IP and timestamp
+        sequence = int((timestamp * 1000) % 1000000)
+        request_key = f"req:{ip}:{int(timestamp)}:{sequence}"
         await self.redis.hset(request_key, mapping=request_data)
         await self.redis.expire(request_key, self.ttl_seconds)
         
@@ -75,6 +74,19 @@ class RequestLogger:
         if auth_user:
             await self.redis.zadd(f"idx:req:user:{auth_user}", {request_key: timestamp})
             await self.redis.expire(f"idx:req:user:{auth_user}", self.ttl_seconds)
+        
+        # OAuth-specific indexes
+        if oauth_client_id := extra_fields.get("oauth_client_id"):
+            await self.redis.zadd(f"idx:req:oauth:client:{oauth_client_id}", {request_key: timestamp})
+            await self.redis.expire(f"idx:req:oauth:client:{oauth_client_id}", self.ttl_seconds)
+        
+        if oauth_username := extra_fields.get("oauth_username"):
+            await self.redis.zadd(f"idx:req:oauth:user:{oauth_username}", {request_key: timestamp})
+            await self.redis.expire(f"idx:req:oauth:user:{oauth_username}", self.ttl_seconds)
+        
+        if oauth_token_jti := extra_fields.get("oauth_token_jti"):
+            await self.redis.zadd(f"idx:req:oauth:token:{oauth_token_jti}", {request_key: timestamp})
+            await self.redis.expire(f"idx:req:oauth:token:{oauth_token_jti}", self.ttl_seconds)
         
         # Global timeline index
         await self.redis.zadd("idx:req:all", {request_key: timestamp})
@@ -106,25 +118,33 @@ class RequestLogger:
         await self.redis.pfadd(f"stats:unique_ips:{date_hour}", ip)
         await self.redis.pfadd(f"stats:unique_ips:{hostname}:{date_hour}", ip)
         
+        # Return the request key for linking with response
+        return request_key
+        
     async def log_response(
         self,
-        correlation_id: str,
+        ip: str,
         status: int,
         duration_ms: float,
         response_size: Optional[int] = None,
         error: Optional[Dict[str, Any]] = None,
         **extra_fields
     ) -> None:
-        """Log HTTP response and link to request."""
+        """Log HTTP response data."""
         timestamp = time.time()
-        request_key = f"req:{correlation_id}"
         
-        # Update request with response data
+        # Generate response key using IP and timestamp
+        sequence = int((timestamp * 1000) % 1000000)
+        response_key = f"resp:{ip}:{int(timestamp)}:{sequence}"
+        
+        # Create response data
         response_data = {
+            "timestamp": timestamp,
+            "ip": ip,
             "status": status,
             "duration_ms": round(duration_ms, 2),
             "response_size": response_size or 0,
-            "response_timestamp": timestamp,
+            "type": "response",
             **extra_fields
         }
         
@@ -132,21 +152,24 @@ class RequestLogger:
             response_data["error_type"] = error.get("type", "unknown")
             response_data["error_message"] = error.get("message", "")
         
-        # Update the request hash
-        await self.redis.hset(request_key, mapping=response_data)
+        # Store response data separately
+        await self.redis.hset(response_key, mapping=response_data)
+        await self.redis.expire(response_key, self.ttl_seconds)
         
         # Index by status code
-        await self.redis.zadd(f"idx:req:status:{status}", {request_key: timestamp})
+        await self.redis.zadd(f"idx:req:status:{status}", {response_key: timestamp})
         await self.redis.expire(f"idx:req:status:{status}", self.ttl_seconds)
+        
+        # Index by IP for responses
+        await self.redis.zadd(f"idx:resp:ip:{ip}", {response_key: timestamp})
+        await self.redis.expire(f"idx:resp:ip:{ip}", self.ttl_seconds)
         
         # Index errors specially
         if status >= 400:
-            await self.redis.zadd(f"idx:req:errors", {request_key: timestamp})
+            await self.redis.zadd(f"idx:req:errors", {response_key: timestamp})
             
-            # Get request data for error tracking
-            request_data = await self.redis.hgetall(request_key)
-            if request_data:
-                hostname = request_data.get("hostname", "unknown")
+            # Track error statistics
+            if hostname := extra_fields.get("hostname", "unknown"):
                 
                 # Track error rates
                 date_hour = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d:%H")
@@ -161,11 +184,10 @@ class RequestLogger:
         
         # Index slow requests
         if duration_ms > 1000:  # Requests over 1 second
-            await self.redis.zadd(f"idx:req:slow", {request_key: duration_ms})
+            await self.redis.zadd(f"idx:req:slow", {response_key: duration_ms})
         
         # Update response time statistics
-        if request_data := await self.redis.hgetall(request_key):
-            hostname = request_data.get("hostname", "unknown")
+        if hostname := extra_fields.get("hostname", "unknown"):
             # Track p50, p95, p99 in time windows
             await self._update_response_time_stats(hostname, duration_ms)
     
@@ -183,7 +205,7 @@ class RequestLogger:
         await self.redis.expire(window_key, 600)
     
     async def query_by_ip(self, ip: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
-        """Query requests by IP address."""
+        """Query requests and responses by IP address."""
         min_timestamp = time.time() - (hours * 3600)
         
         # Get request keys from index
@@ -192,19 +214,31 @@ class RequestLogger:
             min_timestamp,
             "+inf",
             start=0,
-            num=limit
+            num=limit // 2  # Split limit between requests and responses
         )
         
-        # Batch fetch request data
-        if not request_keys:
+        # Get response keys from index
+        response_keys = await self.redis.zrangebyscore(
+            f"idx:resp:ip:{ip}",
+            min_timestamp,
+            "+inf",
+            start=0,
+            num=limit // 2
+        )
+        
+        # Batch fetch all data
+        all_keys = list(request_keys) + list(response_keys)
+        if not all_keys:
             return []
         
         pipeline = self.redis.pipeline()
-        for key in request_keys:
+        for key in all_keys:
             pipeline.hgetall(key)
         
-        requests = await pipeline.execute()
-        return [r for r in requests if r]
+        results = await pipeline.execute()
+        # Sort by timestamp
+        data = [r for r in results if r]
+        return sorted(data, key=lambda x: float(x.get('timestamp', 0)))
     
     async def query_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
         """Query requests by hostname."""

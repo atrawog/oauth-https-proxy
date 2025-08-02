@@ -280,7 +280,16 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
     
     echo "$response" | jq -r '
         .logs | reverse | .[] | 
-        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.hostname) \(.ip) - \(.method) \(.path) -> \(.status) (\(.duration_ms // 0)ms) - Target: \(.target_url // "API") - UA: \(.context.user_agent // "none")"
+        # Base log line
+        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.hostname) \(.ip) - \(.method) \(.path) -> \(.status) (\(.duration_ms // 0)ms)" +
+        # Add OAuth details if present
+        (if .context.oauth_action then " [OAuth:\(.context.oauth_action)]" else "" end) +
+        (if .context.oauth_client_id then " client=\(.context.oauth_client_id)" else "" end) +
+        (if .context.oauth_username then " user=\(.context.oauth_username)" else "" end) +
+        (if .context.oauth_token_jti then " token=\(.context.oauth_token_jti)" else "" end) +
+        (if .context.oauth_scope then " scope=\(.context.oauth_scope)" else "" end) +
+        (if .context.oauth_introspection_result then " introspection=\(.context.oauth_introspection_result | tostring)" else "" end) +
+        " - UA: \(.context.user_agent // "none")"
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Query application logs by OAuth client ID
