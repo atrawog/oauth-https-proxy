@@ -17,6 +17,8 @@ services:
       start_period: 10s
     networks:
       - proxy_network
+    sysctls:
+      - net.core.somaxconn=511
 
   api:
     build: .
@@ -77,19 +79,6 @@ services:
       timeout: 10s
       retries: 3
       start_period: 30s
-
-  # fetcher:
-  #   build: ./fetcher-mcp
-  #   restart: unless-stopped
-  #   environment:
-  #     - LOG_LEVEL=${LOG_LEVEL:-INFO}
-  #     - NAVIGATION_TIMEOUT=${FETCHER_NAVIGATION_TIMEOUT}
-  #   volumes:
-  #     - ./logs/fetcher-mcp:/app/logs
-  #   networks:
-  #     - acme_network
-  #   cap_add:
-  #     - SYS_ADMIN  # Required for Chrome
 
 networks:
   proxy_network:

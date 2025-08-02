@@ -24,7 +24,8 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         oauth_status,
         oauth_admin,
         services,
-        ports
+        ports,
+        logs
     )
     
     # Create main v1 router (no prefix here, it's added when mounting)
@@ -133,5 +134,16 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         logger.info("Included OAuth admin router in v1")
     except Exception as e:
         logger.warning(f"OAuth admin endpoints not available: {e}")
+    
+    # Log query endpoints: /api/v1/logs/*
+    try:
+        logs_router = logs.create_router(storage)
+        v1_router.include_router(
+            logs_router,
+            tags=["logs"]
+        )
+        logger.info("Included logs router in v1")
+    except Exception as e:
+        logger.warning(f"Log query endpoints not available: {e}")
     
     return v1_router

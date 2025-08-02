@@ -12,8 +12,9 @@ from starlette.responses import Response, PlainTextResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
 from .handler import EnhancedProxyHandler
+from ..shared.logging import get_logger
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class ProxyOnlyApp:
@@ -22,6 +23,28 @@ class ProxyOnlyApp:
     def __init__(self, storage):
         """Initialize proxy-only app with its own resources."""
         self.storage = storage
+        
+        # Check if logging is already configured to avoid duplicate handlers
+        import logging as std_logging
+        from ..shared.logging import configure_logging, AsyncRedisLogHandler
+        
+        root_logger = std_logging.getLogger()
+        has_redis_handler = any(
+            isinstance(h, AsyncRedisLogHandler) for h in root_logger.handlers
+        )
+        
+        if has_redis_handler:
+            # Logging already configured, reuse it
+            self.logging_components = None
+            logger.info("Proxy instance using existing Redis logging configuration")
+        elif storage and storage.redis_client:
+            # Configure logging only if not already done
+            self.logging_components = configure_logging(storage.redis_client)
+            logger.info("Proxy instance configured with Redis logging")
+        else:
+            self.logging_components = None
+            logger.warning("Proxy instance running without Redis logging")
+            
         # Each instance gets its own proxy handler with isolated httpx client
         self.proxy_handler = EnhancedProxyHandler(storage)
         
@@ -37,10 +60,21 @@ class ProxyOnlyApp:
     async def startup(self):
         """Minimal startup - no lifespan complexity."""
         logger.info("Proxy-only instance starting")
+        
+        # Start async Redis log handler only if we created it
+        if self.logging_components and self.logging_components.get("redis_handler"):
+            await self.logging_components["redis_handler"].start()
+            logger.info("Async Redis log handler started for proxy instance")
     
     async def shutdown(self):
         """Clean shutdown of instance resources only."""
         logger.info("Proxy-only instance shutting down")
+        
+        # Stop async Redis log handler only if we created it
+        if self.logging_components and self.logging_components.get("redis_handler"):
+            await self.logging_components["redis_handler"].stop()
+            logger.info("Async Redis log handler stopped for proxy instance")
+            
         # Close only this instance's httpx client
         await self.proxy_handler.close()
     

@@ -7,6 +7,7 @@ from typing import Optional
 
 from .shared.config import Config, get_config
 from .shared.utils import setup_logging
+from .shared.logging import configure_logging
 from .storage import RedisStorage
 from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
@@ -20,15 +21,20 @@ manager: Optional[CertificateManager] = None
 https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
+logging_components: Optional[dict] = None
 
 
 def initialize_components(config: Config) -> None:
     """Initialize all system components."""
-    global manager, https_server, scheduler, proxy_handler
+    global manager, https_server, scheduler, proxy_handler, logging_components
     
     # Initialize storage with Redis URL
     redis_url = config.get_redis_url_with_password()
     storage = RedisStorage(redis_url)
+    
+    # Configure structured logging with Redis
+    logging_components = configure_logging(storage.redis_client)
+    logger.info("Structured logging configured with Redis storage")
     
     # Initialize certificate manager
     manager = CertificateManager(storage)
@@ -56,6 +62,11 @@ async def run_server(config: Config) -> None:
     """Run the unified multi-instance server."""
     # Initialize components
     initialize_components(config)
+    
+    # Start async Redis log handler if available
+    if logging_components and logging_components.get("redis_handler"):
+        await logging_components["redis_handler"].start()
+        logger.info("Async Redis log handler started")
     
     # Create FastAPI app
     app = create_api_app(manager.storage, manager, scheduler)
@@ -90,6 +101,11 @@ async def run_server(config: Config) -> None:
         scheduler.stop()
         if proxy_handler:
             await proxy_handler.close()
+        
+        # Stop async Redis log handler
+        if logging_components and logging_components.get("redis_handler"):
+            await logging_components["redis_handler"].stop()
+            logger.info("Async Redis log handler stopped")
 
 
 def main() -> None:

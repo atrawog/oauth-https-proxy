@@ -32,6 +32,9 @@ requests = ">=2.31.0"
 tabulate = ">=0.9.0"
 websockets = ">=11.0"
 python-on-whales = ">=0.68.0"
+structlog = ">=24.1.0"
+python-json-logger = ">=2.0.7"
+colorama = ">=0.4.6"
 mcp-echo-streamablehttp-server-stateful = { path = "./mcp-echo-streamablehttp-server-stateful", editable = true }
 mcp-echo-streamablehttp-server-stateless = { path = "./mcp-echo-streamablehttp-server-stateless", editable = true }
 mcp-http-validator = { path = "./mcp-http-validator", editable = true }

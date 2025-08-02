@@ -42,8 +42,17 @@ rebuild service="proxy":
     docker compose build {{service}}
     docker compose up -d {{service}}
 
-# View logs (optionally for specific service)
-logs service="":
+# View Docker container logs (no follow, last 100 lines)
+logs service="" lines="100":
+    #!/usr/bin/env bash
+    if [ -n "{{service}}" ]; then
+        docker compose logs --tail={{lines}} {{service}}
+    else
+        docker compose logs --tail={{lines}}
+    fi
+
+# Follow Docker container logs (like tail -f)
+logs-follow service="":
     #!/usr/bin/env bash
     if [ -n "{{service}}" ]; then
         docker compose logs -f {{service}}
@@ -68,6 +77,463 @@ health:
     
     response=$(curl -sL "${BASE_URL}/health")
     echo "$response" | jq '.'
+
+# ============================================================================
+# LOGGING AND MONITORING  
+# ============================================================================
+
+# Show both Docker and application logs (combined view)
+logs-all lines="50" hours="1" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "=== Docker Container Logs (last {{lines}} lines) ==="
+    docker compose logs --tail={{lines}} || true
+    
+    echo ""
+    echo "=== Application Structured Logs (last {{hours}} hour(s)) ==="
+    just app-logs hours={{hours}} limit={{lines}} token={{token}} || true
+
+# Show available log commands
+logs-help:
+    @echo "=== Available Logging Commands ==="
+    @echo ""
+    @echo "🐳 Docker Container Logs:"
+    @echo "  just logs                    # Show Docker container logs (last 100 lines)"
+    @echo "  just logs-follow             # Follow Docker container logs (tail -f)"
+    @echo "  just logs proxy              # Show proxy service logs"
+    @echo "  just logs-follow redis       # Follow redis service logs"
+    @echo ""
+    @echo "🔄 Combined View:"
+    @echo "  just logs-all                # Show both Docker and application logs"
+    @echo ""
+    @echo "📋 Application Logs (Structured):"
+    @echo "  just app-logs                # Show recent application logs"
+    @echo "  just app-logs-recent         # Quick view of last 10 logs"
+    @echo "  just app-logs-follow         # Follow application logs in real-time"
+    @echo "  just app-logs-errors         # Show only errors"
+    @echo ""
+    @echo "🔍 Search and Filter:"
+    @echo "  just app-logs-by-ip <ip>     # Query logs from specific IP"
+    @echo "  just app-logs-by-client <id> # Query logs from OAuth client"
+    @echo "  just app-logs-by-host <host> # Query logs for specific hostname"
+    @echo "  just app-logs-search         # Search with multiple filters"
+    @echo ""
+    @echo "🔗 Flow Tracking:"
+    @echo "  just app-logs-correlation <id> # Get complete request flow"
+    @echo "  just app-logs-oauth-flow       # Track OAuth authentication flows"
+    @echo ""
+    @echo "📊 Analysis:"
+    @echo "  just app-logs-event-stats    # Show event statistics"
+    @echo ""
+    @echo "💡 Examples:"
+    @echo "  just logs                    # Docker container logs"
+    @echo "  just app-logs event=oauth    # Application OAuth logs"
+    @echo "  just app-logs-follow event=proxy.error"
+    @echo "  just app-logs-correlation 1735689600-https-a7b3c9d2-001"
+
+# Show recent application logs (no following)
+app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build query parameters
+    params="hours={{hours}}&limit={{limit}}"
+    [ -n "{{event}}" ] && params="${params}&event={{event}}"
+    [ -n "{{level}}" ] && params="${params}&level={{level}}"
+    [ -n "{{hostname}}" ] && params="${params}&hostname={{hostname}}"
+    
+    # Get recent logs
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/search?${params}")
+    
+    # Format output - handle timestamp as Unix epoch
+    echo "$response" | jq -r '
+        "=== Recent Logs (last {{hours}} hour(s)) ===",
+        "Total: \(.total) (showing \(.logs | length))",
+        "",
+        (.logs[] | 
+            (if .timestamp then (.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) else "unknown time" end) as $ts |
+            "\($ts) [\(.level)] \(.event // "no-event")",
+            "  \(.message)",
+            if .hostname then "  Host: \(.hostname)" else empty end,
+            if .path then "  Path: \(.path)" else empty end,
+            if .status then "  Status: \(.status)" else empty end,
+            if .correlation_id then "  Correlation: \(.correlation_id)" else empty end,
+            ""
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Quick view of last 10 application logs (compact format)
+app-logs-recent limit="10" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get recent logs (last 5 minutes)
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/search?hours=1&limit={{limit}}")
+    
+    # Compact format - simple time display
+    echo "$response" | jq -r '
+        (.logs[] | 
+            ((if .timestamp then (.timestamp | todateiso8601 | split("T")[1] | split(".")[0]) else "??:??:??" end) + " [" + .level + "] " + (.event // "no-event") + " - " + .message)
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Show only errors (quick error check)
+app-logs-errors-only hours="1" limit="20" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    just app-logs-errors hours={{hours}} include-warnings=false limit={{limit}} token={{token}}
+
+# Follow application logs in real-time (tail -f equivalent)
+app-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    echo "=== Following logs (Ctrl+C to stop) ==="
+    echo "Refresh interval: {{interval}}s"
+    [ -n "{{event}}" ] && echo "Event filter: {{event}}"
+    [ -n "{{level}}" ] && echo "Level filter: {{level}}"
+    [ -n "{{hostname}}" ] && echo "Hostname filter: {{hostname}}"
+    echo ""
+    
+    # Track seen log IDs to avoid duplicates
+    seen_file=$(mktemp)
+    trap "rm -f $seen_file" EXIT
+    
+    while true; do
+        # Get recent logs (last 5 minutes)
+        params="hours=1&limit=100"
+        [ -n "{{event}}" ] && params="${params}&event={{event}}"
+        [ -n "{{level}}" ] && params="${params}&level={{level}}"
+        [ -n "{{hostname}}" ] && params="${params}&hostname={{hostname}}"
+        
+        # Fetch logs
+        response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+            "${BASE_URL}/api/v1/logs/search?${params}" 2>/dev/null || true)
+        
+        if [ -n "$response" ]; then
+            # Process and display only new logs
+            echo "$response" | jq -r '
+                .logs[] | 
+                "\(.timestamp)-\(.correlation_id // "none")" as $id |
+                "\(.timestamp | todateiso8601 | split("T")[1] | split(".")[0]) [\(.level)] \(.event // "no-event") - \(.message) |\(.hostname // "unknown")|\($id)"
+            ' 2>/dev/null | while IFS='|' read -r log_line hostname log_id; do
+                if ! grep -q "^${log_id}$" "$seen_file" 2>/dev/null; then
+                    echo "$log_id" >> "$seen_file"
+                    echo "$log_line"
+                fi
+            done
+        fi
+        
+        sleep {{interval}}
+    done
+
+# Query application logs by IP address
+app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build query parameters
+    query="hours={{hours}}&limit={{limit}}"
+    [ -n "{{event}}" ] && query="${query}&event={{event}}"
+    [ -n "{{level}}" ] && query="${query}&level={{level}}"
+    
+    # Query logs
+    response=$(curl -sL -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/logs/ip/{{ip}}?${query}")
+    
+    echo "$response" | jq -r '
+        .logs[] | 
+        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event") - \(.message)"
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Query application logs by OAuth client ID
+app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build query parameters
+    query="hours={{hours}}&limit={{limit}}"
+    [ -n "{{event}}" ] && query="${query}&event={{event}}"
+    [ -n "{{level}}" ] && query="${query}&level={{level}}"
+    
+    # Query logs
+    response=$(curl -sL -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/logs/client/{{client-id}}?${query}")
+    
+    echo "$response" | jq -r '
+        .logs[] | 
+        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event") - \(.message)"
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Get complete request flow by correlation ID
+app-logs-correlation correlation-id token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get correlation flow
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/correlation/{{correlation-id}}")
+    
+    # Format output
+    echo "$response" | jq -r '
+        "=== Correlation Flow: \(.correlation_id) ===",
+        "Total Requests: \(.total_requests)",
+        "Duration: \(.duration_ms)ms",
+        "Events: " + (.flow_summary.events | to_entries | map("\(.key): \(.value)") | join(", ")),
+        "",
+        "=== Log Entries ===",
+        (.logs[] | 
+            "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event")",
+            "  \(.message)",
+            if .error then "  Error: \(.error | tostring)" else empty end,
+            ""
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Search application logs with filters
+app-logs-search query="" hours="24" event="" level="" hostname="" limit="100" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build query parameters
+    params="hours={{hours}}&limit={{limit}}"
+    [ -n "{{query}}" ] && params="${params}&q={{query}}"
+    [ -n "{{event}}" ] && params="${params}&event={{event}}"
+    [ -n "{{level}}" ] && params="${params}&level={{level}}"
+    [ -n "{{hostname}}" ] && params="${params}&hostname={{hostname}}"
+    
+    # Search logs
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/search?${params}")
+    
+    echo "$response" | jq -r '
+        "Found \(.total) logs (showing \(.logs | length))",
+        "",
+        (.logs[] | 
+            "\(.timestamp | todate | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event") - \(.message)"
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Get recent application errors and warnings
+app-logs-errors hours="1" include-warnings="false" limit="50" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Query recent errors
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/errors?hours={{hours}}&include_warnings={{include-warnings}}&limit={{limit}}")
+    
+    echo "$response" | jq -r '
+        "=== Recent Errors" + (if .query_params.include_warnings then " and Warnings" else "" end) + " ===",
+        "Total: \(.total) (showing \(.logs | length))",
+        "",
+        (.logs[] | 
+            "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)]",
+            "  Event: \(.event // "unknown")",
+            "  Message: \(.message)",
+            if .error then "  Error: \(.error | tostring)" else empty end,
+            if .correlation_id then "  Correlation: \(.correlation_id)" else empty end,
+            ""
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Get application event statistics
+app-logs-event-stats hours="24" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get event statistics
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/events?hours={{hours}}")
+    
+    echo "=== Event Statistics (last {{hours}} hours) ==="
+    echo "$response" | jq -r '
+        to_entries | 
+        .[] | 
+        "\(.key): \(.value)"
+    '
+
+# Follow OAuth flow for a specific request
+app-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build search query
+    query="event:oauth"
+    [ -n "{{client-id}}" ] && query="${query} AND client_id:{{client-id}}"
+    [ -n "{{username}}" ] && query="${query} AND username:{{username}}"
+    
+    # Search for OAuth events
+    echo "=== OAuth Flow Trace ==="
+    echo "Searching for: ${query}"
+    echo ""
+    
+    # Search logs
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/search?q=${query}&hours={{hours}}&limit=1000")
+    
+    # Group by correlation ID and show flows
+    echo "$response" | jq -r '
+        .logs | 
+        group_by(.correlation_id) |
+        .[] |
+        (
+            "Correlation: " + (.[0].correlation_id // "unknown"),
+            "Client: " + (.[0].client_id // "unknown"),
+            "User: " + (.[0].username // "unknown"),
+            "",
+            (sort_by(.timestamp) | .[] | 
+                "  \(.timestamp | todateiso8601 | split("T")[1] | split(".")[0]) \(.event) - \(.message)"
+            ),
+            ""
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Show all application logs for a hostname
+app-logs-by-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    if [ -z "{{token}}" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Search logs for hostname
+    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
+        "${BASE_URL}/api/v1/logs/search?hostname={{hostname}}&hours={{hours}}&limit={{limit}}")
+    
+    echo "$response" | jq -r '
+        "=== Logs for {{hostname}} ===",
+        "Total: \(.total) (showing \(.logs | length))",
+        "",
+        (.logs[] | 
+            "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event")",
+            "  Path: \(.path // "/")",
+            "  Status: \(.status // "N/A")",
+            "  Message: \(.message)",
+            ""
+        )
+    ' 2>/dev/null || echo "$response" | jq '.'
+
+# Test application logging system
+app-logs-test token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "=== Testing Logging System ==="
+    echo ""
+    
+    # 1. Make a test request to generate logs
+    echo "1. Making test request to /health..."
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    curl -sL "${BASE_URL}/health" > /dev/null
+    
+    # 2. Wait for logs to be processed
+    echo "2. Waiting for logs to be processed..."
+    sleep 2
+    
+    # 3. Query recent logs
+    echo "3. Querying recent logs..."
+    echo ""
+    just app-logs-recent limit=5 token={{token}}
+    
+    echo ""
+    echo "4. Checking event statistics..."
+    just app-logs-event-stats hours=1 token={{token}} | head -10
+    
+    echo ""
+    echo "✅ Logging system test complete!"
+
 
 # ============================================================================
 # TOKEN MANAGEMENT

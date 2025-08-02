@@ -3,6 +3,7 @@ Using Authlib's security framework instead of custom implementations
 """
 
 import json
+import jwt
 import logging
 import secrets
 import time
@@ -18,9 +19,11 @@ from .auth_authlib import AuthManager
 from .config import Settings
 from .models import ClientRegistration, TokenResponse
 from .rfc7592 import DynamicClientConfigurationEndpoint
+from ...shared.logging import get_logger, correlation_id_var, log_request, log_response
+from ...shared.config import Config
 
 # Set up logging
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthManager) -> APIRouter:
@@ -116,10 +119,24 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     # Dynamic Client Registration endpoint (RFC 7591) - PUBLIC ACCESS
     @router.post("/register", status_code=201)
     async def register_client(
+        request: Request,
         registration: ClientRegistration,
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """The Divine Registration Portal - RFC 7591 compliant - PUBLIC ACCESS"""
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.client.host if request.client else "unknown"
+        
+        logger.info(
+            "OAuth client registration request",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_name=registration.client_name,
+            software_id=registration.software_id,
+            redirect_uris=registration.redirect_uris,
+            scope=registration.scope
+        )
         # Validate redirect URIs - RFC 7591 compliance
         if not registration.redirect_uris:
             raise HTTPException(
@@ -219,11 +236,22 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             if value is not None:
                 response[field] = value
 
+        logger.info(
+            "OAuth client registered successfully",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id,
+            client_name=registration.client_name,
+            redirect_uris=registration.redirect_uris,
+            scope=registration.scope
+        )
+
         return response
 
     # Authorization endpoint
     @router.get("/authorize")
     async def authorize(
+        request: Request,
         client_id: str = Query(...),
         redirect_uri: str = Query(...),
         response_type: str = Query(...),
@@ -235,6 +263,21 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """Portal to authentication realm - initiates GitHub OAuth flow"""
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.client.host if request.client else "unknown"
+        
+        logger.info(
+            "OAuth authorization request",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id,
+            redirect_uri=redirect_uri,
+            scope=scope,
+            state=state,
+            resource=resource,
+            code_challenge=bool(code_challenge)
+        )
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client:
@@ -374,18 +417,33 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     # Callback endpoint
     @router.get("/callback")
     async def oauth_callback(
+        request: Request,
         code: str = Query(...),
         state: str = Query(...),
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """The blessed return path - handles GitHub OAuth callback"""
-        # Retrieve authorization state
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.client.host if request.client else "unknown"
+        
         logger.info(
-            f"Callback received with state: {state}, code: {code[:8]}..." if code else "no code",
+            "OAuth callback received from GitHub",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            state=state,
+            code_preview=f"{code[:8]}..." if code else "no code"
         )
+        
+        # Retrieve authorization state
         auth_data_str = await redis_client.get(f"oauth:state:{state}")
         if not auth_data_str:
-            logger.warning(f"State not found in Redis: {state}")
+            logger.warning(
+                "OAuth callback with invalid or expired state",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                state=state
+            )
             # Check if any similar states exist (for debugging)
             all_states = await redis_client.keys("oauth:state:*")
             logger.debug(f"Current states in Redis: {len(all_states)} total")
@@ -402,17 +460,37 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
 
         auth_data = json.loads(auth_data_str)
-        logger.info(
-            f"State validated successfully: {state}, client_id: {auth_data.get('client_id')}",
+        logger.debug(
+            "OAuth state validated successfully",
+            correlation_id=correlation_id,
+            state=state,
+            client_id=auth_data.get('client_id'),
+            scope=auth_data.get('scope'),
+            resources=auth_data.get('resources')
         )
 
         # Exchange GitHub code
         user_info = await auth_manager.exchange_github_code(code)
 
         if not user_info:
+            logger.error(
+                "Failed to exchange GitHub code",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=auth_data.get('client_id')
+            )
             return RedirectResponse(
                 url=f"{auth_data['redirect_uri']}?error=server_error&state={auth_data['state']}",  # TODO: Break long line
             )
+
+        logger.info(
+            "GitHub code exchanged successfully",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            github_user_id=user_info.get("id"),
+            github_username=user_info.get("login"),
+            github_email=user_info.get("email")
+        )
 
         # Check if user is allowed
         allowed_users = (
@@ -420,6 +498,14 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         # If ALLOWED_GITHUB_USERS is set to '*', allow any authenticated GitHub user
         if allowed_users and "*" not in allowed_users and user_info["login"] not in allowed_users:
+            logger.warning(
+                "GitHub user not in allowed list",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=auth_data.get('client_id'),
+                github_username=user_info.get("login"),
+                allowed_users=allowed_users
+            )
             return RedirectResponse(
                 url=f"{auth_data['redirect_uri']}?error=access_denied&state={auth_data['state']}",  # TODO: Break long line
             )
@@ -444,10 +530,26 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         # Clean up state
         await redis_client.delete(f"oauth:state:{state}")
-        logger.info(f"Cleaned up state after successful auth: {state}")
+        
+        logger.info(
+            "OAuth authorization code generated",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=auth_data.get('client_id'),
+            user_id=str(user_info["id"]),
+            username=user_info["login"],
+            email=user_info.get("email", ""),
+            scope=auth_data.get("scope"),
+            resources=auth_data.get("resources"),
+            redirect_uri=auth_data["redirect_uri"]
+        )
 
         # Handle out-of-band redirect URI
         if auth_data["redirect_uri"] == "urn:ietf:wg:oauth:2.0:oob":
+            logger.debug(
+                "Using out-of-band redirect for auth code display",
+                correlation_id=correlation_id
+            )
             return RedirectResponse(
                 url=f"https://auth.{settings.base_domain}/success?code={auth_code}&state={auth_data['state']}",  # TODO: Break long line
                 headers={
@@ -459,6 +561,14 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         # Normal redirect
         redirect_params = {"code": auth_code, "state": auth_data["state"]}
+
+        logger.info(
+            "OAuth callback completed, redirecting to client",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=auth_data.get('client_id'),
+            redirect_uri=auth_data["redirect_uri"]
+        )
 
         return RedirectResponse(
             url=f"{auth_data['redirect_uri']}?{urlencode(redirect_params)}",  # TODO: Break long line
@@ -472,6 +582,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     # Token endpoint
     @router.post("/token")
     async def token_exchange(
+        request: Request,
         grant_type: str = Form(...),
         code: Optional[str] = Form(None),
         redirect_uri: Optional[str] = Form(None),
@@ -483,9 +594,30 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """The transmutation chamber - exchanges codes for tokens"""
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.client.host if request.client else "unknown"
+        
+        logger.info(
+            "OAuth token exchange request",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id,
+            grant_type=grant_type,
+            has_code=bool(code),
+            has_refresh_token=bool(refresh_token),
+            resource=resource
+        )
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client:
+            logger.warning(
+                "OAuth token request with invalid client",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id,
+                grant_type=grant_type
+            )
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -497,6 +629,13 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         # Validate client secret
         if client_secret and not client.check_client_secret(client_secret):
+            logger.warning(
+                "OAuth token request with invalid client secret",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id,
+                grant_type=grant_type
+            )
             raise HTTPException(
                 status_code=401,
                 detail={
@@ -619,6 +758,22 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Delete used authorization code
             await redis_client.delete(f"oauth:code:{code}")
 
+            # Extract token claims for logging
+            import jwt
+            token_claims = jwt.decode(access_token, options={"verify_signature": False})
+            
+            logger.info(
+                "OAuth token issued via authorization code",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id,
+                user_id=code_data["user_id"],
+                username=code_data["username"],
+                scope=code_data["scope"],
+                resources=token_resources,
+                token_jti=token_claims.get("jti")
+            )
+
             return TokenResponse(
                 access_token=access_token,
                 expires_in=settings.access_token_lifetime,
@@ -678,6 +833,21 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 redis_client,
             )
 
+            # Extract token claims for logging
+            token_claims = jwt.decode(access_token, options={"verify_signature": False})
+            
+            logger.info(
+                "OAuth token refreshed successfully",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id,
+                user_id=refresh_data["user_id"],
+                username=refresh_data["username"],
+                scope=refresh_data["scope"],
+                resources=token_resources,
+                token_jti=token_claims.get("jti")
+            )
+
             return TokenResponse(
                 access_token=access_token,
                 expires_in=settings.access_token_lifetime,
@@ -698,17 +868,33 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     @router.post("/verify")
     async def verify_token(request: Request):
         """Token examination oracle - validates Bearer tokens for Traefik"""
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.headers.get("x-forwarded-for", 
+                                      request.headers.get("x-real-ip", 
+                                                        request.client.host if request.client else "unknown"))
+        
         try:
             # Extract the target resource from forwarded headers
             forwarded_host = request.headers.get("x-forwarded-host", "")
             forwarded_proto = request.headers.get("x-forwarded-proto", "https")
             forwarded_path = request.headers.get("x-forwarded-path", "")
+            forwarded_method = request.headers.get("x-original-method", "GET")
             
             # Construct the resource URI if we have the host
             # For MCP compliance, resource should be the base URL without specific endpoint paths
             resource = None
             if forwarded_host:
                 resource = f"{forwarded_proto}://{forwarded_host}"
+            
+            logger.debug(
+                "OAuth token verification request",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                resource=resource,
+                path=forwarded_path,
+                method=forwarded_method
+            )
             
             # Validate token with resource context
             nonlocal require_oauth
@@ -722,6 +908,18 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Validate with resource for audience checking
             token = await require_oauth.validate_request(request, resource=resource)
             
+            logger.info(
+                "OAuth token verified successfully",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                resource=resource,
+                user_id=token.get("sub"),
+                username=token.get("username"),
+                client_id=token.get("client_id"),
+                scope=token.get("scope"),
+                token_jti=token.get("jti")
+            )
+            
             # Return success with user info in JSON body
             return {
                 "sub": token.get("sub", ""),
@@ -732,14 +930,34 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 "scope": token.get("scope", ""),
                 "client_id": token.get("client_id", ""),
             }
+        except HTTPException as e:
+            # Log specific HTTP exceptions (401, 403, etc.)
+            logger.warning(
+                "OAuth token verification failed",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                resource=resource,
+                status_code=e.status_code,
+                error=e.detail
+            )
+            raise
         except Exception as e:
-            logger.error(f"Verify token error: {type(e).__name__}: {str(e)}", exc_info=True)
+            logger.error(
+                "OAuth token verification error",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                resource=resource,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                exc_info=True
+            )
             # Re-raise the exception to maintain proper error handling
             raise
 
     # Token revocation endpoint (RFC 7009)
     @router.post("/revoke")
     async def revoke_token(
+        request: Request,
         token: str = Form(...),
         token_type_hint: Optional[str] = Form(None),
         client_id: str = Form(...),
@@ -747,17 +965,48 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """Token banishment altar - revokes tokens"""
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.client.host if request.client else "unknown"
+        
+        logger.info(
+            "OAuth token revocation request",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id,
+            token_type_hint=token_type_hint
+        )
+        
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client:
             # RFC 7009 - invalid client should still return 200
+            logger.debug(
+                "Token revocation with invalid client (returning 200 per RFC 7009)",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id
+            )
             return Response(status_code=200)
 
         if client_secret and not client.check_client_secret(client_secret):
+            logger.debug(
+                "Token revocation with invalid client secret (returning 200 per RFC 7009)",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id
+            )
             return Response(status_code=200)
 
         # Revoke token
         await auth_manager.revoke_token(token, redis_client)
+
+        logger.info(
+            "OAuth token revoked successfully",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id
+        )
 
         # Always return 200 (RFC 7009)
         return Response(status_code=200)
@@ -765,6 +1014,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     # Token introspection endpoint (RFC 7662)
     @router.post("/introspect")
     async def introspect_token(
+        request: Request,
         token: str = Form(...),
         token_type_hint: Optional[str] = Form(None),
         client_id: str = Form(...),
@@ -772,13 +1022,41 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """Token examination oracle - RFC 7662 compliant"""
+        # Get correlation ID from context or generate new one
+        correlation_id = correlation_id_var.get()
+        client_ip = request.client.host if request.client else "unknown"
+        
+        logger.info(
+            "OAuth token introspection request",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id,
+            token_type_hint=token_type_hint
+        )
+        
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client or (client_secret and not client.check_client_secret(client_secret)):
+            logger.debug(
+                "Token introspection with invalid client credentials",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                client_id=client_id
+            )
             return {"active": False}
 
         # Introspect token
         introspection_result = await auth_manager.introspect_token(token, redis_client)
+
+        logger.info(
+            "OAuth token introspection completed",
+            correlation_id=correlation_id,
+            ip=client_ip,
+            client_id=client_id,
+            token_active=introspection_result.get("active", False),
+            token_sub=introspection_result.get("sub") if introspection_result.get("active") else None,
+            token_client_id=introspection_result.get("client_id") if introspection_result.get("active") else None
+        )
 
         return introspection_result
 

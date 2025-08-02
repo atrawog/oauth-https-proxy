@@ -15,8 +15,10 @@ from starlette.background import BackgroundTask
 import asyncio
 from .models import ProxyTarget
 from .auth_exclusions import merge_exclusions
+from ..shared.logging import get_logger, correlation_id_var, log_request, log_response
+from ..shared.config import Config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 class EnhancedProxyHandler:
@@ -46,18 +48,59 @@ class EnhancedProxyHandler:
     
     async def handle_request(self, request: Request) -> Response:
         """Handle incoming proxy request."""
+        start_time = time.time()
+        
+        # Extract correlation ID from headers or generate new one
+        correlation_id = request.headers.get(Config.LOG_CORRELATION_ID_HEADER)
+        if correlation_id:
+            correlation_id_var.set(correlation_id)
+        else:
+            # If no correlation ID from dispatcher, use the one from context (if set)
+            correlation_id = correlation_id_var.get()
+        
+        # Extract client IP from headers or connection
+        client_ip = request.headers.get("X-Forwarded-For", 
+                                       request.headers.get("X-Real-IP", 
+                                                         request.client.host if request.client else "unknown"))
+        
         # Extract hostname from request
         hostname = request.headers.get("host", "").split(":")[0]
         
         if not hostname:
+            logger.warning(
+                "No host header in request",
+                correlation_id=correlation_id,
+                ip=client_ip
+            )
             raise HTTPException(404, "No host header")
+        
+        # Log the incoming request
+        await log_request(
+            logger,
+            request,
+            correlation_id,
+            client_ip,
+            hostname=hostname
+        )
         
         # Lookup proxy target
         target = self.storage.get_proxy_target(hostname)
         if not target:
+            logger.warning(
+                "No proxy target configured",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                hostname=hostname
+            )
             raise HTTPException(404, f"No proxy target configured for {hostname}")
         
         if not target.enabled:
+            logger.warning(
+                "Proxy target disabled",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                hostname=hostname
+            )
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
         
         # Check routes FIRST - routes bypass proxy auth!
@@ -68,13 +111,34 @@ class EnhancedProxyHandler:
         request_path = request.url.path
         request_method = request.method
         
-        logger.info(f"Checking {len(applicable_routes)} routes for {request_method} {request_path}")
+        logger.debug(
+            "Checking routes",
+            correlation_id=correlation_id,
+            route_count=len(applicable_routes),
+            method=request_method,
+            path=request_path
+        )
+        
         for route in applicable_routes:
-            logger.info(f"  Checking route: {route.path_pattern} (priority {route.priority}) methods={route.methods}")
+            logger.debug(
+                "Checking route",
+                correlation_id=correlation_id,
+                route_pattern=route.path_pattern,
+                priority=route.priority,
+                methods=route.methods
+            )
             match_result = route.matches(request_path, request_method)
-            logger.info(f"    Match result for {route.path_pattern}: {match_result}")
             if match_result:
-                logger.info(f"Request {request_method} {request_path} matched route '{route.description or route.path_pattern}'")
+                logger.info(
+                    "Route matched",
+                    correlation_id=correlation_id,
+                    ip=client_ip,
+                    hostname=hostname,
+                    method=request_method,
+                    path=request_path,
+                    route_pattern=route.path_pattern,
+                    route_description=route.description
+                )
                 
                 # Routes bypass proxy authentication entirely!
                 # Handle different route types
@@ -111,12 +175,37 @@ class EnhancedProxyHandler:
             
             # Only perform auth check if path is not excluded
             if not path_excluded:
+                logger.debug(
+                    "Checking authentication",
+                    correlation_id=correlation_id,
+                    ip=client_ip,
+                    hostname=hostname,
+                    auth_proxy=target.auth_proxy
+                )
                 auth_result = await self._check_unified_auth(request, target)
                 if isinstance(auth_result, Response):
                     # Auth check returned a response (redirect or error)
+                    duration_ms = (time.time() - start_time) * 1000
+                    logger.info(
+                        "Authentication required",
+                        correlation_id=correlation_id,
+                        ip=client_ip,
+                        hostname=hostname,
+                        status=auth_result.status_code,
+                        duration_ms=duration_ms
+                    )
+                    await log_response(logger, auth_result, duration_ms, correlation_id, hostname=hostname)
                     return auth_result
                 # auth_result contains user info to add as headers
                 request.state.auth_user = auth_result
+                logger.info(
+                    "Authentication successful",
+                    correlation_id=correlation_id,
+                    ip=client_ip,
+                    hostname=hostname,
+                    user_id=auth_result.get("sub"),
+                    username=auth_result.get("username")
+                )
         
         # Handle OPTIONS (preflight) requests
         if request.method == "OPTIONS":
@@ -168,6 +257,20 @@ class EnhancedProxyHandler:
             # Send request and get streaming response
             upstream_response = await self.client.send(req, stream=True)
             
+            # Log successful proxy request
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(
+                "Proxy request successful",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                hostname=hostname,
+                method=request.method,
+                path=request.url.path,
+                target_url=target_url,
+                status=upstream_response.status_code,
+                duration_ms=duration_ms
+            )
+            
             # Filter response headers
             response_headers = self._filter_response_headers(dict(upstream_response.headers))
             
@@ -180,8 +283,12 @@ class EnhancedProxyHandler:
                 "Access-Control-Max-Age": "86400"
             })
             
+            # Add correlation ID to response headers if configured
+            if Config.LOG_INCLUDE_CORRELATION_ID_RESPONSE == 'true' and correlation_id:
+                response_headers[Config.LOG_CORRELATION_ID_HEADER] = correlation_id
+            
             # Return streaming response
-            return StreamingResponse(
+            response = StreamingResponse(
                 self._stream_response(upstream_response),
                 status_code=upstream_response.status_code,
                 headers=response_headers,
@@ -189,14 +296,53 @@ class EnhancedProxyHandler:
                 background=BackgroundTask(upstream_response.aclose)
             )
             
-        except httpx.ConnectError:
-            logger.error(f"Failed to connect to upstream {target_url}")
+            # Log response
+            await log_response(logger, response, duration_ms, correlation_id, 
+                             hostname=hostname, target_url=target_url)
+            
+            return response
+            
+        except httpx.ConnectError as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(
+                "Failed to connect to upstream",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                hostname=hostname,
+                target_url=target_url,
+                duration_ms=duration_ms,
+                error={"type": "connect_error", "message": str(e)}
+            )
+            response = Response(content="Bad Gateway - Unable to connect to upstream server", status_code=502)
+            await log_response(logger, response, duration_ms, correlation_id, hostname=hostname)
             raise HTTPException(502, "Bad Gateway - Unable to connect to upstream server")
-        except httpx.TimeoutException:
-            logger.error(f"Timeout connecting to upstream {target_url}")
+        except httpx.TimeoutException as e:
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(
+                "Timeout connecting to upstream",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                hostname=hostname,
+                target_url=target_url,
+                duration_ms=duration_ms,
+                error={"type": "timeout", "message": str(e)}
+            )
+            response = Response(content="Gateway Timeout - Upstream server timeout", status_code=504)
+            await log_response(logger, response, duration_ms, correlation_id, hostname=hostname)
             raise HTTPException(504, "Gateway Timeout - Upstream server timeout")
         except Exception as e:
-            logger.error(f"Proxy error for {hostname}: {e}")
+            duration_ms = (time.time() - start_time) * 1000
+            logger.error(
+                "Proxy error",
+                correlation_id=correlation_id,
+                ip=client_ip,
+                hostname=hostname,
+                target_url=target_url,
+                duration_ms=duration_ms,
+                error={"type": "proxy_error", "message": str(e)}
+            )
+            response = Response(content=f"Proxy error: {str(e)}", status_code=500)
+            await log_response(logger, response, duration_ms, correlation_id, hostname=hostname)
             raise HTTPException(500, f"Proxy error: {str(e)}")
     
     async def handle_websocket(self, websocket: WebSocket, path: str):

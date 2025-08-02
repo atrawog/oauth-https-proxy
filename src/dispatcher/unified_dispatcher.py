@@ -22,8 +22,13 @@ from ..proxy.models import ProxyTarget
 from ..proxy.routes import Route, RouteTargetType
 from ..proxy.app import create_proxy_app
 from .models import DomainInstance
+from ..shared.logging import get_logger, correlation_id_var, CorrelationIDGenerator, configure_logging
+from ..shared.config import Config
 
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
+
+# Initialize correlation ID generator
+correlation_generator = CorrelationIDGenerator()
 
 # Global instance for dynamic management
 unified_server_instance = None
@@ -168,6 +173,11 @@ class UnifiedDispatcher:
     def __init__(self, host='0.0.0.0', storage=None):
         self.host = host
         self.storage = storage
+        
+        # Configure Redis logging if storage is available
+        if storage and storage.redis_client:
+            from ..shared.logging import configure_logging
+            configure_logging(storage.redis_client)
         self.hostname_to_http_port: Dict[str, int] = {}
         self.hostname_to_https_port: Dict[str, int] = {}
         self.http_server = None
@@ -455,7 +465,17 @@ class UnifiedDispatcher:
     async def handle_http_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTP connection and forward to appropriate instance."""
         client_addr = writer.get_extra_info('peername')
-        logger.debug(f"New HTTP connection from {client_addr}")
+        client_ip = client_addr[0] if client_addr else 'unknown'
+        
+        # Generate correlation ID for this request
+        correlation_id = await correlation_generator.generate("http")
+        correlation_id_var.set(correlation_id)
+        
+        logger.debug(
+            "New HTTP connection",
+            ip=client_ip,
+            correlation_id=correlation_id
+        )
         
         try:
             # Peek at the data to get hostname
@@ -466,12 +486,19 @@ class UnifiedDispatcher:
             # Extract hostname from HTTP Host header FIRST
             hostname = self.get_hostname_from_http_request(data)
             if not hostname:
-                logger.warning(f"No hostname found in HTTP request from {client_addr}")
+                logger.warning(
+                    "No hostname found in HTTP request",
+                    ip=client_ip,
+                    correlation_id=correlation_id                )
                 writer.close()
                 await writer.wait_closed()
                 return
             
-            logger.debug(f"HTTP hostname: {hostname}")
+            logger.debug(
+                "HTTP hostname extracted",
+                ip=client_ip,
+                hostname=hostname,
+                correlation_id=correlation_id            )
             
             # Get proxy configuration to determine route filtering
             proxy_config = None
@@ -489,6 +516,14 @@ class UnifiedDispatcher:
             
             # Check generic routes with filtering
             method, request_path = self.get_request_info(data)
+            logger.debug(
+                "HTTP request details",
+                ip=client_ip,
+                hostname=hostname,
+                method=method,
+                path=request_path,
+                correlation_id=correlation_id
+            )
             if request_path and applicable_routes:
                 for route in applicable_routes:
                     if route.matches(request_path, method):
@@ -501,7 +536,7 @@ class UnifiedDispatcher:
                             else:
                                 # Regular port-based forwarding
                                 logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target}")
-                                await self._forward_connection(reader, writer, data, '127.0.0.1', target)
+                                await self._forward_connection(reader, writer, data, '127.0.0.1', target, client_ip)
                                 return
                         else:
                             logger.warning(f"Route matched but target not found: {route.target_type.value}:{route.target_value}")
@@ -518,10 +553,15 @@ class UnifiedDispatcher:
                 await writer.wait_closed()
                 return
             
-            logger.debug(f"Forwarding HTTP {hostname} to localhost:{target_port}")
+            logger.debug(
+                "Forwarding HTTP connection",
+                ip=client_ip,
+                hostname=hostname,
+                target_port=target_port,
+                correlation_id=correlation_id            )
             
             # Forward to the target instance
-            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port)
+            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port, client_ip)
             
         except Exception as e:
             logger.error(f"Error handling HTTP connection: {e}")
@@ -532,23 +572,51 @@ class UnifiedDispatcher:
     async def handle_https_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTPS connection and forward to appropriate instance."""
         client_addr = writer.get_extra_info('peername')
-        logger.debug(f"New HTTPS connection from {client_addr}")
+        client_ip = client_addr[0] if client_addr else 'unknown'
+        
+        # Generate correlation ID for this connection
+        correlation_id = await correlation_generator.generate("https")
+        correlation_id_var.set(correlation_id)
+        
+        logger.debug(
+            "New HTTPS connection",
+            ip=client_ip,
+            correlation_id=correlation_id        )
         
         try:
             # Peek at the data to get SNI hostname
             data = await reader.read(4096)
             if not data:
+                logger.warning(
+                    "No data received in HTTPS connection",
+                    ip=client_ip,
+                    correlation_id=correlation_id
+                )
                 return
+            
+            logger.debug(
+                "HTTPS data received",
+                ip=client_ip,
+                data_len=len(data),
+                correlation_id=correlation_id
+            )
             
             # Extract SNI hostname
             hostname = self.get_sni_hostname(data)
             if not hostname:
-                logger.warning(f"No SNI hostname found in connection from {client_addr}")
+                logger.warning(
+                    "No SNI hostname found in connection",
+                    ip=client_ip,
+                    correlation_id=correlation_id                )
                 writer.close()
                 await writer.wait_closed()
                 return
             
-            logger.debug(f"SNI hostname: {hostname}")
+            logger.debug(
+                "SNI hostname extracted",
+                ip=client_ip,
+                hostname=hostname,
+                correlation_id=correlation_id            )
             
             # Get proxy config if this is a proxy domain
             proxy_config = None
@@ -580,7 +648,7 @@ class UnifiedDispatcher:
             logger.debug(f"Forwarding HTTPS {hostname} to localhost:{target_port}")
             
             # Forward to the target instance
-            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port)
+            await self._forward_connection(reader, writer, data, '127.0.0.1', target_port, client_ip)
             
         except Exception as e:
             logger.error(f"Error handling HTTPS connection: {e}")
@@ -588,12 +656,93 @@ class UnifiedDispatcher:
             writer.close()
             await writer.wait_closed()
     
+    def _inject_correlation_id_header(self, http_data: bytes, correlation_id: str) -> bytes:
+        """Inject correlation ID header into HTTP request data."""
+        try:
+            # Convert to string to manipulate
+            data_str = http_data.decode('utf-8', errors='ignore')
+            lines = data_str.split('\r\n')
+            
+            # Find the end of headers
+            header_end = -1
+            for i, line in enumerate(lines):
+                if line == '':  # Empty line marks end of headers
+                    header_end = i
+                    break
+            
+            if header_end > 0:
+                # Insert correlation ID header before the empty line
+                correlation_header = f"{Config.LOG_CORRELATION_ID_HEADER}: {correlation_id}"
+                lines.insert(header_end, correlation_header)
+                
+                # Rebuild the request
+                return '\r\n'.join(lines).encode('utf-8')
+            
+            return http_data
+        except Exception as e:
+            logger.debug(f"Error injecting correlation ID: {e}")
+            return http_data
+    
+    def _inject_client_ip_headers(self, http_data: bytes, client_ip: str) -> bytes:
+        """Inject X-Forwarded-For and X-Real-IP headers into HTTP request data."""
+        try:
+            # Convert to string to manipulate
+            data_str = http_data.decode('utf-8', errors='ignore')
+            lines = data_str.split('\r\n')
+            
+            # Find the end of headers
+            header_end = -1
+            for i, line in enumerate(lines):
+                if line == '':  # Empty line marks end of headers
+                    header_end = i
+                    break
+            
+            if header_end > 0:
+                # Check if headers already exist
+                has_forwarded_for = False
+                has_real_ip = False
+                
+                for i, line in enumerate(lines[:header_end]):
+                    if line.lower().startswith('x-forwarded-for:'):
+                        has_forwarded_for = True
+                    elif line.lower().startswith('x-real-ip:'):
+                        has_real_ip = True
+                
+                # Insert headers before the empty line
+                if not has_forwarded_for:
+                    lines.insert(header_end, f"X-Forwarded-For: {client_ip}")
+                if not has_real_ip:
+                    lines.insert(header_end, f"X-Real-IP: {client_ip}")
+                
+                # Rebuild the request
+                return '\r\n'.join(lines).encode('utf-8')
+            
+            return http_data
+        except Exception as e:
+            logger.debug(f"Error injecting client IP headers: {e}")
+            return http_data
+
     async def _forward_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
-                                  initial_data: bytes, target_host: str, target_port: int):
+                                  initial_data: bytes, target_host: str, target_port: int, client_ip: str = None):
         """Forward a connection to target host:port."""
         try:
             # Connect to the target
             target_reader, target_writer = await asyncio.open_connection(target_host, target_port)
+            
+            # Inject headers if this is HTTP data
+            if (initial_data.startswith(b'GET ') or initial_data.startswith(b'POST ') or 
+                initial_data.startswith(b'PUT ') or initial_data.startswith(b'DELETE ') or 
+                initial_data.startswith(b'HEAD ') or initial_data.startswith(b'OPTIONS ') or 
+                initial_data.startswith(b'PATCH ')):
+                
+                # Inject correlation ID header if we have one
+                correlation_id = correlation_id_var.get()
+                if correlation_id:
+                    initial_data = self._inject_correlation_id_header(initial_data, correlation_id)
+                
+                # Inject client IP headers if we have one
+                if client_ip and client_ip != 'unknown':
+                    initial_data = self._inject_client_ip_headers(initial_data, client_ip)
             
             # Send the initial data we already read
             target_writer.write(initial_data)
