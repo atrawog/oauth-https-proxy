@@ -416,6 +416,18 @@ def get_logger(name: str) -> BoundLogger:
     return structlog.get_logger(name)
 
 
+# Global request logger instance
+_request_logger = None
+
+def get_request_logger():
+    """Get the global request logger instance."""
+    return _request_logger
+
+def set_request_logger(logger):
+    """Set the global request logger instance."""
+    global _request_logger
+    _request_logger = logger
+
 # Request logging utilities
 async def log_request(
     logger: BoundLogger,
@@ -447,7 +459,27 @@ async def log_request(
         except Exception:
             pass
     
+    # Log to structlog for console output
     logger.info("Request received", **log_data)
+    
+    # Also log to RequestLogger if available
+    request_logger = get_request_logger()
+    if request_logger:
+        try:
+            await request_logger.log_request(
+                correlation_id=correlation_id,
+                ip=ip,
+                hostname=log_data.get("hostname", ""),
+                method=log_data.get("method", ""),
+                path=log_data.get("path", ""),
+                query=log_data.get("query", ""),
+                user_agent=log_data.get("user_agent", ""),
+                auth_user=extra_context.get("auth_user"),
+                **{k: v for k, v in extra_context.items() if k not in ["hostname", "auth_user"]}
+            )
+        except Exception as e:
+            logger.error(f"Failed to log request to RequestLogger: {e}")
+    
     return log_data
 
 
@@ -482,4 +514,27 @@ async def log_response(
     
     level = "error" if log_data.get("status", 0) >= 500 else "info"
     getattr(logger, level)("Response sent", **log_data)
+    
+    # Also log to RequestLogger if available
+    request_logger = get_request_logger()
+    if request_logger:
+        try:
+            error = None
+            if log_data.get("status", 0) >= 400:
+                error = {
+                    "type": f"http_{log_data.get('status', 'unknown')}",
+                    "message": log_data.get("response_body", "")
+                }
+            
+            await request_logger.log_response(
+                correlation_id=correlation_id,
+                status=log_data.get("status", 0),
+                duration_ms=duration_ms,
+                response_size=len(log_data.get("response_body", "")),
+                error=error,
+                **{k: v for k, v in extra_context.items() if k not in ["hostname", "status"]}
+            )
+        except Exception as e:
+            logger.error(f"Failed to log response to RequestLogger: {e}")
+    
     return log_data

@@ -7,7 +7,8 @@ from typing import Optional
 
 from .shared.config import Config, get_config
 from .shared.utils import setup_logging
-from .shared.logging import configure_logging
+from .shared.logging import configure_logging, set_request_logger
+from .shared.request_logger import RequestLogger
 from .storage import RedisStorage
 from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
@@ -22,11 +23,12 @@ https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
 logging_components: Optional[dict] = None
+request_logger: Optional[RequestLogger] = None
 
 
 def initialize_components(config: Config) -> None:
     """Initialize all system components."""
-    global manager, https_server, scheduler, proxy_handler, logging_components
+    global manager, https_server, scheduler, proxy_handler, logging_components, request_logger
     
     # Initialize storage with Redis URL
     redis_url = config.get_redis_url_with_password()
@@ -35,6 +37,11 @@ def initialize_components(config: Config) -> None:
     # Configure structured logging with Redis
     logging_components = configure_logging(storage.redis_client)
     logger.info("Structured logging configured with Redis storage")
+    
+    # Initialize request logger with async Redis
+    request_logger = RequestLogger(redis_url)
+    set_request_logger(request_logger)
+    logger.info("Request logger initialized with Redis indexing")
     
     # Initialize certificate manager
     manager = CertificateManager(storage)

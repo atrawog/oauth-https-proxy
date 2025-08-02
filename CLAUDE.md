@@ -15,6 +15,66 @@
 ### Logging
 - `LOG_LEVEL` - Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
 
+### Advanced Logging Architecture
+The system uses a dual-Redis architecture for high-performance logging:
+- **Async Redis**: For high-frequency request/response logging with minimal latency
+- **Sync Redis**: For configuration and slower operations
+
+#### RequestLogger System
+The RequestLogger provides efficient HTTP request/response logging with multiple indexes:
+
+**Key Features**:
+- Correlation ID tracking across request/response pairs
+- Multiple indexes for efficient querying (IP, hostname, status, user, path)
+- Real-time streaming for monitoring
+- Automatic TTL management (24 hours default)
+- HyperLogLog for unique visitor tracking
+- Response time statistics with sliding windows
+
+**Redis Storage Schema**:
+```
+req:{correlation_id}          # Request/response data as hash
+idx:req:ip:{ip}              # Index by client IP
+idx:req:host:{hostname}      # Index by hostname
+idx:req:user:{username}      # Index by authenticated user
+idx:req:status:{code}        # Index by HTTP status code
+idx:req:errors               # All error responses (4xx/5xx)
+idx:req:slow                 # Slow requests (>1s)
+idx:req:path:{method}:{path} # Path pattern analysis
+stream:requests              # Live request stream
+stats:requests:{YYYYMMDD:HH} # Hourly request counts
+stats:errors:{YYYYMMDD:HH}   # Hourly error counts
+stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
+```
+
+#### Log Query API
+Access logs via the `/api/v1/logs` endpoints:
+- `GET /api/v1/logs/ip/{ip}` - Query by IP address
+- `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
+- `GET /api/v1/logs/correlation/{id}` - Get complete request flow
+- `GET /api/v1/logs/search` - Advanced search with filters
+- `GET /api/v1/logs/errors` - Recent errors
+- `GET /api/v1/logs/events` - Event statistics
+
+#### Log Query Commands
+```bash
+just app-logs-by-ip <ip> [hours] [limit]      # Query logs by client IP
+just app-logs-by-host <hostname> [hours]      # Query logs by hostname
+just app-logs-by-client <client-id> [hours]   # Query logs by OAuth client
+just app-logs-correlation <id>                # Full request flow  
+just app-logs-errors [hours] [limit]          # Show recent errors
+just app-logs-follow [interval]               # Follow logs in real-time
+just app-logs [hours] [limit]                 # Show recent logs
+just app-logs-test                            # Test logging system
+```
+
+#### Performance Optimizations
+- Batch processing with 100ms windows
+- Pipeline operations for bulk fetches
+- Sliding window for response time percentiles
+- HyperLogLog for memory-efficient unique counting
+- Automatic index expiration
+
 ### PROXY Protocol Support
 - Port 9000: Direct API access (localhost-only, no PROXY protocol)
 - Port 10001: PROXY protocol v1 enabled (for external load balancers/reverse proxies)

@@ -18,7 +18,7 @@ from enum import Enum
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 
-from ....shared.logging import get_logger
+from ....shared.logging import get_logger, get_request_logger
 from ....storage import RedisStorage
 
 # Set up logging
@@ -127,49 +127,63 @@ def create_router(storage: RedisStorage) -> APIRouter:
         """
         logger.info(f"Querying logs for IP: {ip_address}, hours: {hours}")
         
-        # Query logs from Redis stream
-        min_timestamp = time.time() - (hours * 3600)
-        logs = []
+        # Get request logger
+        request_logger = get_request_logger()
+        if not request_logger:
+            # Fallback to empty response if RequestLogger not available
+            return LogQueryResponse(
+                total=0,
+                logs=[],
+                query_params={
+                    "ip_address": ip_address,
+                    "hours": hours,
+                    "level": level,
+                    "event": event,
+                    "limit": limit,
+                    "offset": offset
+                }
+            )
         
-        # Read from the Redis stream and filter by IP
+        # Query logs using RequestLogger
         try:
-            stream_entries = redis_client.xrevrange("logs:stream", "+", "-", count=10000)
+            requests = await request_logger.query_by_ip(ip_address, hours, limit * 10)  # Get extra for filtering
             
-            for entry_id, data in stream_entries:
-                if "data" in data:
-                    log_entry = json.loads(data["data"])
-                    
-                    # Handle double-encoded JSON in message field
-                    if log_entry.get("ip") is None and isinstance(log_entry.get("message"), str):
-                        try:
-                            # Try to parse message as JSON
-                            message_data = json.loads(log_entry["message"])
-                            if isinstance(message_data, dict):
-                                # Merge message data into log entry
-                                log_entry.update(message_data)
-                        except:
-                            pass
-                    
-                    # Convert timestamp to Unix timestamp
-                    timestamp_val = log_entry.get("timestamp", 0)
-                    if isinstance(timestamp_val, str):
-                        try:
-                            # Parse ISO timestamp
-                            dt = datetime.fromisoformat(timestamp_val.replace('Z', '+00:00'))
-                            timestamp = dt.timestamp()
-                        except:
-                            timestamp = 0
-                    else:
-                        timestamp = float(timestamp_val)
-                    
-                    # Check timestamp and IP match
-                    if (timestamp >= min_timestamp and 
-                        log_entry.get("ip") == ip_address):
-                        # Update timestamp to float for LogEntry model
-                        log_entry["timestamp"] = timestamp
-                        logs.append(log_entry)
+            # Convert to LogEntry format
+            logs = []
+            for req in requests:
+                # Build log entry from request data
+                log_entry = {
+                    "timestamp": float(req.get("timestamp", 0)),
+                    "level": "ERROR" if int(req.get("status", 0)) >= 500 else "INFO",
+                    "component": "http.request",
+                    "message": f"{req.get('method', '')} {req.get('path', '')} -> {req.get('status', '')}",
+                    "correlation_id": req.get("correlation_id"),
+                    "ip": req.get("ip"),
+                    "hostname": req.get("hostname"),
+                    "method": req.get("method"),
+                    "path": req.get("path"),
+                    "status": int(req.get("status", 0)) if req.get("status") else None,
+                    "duration_ms": float(req.get("duration_ms", 0)) if req.get("duration_ms") else None,
+                    "event": "request",
+                    "context": {
+                        "user_agent": req.get("user_agent", ""),
+                        "auth_user": req.get("auth_user", ""),
+                        "query": req.get("query", "")
+                    }
+                }
+                
+                # Add error info if present
+                if req.get("error_type"):
+                    log_entry["error"] = {
+                        "type": req.get("error_type"),
+                        "message": req.get("error_message", "")
+                    }
+                
+                logs.append(log_entry)
+            
         except Exception as e:
-            logger.error(f"Error reading from log stream: {e}")
+            logger.error(f"Error querying request logs: {e}")
+            logs = []
         
         # Apply filters
         if level:

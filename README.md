@@ -23,6 +23,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Certificate Isolation**: Multi-domain certificates with ownership tracking
 - **Redis-Only Storage**: No filesystem persistence for enhanced security
 - **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
+- **Advanced Logging**: High-performance request logging with multiple indexes
 
 ### Developer Experience
 - **Web UI**: Built-in management interface at http://localhost
@@ -387,6 +388,45 @@ just service-stats my-app
 # Create proxy for service
 just service-proxy-create my-app app.domain.com true $ADMIN_TOKEN
 ```
+
+### Logging and Monitoring
+
+The proxy includes a high-performance logging system with efficient querying:
+
+```bash
+# Query logs by client IP
+just app-logs-by-ip 192.168.1.100 24
+
+# Query logs by hostname  
+just app-logs-by-host api.domain.com 24
+
+# View recent errors
+just app-logs-errors 1 50
+
+# Follow logs in real-time
+just app-logs-follow 2
+
+# Get complete request flow by correlation ID
+just app-logs-correlation 1735689600-https-a7b3c9d2
+
+# Test logging system
+just app-logs-test
+```
+
+**Features**:
+- Request/response correlation tracking
+- Multiple indexes for efficient querying (IP, hostname, status, user, path)
+- Real-time streaming and monitoring
+- Automatic retention (24 hours default)
+- Response time statistics
+- Unique visitor tracking with HyperLogLog
+
+**Log Query API** (requires admin token):
+- `GET /api/v1/logs/ip/{ip}` - Query by client IP
+- `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
+- `GET /api/v1/logs/correlation/{id}` - Complete request flow
+- `GET /api/v1/logs/search` - Advanced search
+- `GET /api/v1/logs/errors` - Recent errors
 
 ## API Reference
 

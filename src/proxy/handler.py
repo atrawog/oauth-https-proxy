@@ -60,6 +60,10 @@ class EnhancedProxyHandler:
         else:
             # If no correlation ID from dispatcher, use the one from context (if set)
             correlation_id = correlation_id_var.get()
+            if not correlation_id:
+                # Generate a new correlation ID if none exists
+                correlation_id = f"{int(time.time())}-{request.url.scheme}-{secrets.token_hex(4)}"
+                correlation_id_var.set(correlation_id)
         
         # Extract client IP from headers first (injected by PROXY protocol handler)
         client_ip = request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for")
@@ -565,6 +569,10 @@ class EnhancedProxyHandler:
     
     async def _handle_url_route(self, request: Request, route) -> Response:
         """Handle URL route by forwarding to the specified URL."""
+        start_time = time.time()
+        correlation_id = correlation_id_var.get()
+        hostname = request.headers.get("host", "").split(":")[0]
+        
         target_url = route.target_value
         if not target_url.startswith(('http://', 'https://')):
             target_url = f'http://{target_url}'
@@ -602,21 +610,41 @@ class EnhancedProxyHandler:
                 cookies=request.cookies
             )
             
-            # Return the response
-            return Response(
+            # Create FastAPI Response
+            fastapi_response = Response(
                 content=response.content,
                 status_code=response.status_code,
                 headers=dict(response.headers)
             )
             
+            # Log the response
+            duration_ms = (time.time() - start_time) * 1000
+            await log_response(logger, fastapi_response, duration_ms, correlation_id,
+                             hostname=hostname, target_url=full_url)
+            
+            # Return the response
+            return fastapi_response
+            
         except httpx.ConnectError:
+            duration_ms = (time.time() - start_time) * 1000
             logger.error(f"Failed to connect to URL route {full_url}")
+            error_response = Response(content="Bad Gateway - Unable to connect to route target", status_code=502)
+            await log_response(logger, error_response, duration_ms, correlation_id,
+                             hostname=hostname, target_url=full_url)
             raise HTTPException(502, "Bad Gateway - Unable to connect to route target")
         except httpx.TimeoutException:
+            duration_ms = (time.time() - start_time) * 1000
             logger.error(f"Timeout connecting to URL route {full_url}")
+            error_response = Response(content="Gateway Timeout - Route target timeout", status_code=504)
+            await log_response(logger, error_response, duration_ms, correlation_id,
+                             hostname=hostname, target_url=full_url)
             raise HTTPException(504, "Gateway Timeout - Route target timeout")
         except Exception as e:
+            duration_ms = (time.time() - start_time) * 1000
             logger.error(f"URL route error: {e}")
+            error_response = Response(content=f"Route error: {str(e)}", status_code=500)
+            await log_response(logger, error_response, duration_ms, correlation_id,
+                             hostname=hostname, target_url=full_url)
             raise HTTPException(500, f"Route error: {str(e)}")
     
     async def close(self):

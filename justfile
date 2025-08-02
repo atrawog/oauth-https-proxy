@@ -279,8 +279,8 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
         "${BASE_URL}/api/v1/logs/ip/{{ip}}?${query}")
     
     echo "$response" | jq -r '
-        .logs[] | 
-        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event") - \(.message)"
+        .logs | reverse | .[] | 
+        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.hostname) \(.ip) - \(.method) \(.path) -> \(.status) (\(.duration_ms // 0)ms) - Target: \(.target_url // "API") - UA: \(.context.user_agent // "none")"
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Query application logs by OAuth client ID
@@ -496,12 +496,8 @@ app-logs-by-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
         "=== Logs for {{hostname}} ===",
         "Total: \(.total) (showing \(.logs | length))",
         "",
-        (.logs[] | 
-            "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event")",
-            "  Path: \(.path // "/")",
-            "  Status: \(.status // "N/A")",
-            "  Message: \(.message)",
-            ""
+        (.logs | reverse | .[] | 
+            "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.hostname) \(.ip) - \(.method) \(.path) -> \(.status) (\(.duration_ms // 0)ms) - UA: \(.context.user_agent // "none")"
         )
     ' 2>/dev/null || echo "$response" | jq '.'
 
