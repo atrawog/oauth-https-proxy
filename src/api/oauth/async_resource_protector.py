@@ -11,6 +11,9 @@ from fastapi import HTTPException, Request
 from .config import Settings
 from .keys import RSAKeyManager
 from .resource_protector import JWTBearerTokenValidator
+from ...shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class AsyncResourceProtector:
@@ -105,8 +108,25 @@ class AsyncResourceProtector:
             if isinstance(aud, str):
                 aud = [aud]
             
+            logger.debug(
+                "Validating token audience",
+                requested_resource=resource,
+                token_aud=aud,
+                token_jti=token_data.get("jti"),
+                token_sub=token_data.get("sub"),
+                audience_type=type(aud).__name__
+            )
+            
             # Check if resource is in audience
             if resource not in aud:
+                logger.warning(
+                    "Token audience validation failed",
+                    requested_resource=resource,
+                    token_aud=aud,
+                    token_jti=token_data.get("jti"),
+                    token_sub=token_data.get("sub"),
+                    client_id=token_data.get("azp")
+                )
                 www_auth_error = www_authenticate.replace('Bearer', 'Bearer error="invalid_audience"')
                 raise HTTPException(
                     status_code=403,

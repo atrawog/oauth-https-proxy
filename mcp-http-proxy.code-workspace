@@ -3,5 +3,20 @@
 		{
 			"path": "."
 		}
-	]
+	],
+	"settings": {
+		"mcp": {
+			"servers": {
+				"docs.mcp.cloudflare.com": {
+					"url": "https://docs.mcp.cloudflare.com/sse",
+					"type": "http"
+				},
+				"echo-stateful.atradev.org": {
+					"url": "https://echo-stateful.atradev.org/mcp",
+					"type": "http"
+				}
+			},
+			"inputs": []
+		}
+	}
 }

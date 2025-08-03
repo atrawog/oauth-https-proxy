@@ -120,7 +120,6 @@ logs-help:
     @echo "  just app-logs-search         # Search with multiple filters"
     @echo ""
     @echo "🔗 Flow Tracking:"
-    @echo "  just app-logs-correlation <id> # Get complete request flow"
     @echo "  just app-logs-oauth-flow       # Track OAuth authentication flows"
     @echo ""
     @echo "📊 Analysis:"
@@ -130,7 +129,7 @@ logs-help:
     @echo "  just logs                    # Docker container logs"
     @echo "  just app-logs event=oauth    # Application OAuth logs"
     @echo "  just app-logs-follow event=proxy.error"
-    @echo "  just app-logs-correlation 1735689600-https-a7b3c9d2-001"
+    @echo "  just app-logs-by-ip 192.168.1.100"
 
 # Show recent application logs (no following)
 app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN}":
@@ -167,7 +166,7 @@ app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN
             if .hostname then "  Host: \(.hostname)" else empty end,
             if .path then "  Path: \(.path)" else empty end,
             if .status then "  Status: \(.status)" else empty end,
-            if .correlation_id then "  Correlation: \(.correlation_id)" else empty end,
+            if .request_id then "  Request ID: \(.request_id)" else empty end,
             ""
         )
     ' 2>/dev/null || echo "$response" | jq '.'
@@ -242,7 +241,7 @@ app-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}
             # Process and display only new logs
             echo "$response" | jq -r '
                 .logs[] | 
-                "\(.timestamp)-\(.correlation_id // "none")" as $id |
+                "\(.timestamp)-\(.ip // "none")" as $id |
                 "\(.timestamp | todateiso8601 | split("T")[1] | split(".")[0]) [\(.level)] \(.event // "no-event") - \(.message) |\(.hostname // "unknown")|\($id)"
             ' 2>/dev/null | while IFS='|' read -r log_line hostname log_id; do
                 if ! grep -q "^${log_id}$" "$seen_file" 2>/dev/null; then
@@ -278,19 +277,36 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
     response=$(curl -sL -H "Authorization: Bearer $token_value" \
         "${BASE_URL}/api/v1/logs/ip/{{ip}}?${query}")
     
+    # Format logs in single-line format
     echo "$response" | jq -r '
-        .logs | reverse | .[] | 
-        # Base log line
-        "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.hostname) \(.ip) - \(.method) \(.path) -> \(.status) (\(.duration_ms // 0)ms)" +
-        # Add OAuth details if present
-        (if .context.oauth_action then " [OAuth:\(.context.oauth_action)]" else "" end) +
-        (if .context.oauth_client_id then " client=\(.context.oauth_client_id)" else "" end) +
-        (if .context.oauth_username then " user=\(.context.oauth_username)" else "" end) +
-        (if .context.oauth_token_jti then " token=\(.context.oauth_token_jti)" else "" end) +
-        (if .context.oauth_scope then " scope=\(.context.oauth_scope)" else "" end) +
-        (if .context.oauth_introspection_result then " introspection=\(.context.oauth_introspection_result | tostring)" else "" end) +
-        " - UA: \(.context.user_agent // "none")"
-    ' 2>/dev/null || echo "$response" | jq '.'
+        if .logs then
+            .logs | reverse | .[] | 
+            ((.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) + 
+             " [" + .level + "] " + .hostname + " " + .ip + 
+             (if .method then 
+                " - " + .method + " " + .path + 
+                (if .context.oauth_action then " [OAuth:" + .context.oauth_action + 
+                    (if .context.oauth_state then " state=" + .context.oauth_state else "" end) + "]" 
+                 elif (.path | test("^/(authorize|callback|token)$")) then " [OAuth:" + .path[1:] + "]" 
+                 else "" end) +
+                (if .context.query and (.context.query | length) > 0 then 
+                    " q=" + (.context.query | split("&") | map(select(test("(client_id|state|code|scope|redirect_uri)=")) | .[0:60]) | join(" ")) 
+                 else "" end) +
+                (if .context.referer and .context.referer != "" then " referer=" + .context.referer else "" end) +
+                (if .context.user_agent and .context.user_agent != "" then " UA=\"" + (.context.user_agent | split(" ")[0]) + "\"" else "" end)
+              else
+                " -> " + (.status | tostring) + " (" + (.duration_ms | tostring) + "ms)" +
+                (if .context.oauth_redirect_to then " redirect_to=" + (.context.oauth_redirect_to | split("?")[0]) else "" end) +
+                (if .context.oauth_authorization_granted then " auth=" + .context.oauth_authorization_granted else "" end) +
+                (if .context.oauth_rejection_reason then " rejection=" + .context.oauth_rejection_reason else "" end) +
+                (if .context.oauth_validations_passed then " validations=" + .context.oauth_validations_passed else "" end) +
+                (if .context.oauth_authorization_decision then " decision=" + .context.oauth_authorization_decision else "" end) +
+                (if .context.oauth_github_username then " github_user=" + .context.oauth_github_username else "" end)
+              end))
+        else
+            .
+        end
+    '
 
 # Query application logs by OAuth client ID
 app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
@@ -318,39 +334,6 @@ app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${A
     echo "$response" | jq -r '
         .logs[] | 
         "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event") - \(.message)"
-    ' 2>/dev/null || echo "$response" | jq '.'
-
-# Get complete request flow by correlation ID
-app-logs-correlation correlation-id token="${ADMIN_TOKEN}":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    # Get token value
-    if [ -z "{{token}}" ]; then
-        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
-        exit 1
-    fi
-    
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
-    
-    # Get correlation flow
-    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/correlation/{{correlation-id}}")
-    
-    # Format output
-    echo "$response" | jq -r '
-        "=== Correlation Flow: \(.correlation_id) ===",
-        "Total Requests: \(.total_requests)",
-        "Duration: \(.duration_ms)ms",
-        "Events: " + (.flow_summary.events | to_entries | map("\(.key): \(.value)") | join(", ")),
-        "",
-        "=== Log Entries ===",
-        (.logs[] | 
-            "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event")",
-            "  \(.message)",
-            if .error then "  Error: \(.error | tostring)" else empty end,
-            ""
-        )
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Search application logs with filters
@@ -411,7 +394,7 @@ app-logs-errors hours="1" include-warnings="false" limit="50" token="${ADMIN_TOK
             "  Event: \(.event // "unknown")",
             "  Message: \(.message)",
             if .error then "  Error: \(.error | tostring)" else empty end,
-            if .correlation_id then "  Correlation: \(.correlation_id)" else empty end,
+            if .request_id then "  Request ID: \(.request_id)" else empty end,
             ""
         )
     ' 2>/dev/null || echo "$response" | jq '.'
@@ -470,10 +453,10 @@ app-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
     # Group by correlation ID and show flows
     echo "$response" | jq -r '
         .logs | 
-        group_by(.correlation_id) |
+        group_by(.ip) |
         .[] |
         (
-            "Correlation: " + (.[0].correlation_id // "unknown"),
+            "IP: " + (.[0].ip // "unknown"),
             "Client: " + (.[0].client_id // "unknown"),
             "User: " + (.[0].username // "unknown"),
             "",

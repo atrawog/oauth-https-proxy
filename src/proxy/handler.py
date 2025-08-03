@@ -5,6 +5,7 @@ import os
 import json
 import secrets
 import time
+import traceback
 from typing import Dict, Optional, AsyncIterator, Union
 from urllib.parse import quote
 import httpx
@@ -89,18 +90,30 @@ class EnhancedProxyHandler:
         # Lookup proxy target
         target = self.storage.get_proxy_target(hostname)
         if not target:
+            # Get list of available proxies for debugging
+            available_proxies = []
+            try:
+                available_proxies = [p.hostname for p in self.storage.list_proxy_targets()] if self.storage else []
+            except Exception:
+                pass
+            
             logger.warning(
                 "No proxy target configured",
                 ip=client_ip,
-                hostname=hostname
+                hostname=hostname,
+                available_proxies=available_proxies[:10]  # Show first 10
             )
             raise HTTPException(404, f"No proxy target configured for {hostname}")
         
         if not target.enabled:
             logger.warning(
-                "Proxy target disabled",
+                "Proxy target disabled - returning 503",
                 ip=client_ip,
-                hostname=hostname
+                hostname=hostname,
+                target_url=target.target_url,
+                created_at=str(target.created_at),
+                auth_enabled=target.auth_enabled,
+                cert_name=target.cert_name
             )
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
         
@@ -113,30 +126,52 @@ class EnhancedProxyHandler:
         request_method = request.method
         
         logger.debug(
-            "Checking routes",
-            correlation_id=correlation_id,
+            "Checking routes for request",
+            ip=client_ip,
+            hostname=hostname,
             route_count=len(applicable_routes),
             method=request_method,
-            path=request_path
+            path=request_path,
+            route_mode=target.route_mode,
+            enabled_routes=len(target.enabled_routes) if target.enabled_routes else 0,
+            disabled_routes=len(target.disabled_routes) if target.disabled_routes else 0
         )
         
         for route in applicable_routes:
             logger.debug(
                 "Checking route",
+                route_id=route.route_id,
                 route_pattern=route.path_pattern,
                 priority=route.priority,
-                methods=route.methods
+                methods=route.methods,
+                target_type=route.target_type.value,
+                target_value=route.target_value,
+                is_regex=route.is_regex
             )
             match_result = route.matches(request_path, request_method)
+            
+            if not match_result:
+                # Try to determine why it didn't match
+                method_ok = not route.methods or request_method.upper() in route.methods
+                logger.debug(
+                    "Route did not match",
+                    route_id=route.route_id,
+                    reason="method" if not method_ok else "path",
+                    request_path=request_path,
+                    route_pattern=route.path_pattern
+                )
             if match_result:
                 logger.info(
-                    "Route matched",
-                        ip=client_ip,
+                    "Route matched - bypassing proxy auth",
+                    ip=client_ip,
                     hostname=hostname,
                     method=request_method,
                     path=request_path,
+                    route_id=route.route_id,
                     route_pattern=route.path_pattern,
-                    route_description=route.description
+                    route_description=route.description,
+                    target_type=route.target_type.value,
+                    target_value=route.target_value
                 )
                 
                 # Routes bypass proxy authentication entirely!
@@ -147,7 +182,12 @@ class EnhancedProxyHandler:
                     return await self._handle_instance_route(request, route)
                 else:
                     # For other route types, we can't handle them here
-                    logger.warning(f"Proxy cannot handle route type {route.target_type}")
+                    logger.warning(
+                        "Proxy cannot handle route type",
+                        route_type=route.target_type.value,
+                        route_id=route.route_id,
+                        hostname=hostname
+                    )
                     break
         
         # Check protocol-specific enable flags
@@ -241,6 +281,19 @@ class EnhancedProxyHandler:
                 # Stream the request body
                 content = request.stream()
             
+            # Log detailed request info before sending
+            logger.debug(
+                "Preparing proxy request",
+                ip=client_ip,
+                hostname=hostname,
+                method=request.method,
+                target_url=target_url,
+                target_backend=target.target_url,
+                headers_count=len(headers),
+                has_auth=hasattr(request.state, 'auth_user'),
+                has_content=content is not None
+            )
+            
             # Build and send request with streaming response
             req = self.client.build_request(
                 method=request.method,
@@ -248,6 +301,13 @@ class EnhancedProxyHandler:
                 headers=headers,
                 cookies=request.cookies,
                 content=content
+            )
+            
+            logger.debug(
+                "Sending request to upstream",
+                ip=client_ip,
+                hostname=hostname,
+                target_url=target_url
             )
             
             # Send request and get streaming response
@@ -278,9 +338,7 @@ class EnhancedProxyHandler:
                 "Access-Control-Max-Age": "86400"
             })
             
-            # Add correlation ID to response headers if configured
-            if Config.LOG_INCLUDE_CORRELATION_ID_RESPONSE == 'true' and correlation_id:
-                response_headers[Config.LOG_CORRELATION_ID_HEADER] = correlation_id
+            # Headers processed - no correlation ID needed
             
             # Return streaming response
             response = StreamingResponse(
@@ -300,12 +358,13 @@ class EnhancedProxyHandler:
         except httpx.ConnectError as e:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(
-                "Failed to connect to upstream",
+                "Failed to connect to upstream - returning 502",
                 ip=client_ip,
                 hostname=hostname,
                 target_url=target_url,
+                target_backend=target.target_url,
                 duration_ms=duration_ms,
-                error={"type": "connect_error", "message": str(e)}
+                error={"type": "connect_error", "message": str(e), "details": repr(e)}
             )
             response = Response(content="Bad Gateway - Unable to connect to upstream server", status_code=502)
             await log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname)
@@ -313,12 +372,14 @@ class EnhancedProxyHandler:
         except httpx.TimeoutException as e:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(
-                "Timeout connecting to upstream",
+                "Timeout connecting to upstream - returning 504",
                 ip=client_ip,
                 hostname=hostname,
                 target_url=target_url,
+                target_backend=target.target_url,
+                timeout_config=str(self.client.timeout),
                 duration_ms=duration_ms,
-                error={"type": "timeout", "message": str(e)}
+                error={"type": "timeout", "message": str(e), "details": repr(e)}
             )
             response = Response(content="Gateway Timeout - Upstream server timeout", status_code=504)
             await log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname)
@@ -326,12 +387,15 @@ class EnhancedProxyHandler:
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
             logger.error(
-                "Proxy error",
+                "Proxy error - returning 500",
                 ip=client_ip,
                 hostname=hostname,
                 target_url=target_url,
+                target_backend=target.target_url if target else "unknown",
+                exception_type=type(e).__name__,
                 duration_ms=duration_ms,
-                error={"type": "proxy_error", "message": str(e)}
+                error={"type": "proxy_error", "message": str(e), "details": repr(e)},
+                traceback=traceback.format_exc()
             )
             response = Response(content=f"Proxy error: {str(e)}", status_code=500)
             await log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname)
@@ -535,7 +599,23 @@ class EnhancedProxyHandler:
             logger.error(f"Failed to lookup instance {instance_name}: {e}")
         
         if not instance_target:
-            logger.error(f"Instance {instance_name} not found in registry")
+            # Get available instances for debugging
+            available_instances = []
+            try:
+                # Get all instance keys from Redis
+                instance_keys = self.storage.redis_client.keys("instance:*")
+                available_instances = [key.decode().split(":", 1)[1] for key in instance_keys[:10]]
+            except Exception:
+                pass
+                
+            logger.error(
+                "Instance not found in registry - returning 503",
+                instance_name=instance_name,
+                available_instances=available_instances,
+                route_id=route.route_id if hasattr(route, 'route_id') else None,
+                route_pattern=route.path_pattern if hasattr(route, 'path_pattern') else None,
+                route_target_type=route.target_type.value if hasattr(route, 'target_type') else None
+            )
             raise HTTPException(503, f"Instance {instance_name} not available")
         
         # Forward to the instance using the same logic as URL routes
@@ -645,7 +725,7 @@ class EnhancedProxyHandler:
             "X-Original-Method": request.method,
             "X-Forwarded-Host": target.hostname,  # Pass the actual target hostname for resource validation
             "X-Forwarded-Proto": request.url.scheme,
-            "X-Forwarded-For": request.client.host if request.client else "",
+            "X-Forwarded-For": request.headers.get("x-real-ip") or request.headers.get("x-forwarded-for") or (request.client.host if request.client else "unknown"),
             "X-Forwarded-Path": request.url.path,  # Pass the path for full resource URL construction
         }
         
@@ -671,8 +751,14 @@ class EnhancedProxyHandler:
                 # Authentication successful
                 try:
                     user_info = auth_response.json()
-                except json.JSONDecodeError:
-                    logger.error("Auth service returned invalid JSON")
+                except json.JSONDecodeError as e:
+                    logger.error(
+                        "Auth service returned invalid JSON - returning 503",
+                        auth_proxy=target.auth_proxy,
+                        response_status=auth_response.status_code,
+                        response_body=auth_response.text[:200],  # First 200 chars
+                        error=str(e)
+                    )
                     return Response(content="Authentication service error", status_code=503)
                 
                 # Check user/email/group restrictions
@@ -723,23 +809,62 @@ class EnhancedProxyHandler:
             
             else:
                 # Auth service error
-                logger.error(f"Auth service returned {auth_response.status_code}")
-                return Response(content="Authentication service error", status_code=503)
+                error_detail = "Authentication service error"
                 
-        except httpx.ConnectError:
-            logger.error(f"Failed to connect to auth service at {target.auth_proxy}")
+                # Check if it's an audience validation error
+                if auth_response.status_code == 403:
+                    try:
+                        error_data = auth_response.json()
+                        if error_data.get("detail", {}).get("error") == "invalid_audience":
+                            error_detail = f"Token not valid for {hostname}. Please re-authenticate with this resource."
+                    except:
+                        pass
+                
+                logger.error(
+                    "Auth service returned unexpected status - returning 503",
+                    auth_proxy=target.auth_proxy,
+                    auth_url=auth_url,
+                    response_status=auth_response.status_code,
+                    response_body=auth_response.text[:200] if auth_response.text else None,
+                    error_detail=error_detail
+                )
+                return Response(content=error_detail, status_code=503)
+                
+        except httpx.ConnectError as e:
+            logger.error(
+                "Failed to connect to auth service - returning 503",
+                auth_proxy=target.auth_proxy,
+                auth_url=auth_url,
+                auth_mode=target.auth_mode,
+                error=str(e),
+                error_type=type(e).__name__
+            )
             if target.auth_mode == "passthrough":
                 # Continue without auth in passthrough mode
                 return {}
             return Response(content="Authentication service unavailable", status_code=503)
-        except httpx.TimeoutException:
-            logger.error(f"Timeout connecting to auth service at {target.auth_proxy}")
+        except httpx.TimeoutException as e:
+            logger.error(
+                "Timeout connecting to auth service - returning 503",
+                auth_proxy=target.auth_proxy,
+                auth_url=auth_url,
+                auth_mode=target.auth_mode,
+                timeout_config=str(self.client.timeout),
+                error=str(e)
+            )
             if target.auth_mode == "passthrough":
                 # Continue without auth in passthrough mode
                 return {}
             return Response(content="Authentication service timeout", status_code=503)
         except Exception as e:
-            logger.error(f"Failed to verify auth: {e}")
+            logger.error(
+                "Failed to verify auth - returning 503",
+                auth_proxy=target.auth_proxy,
+                auth_url=auth_url,
+                auth_mode=target.auth_mode,
+                exception_type=type(e).__name__,
+                error=str(e)
+            )
             if target.auth_mode == "passthrough":
                 # Continue without auth in passthrough mode
                 return {}

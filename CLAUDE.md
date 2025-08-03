@@ -33,7 +33,7 @@ The RequestLogger provides efficient HTTP request/response logging with multiple
 
 **Redis Storage Schema**:
 ```
-req:{correlation_id}          # Request/response data as hash
+req:{timestamp}:{ip}         # Request/response data as hash
 idx:req:ip:{ip}              # Index by client IP
 idx:req:host:{hostname}      # Index by hostname
 idx:req:user:{username}      # Index by authenticated user
@@ -51,7 +51,7 @@ stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
 Access logs via the `/api/v1/logs` endpoints:
 - `GET /api/v1/logs/ip/{ip}` - Query by IP address
 - `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
-- `GET /api/v1/logs/correlation/{id}` - Get complete request flow
+- `GET /api/v1/logs/search` - Search logs with filters
 - `GET /api/v1/logs/search` - Advanced search with filters
 - `GET /api/v1/logs/errors` - Recent errors
 - `GET /api/v1/logs/events` - Event statistics
@@ -61,7 +61,7 @@ Access logs via the `/api/v1/logs` endpoints:
 just app-logs-by-ip <ip> [hours] [limit]      # Query logs by client IP
 just app-logs-by-host <hostname> [hours]      # Query logs by hostname
 just app-logs-by-client <client-id> [hours]   # Query logs by OAuth client
-just app-logs-correlation <id>                # Full request flow  
+just app-logs-search <query>                 # Search logs  
 just app-logs-errors [hours] [limit]          # Show recent errors
 just app-logs-follow [interval]               # Follow logs in real-time
 just app-logs [hours] [limit]                 # Show recent logs

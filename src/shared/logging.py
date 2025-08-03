@@ -2,7 +2,7 @@
 
 This module provides:
 - Structured JSON logging with structlog
-- Correlation ID tracking across requests
+- IP-based request tracking
 - Sensitive data masking
 - Redis-based log storage and querying
 - Performance-optimized async logging
@@ -15,7 +15,7 @@ import os
 import re
 import secrets
 import time
-# Removed ContextVar import - no longer using correlation IDs
+# No ContextVar needed - using IP as primary identifier
 from datetime import datetime, timedelta
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Set, Union
@@ -27,7 +27,7 @@ from structlog.stdlib import BoundLogger
 
 from .config import Config
 
-# Removed correlation ID tracking - using IP as primary identifier
+# Using IP as primary identifier for request tracking
 
 # Sensitive data patterns to mask
 SENSITIVE_PATTERNS = [
@@ -41,7 +41,7 @@ SENSITIVE_PATTERNS = [
 ]
 
 
-# Removed CorrelationIDGenerator - using IP as primary identifier
+# Using IP-based tracking instead of correlation IDs
 
 
 class SensitiveDataMasker:
@@ -81,7 +81,7 @@ class RedisLogStorage:
     async def store(self, log_entry: Dict[str, Any]) -> str:
         """Store a log entry in Redis with indexing."""
         # Generate log ID
-        log_id = f"{log_entry['timestamp']}-{log_entry.get('correlation_id', 'unknown')}"
+        log_id = f"{log_entry['timestamp']}-{log_entry.get('ip', 'unknown')}"
         
         # Store in main stream
         await self.redis.xadd(
@@ -251,7 +251,7 @@ class AsyncRedisLogHandler(logging.Handler):
                 await asyncio.sleep(1)
 
 
-# Removed inject_correlation_id - using IP as primary identifier
+# Using IP as primary identifier for log tracking
 
 
 def inject_request_context(logger, method_name, event_dict):
@@ -376,6 +376,7 @@ async def log_request(
         "query": str(request.url.query) if request.url.query else None,
         "hostname": request.headers.get("host"),
         "user_agent": request.headers.get("user-agent"),
+        "referer": request.headers.get("referer"),
         **extra_context
     }
     
@@ -404,6 +405,7 @@ async def log_request(
                 query=log_data.get("query", ""),
                 user_agent=log_data.get("user_agent", ""),
                 auth_user=extra_context.get("auth_user"),
+                referer=log_data.get("referer", ""),
                 **{k: v for k, v in extra_context.items() if k not in ["hostname", "auth_user"]}
             )
             log_data["_request_key"] = request_key  # Store for later use

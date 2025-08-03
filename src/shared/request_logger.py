@@ -36,6 +36,7 @@ class RequestLogger:
         query: Optional[str] = None,
         user_agent: Optional[str] = None,
         auth_user: Optional[str] = None,
+        referer: Optional[str] = None,
         **extra_fields
     ) -> None:
         """Log HTTP request with multiple indexes for efficient querying."""
@@ -51,6 +52,7 @@ class RequestLogger:
             "query": query or "",
             "user_agent": user_agent or "",
             "auth_user": auth_user or "",
+            "referer": referer or "",
             "type": "request",
             **extra_fields
         }
@@ -104,7 +106,7 @@ class RequestLogger:
                 "hostname": hostname,
                 "method": method,
                 "path": path,
-                "correlation_id": correlation_id
+                "timestamp": str(timestamp)
             },
             maxlen=self.max_stream_length
         )

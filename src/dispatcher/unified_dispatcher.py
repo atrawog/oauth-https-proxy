@@ -518,8 +518,8 @@ class UnifiedDispatcher:
             if not hostname:
                 logger.warning(
                     "No hostname found in HTTP request",
-                    ip=client_ip,
-                    correlation_id=correlation_id                )
+                    ip=client_ip
+                )
                 writer.close()
                 await writer.wait_closed()
                 return
@@ -527,8 +527,8 @@ class UnifiedDispatcher:
             logger.debug(
                 "HTTP hostname extracted",
                 ip=client_ip,
-                hostname=hostname,
-                correlation_id=correlation_id            )
+                hostname=hostname
+            )
             
             # Get proxy configuration to determine route filtering
             proxy_config = None
@@ -551,8 +551,7 @@ class UnifiedDispatcher:
                 ip=client_ip,
                 hostname=hostname,
                 method=method,
-                path=request_path,
-                correlation_id=correlation_id
+                path=request_path
             )
             if request_path and applicable_routes:
                 for route in applicable_routes:
@@ -579,7 +578,15 @@ class UnifiedDispatcher:
             # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_http_port.get(hostname)
             if not target_port:
-                logger.warning(f"No HTTP instance found for hostname: {hostname}")
+                # Log available instances for debugging
+                available_http_hosts = list(self.hostname_to_http_port.keys())[:10]  # First 10
+                logger.warning(
+                    "No HTTP instance found for hostname",
+                    hostname=hostname,
+                    available_http_hosts=available_http_hosts,
+                    total_http_hosts=len(self.hostname_to_http_port),
+                    named_instances=list(self.named_instances.keys())[:10]
+                )
                 # Send 404 response
                 response = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
                 writer.write(response)
@@ -628,16 +635,14 @@ class UnifiedDispatcher:
             if not data:
                 logger.warning(
                     "No data received in HTTPS connection",
-                    ip=client_ip,
-                    correlation_id=correlation_id
+                    ip=client_ip
                 )
                 return
             
             logger.debug(
                 "HTTPS data received",
                 ip=client_ip,
-                data_len=len(data),
-                correlation_id=correlation_id
+                data_len=len(data)
             )
             
             # Extract SNI hostname
@@ -645,8 +650,8 @@ class UnifiedDispatcher:
             if not hostname:
                 logger.warning(
                     "No SNI hostname found in connection",
-                    ip=client_ip,
-                    correlation_id=correlation_id                )
+                    ip=client_ip
+                )
                 writer.close()
                 await writer.wait_closed()
                 return
@@ -654,8 +659,8 @@ class UnifiedDispatcher:
             logger.debug(
                 "SNI hostname extracted",
                 ip=client_ip,
-                hostname=hostname,
-                correlation_id=correlation_id            )
+                hostname=hostname
+            )
             
             # Get proxy config if this is a proxy domain
             proxy_config = None
@@ -687,8 +692,15 @@ class UnifiedDispatcher:
                 return
             
             if not target_port:
-                logger.warning(f"No HTTPS instance found for hostname: {hostname}")
-                logger.warning(f"Available HTTPS ports: {list(self.hostname_to_https_port.keys())}")
+                # Log available instances for debugging
+                available_https_hosts = list(self.hostname_to_https_port.keys())[:10]  # First 10
+                logger.warning(
+                    "No HTTPS instance found for hostname",
+                    hostname=hostname,
+                    available_https_hosts=available_https_hosts,
+                    total_https_hosts=len(self.hostname_to_https_port),
+                    named_instances=list(self.named_instances.keys())[:10]
+                )
                 writer.close()
                 await writer.wait_closed()
                 return
@@ -910,7 +922,16 @@ class UnifiedMultiInstanceServer:
         self.next_http_port += 1
         self.next_https_port += 1
         
-        logger.info(f"Created instance for {hostname} (HTTP:{proxy_target.enable_http}, HTTPS:{proxy_target.enable_https and cert is not None})")
+        logger.info(
+            "Created proxy instance",
+            hostname=hostname,
+            http_enabled=proxy_target.enable_http,
+            https_enabled=proxy_target.enable_https and cert is not None,
+            http_port=instance.http_port,
+            https_port=instance.https_port,
+            target_url=proxy_target.target_url,
+            cert_name=proxy_target.cert_name if proxy_target.cert_name else "none"
+        )
     
     async def remove_instance_for_proxy(self, hostname: str):
         """Remove instance for a proxy target."""

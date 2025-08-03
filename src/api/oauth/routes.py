@@ -21,6 +21,7 @@ from .models import ClientRegistration, TokenResponse
 from .rfc7592 import DynamicClientConfigurationEndpoint
 from ...shared.logging import get_logger, log_request, log_response
 from ...shared.config import Config
+from ...shared.client_ip import get_real_client_ip
 
 # Set up logging
 logger = get_logger(__name__)
@@ -125,7 +126,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     ):
         """The Divine Registration Portal - RFC 7591 compliant - PUBLIC ACCESS"""
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_real_client_ip(request)
         
         logger.info(
             "OAuth client registration request",
@@ -261,7 +262,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     ):
         """Portal to authentication realm - initiates GitHub OAuth flow"""
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_real_client_ip(request)
         
         logger.info(
             "OAuth authorization request",
@@ -282,13 +283,40 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             hostname=request.headers.get("host"),
             oauth_action="authorize",
             oauth_client_id=client_id,
+            oauth_redirect_uri=redirect_uri,
+            oauth_response_type=response_type,
             oauth_scope=scope,
             oauth_state=state,
-            oauth_resources=resource if resource else []
+            oauth_code_challenge=code_challenge[:8] + "..." if code_challenge else None,
+            oauth_code_challenge_method=code_challenge_method,
+            oauth_resources=resource if resource else [],
+            oauth_resource_count=len(resource) if resource else 0
         )
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client:
+            logger.warning(
+                "OAuth authorization rejected - invalid client",
+                ip=client_ip,
+                client_id=client_id,
+                oauth_rejection_reason="client_not_found",
+                requested_redirect_uri=redirect_uri,
+                requested_scope=scope
+            )
+            
+            # Log the rejection in RequestLogger
+            await log_response(
+                logger,
+                None,
+                0,
+                ip=client_ip,
+                hostname=request.headers.get("host"),
+                oauth_action="authorize_rejected",
+                oauth_rejection_reason="invalid_client",
+                oauth_client_id=client_id,
+                oauth_authorization_granted="rejected"
+            )
+            
             # RFC 6749 - MUST NOT redirect on invalid client_id
             return HTMLResponse(
                 status_code=400,
@@ -347,8 +375,38 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 """,
             )
 
+        # Log successful client validation
+        logger.info(
+            "OAuth client validated",
+            ip=client_ip,
+            client_id=client_id,
+            client_name=getattr(client, 'client_name', 'Unknown'),
+            registered_redirect_uris=getattr(client, 'redirect_uris', [])
+        )
+        
         # Validate redirect_uri
         if not client.check_redirect_uri(redirect_uri):
+            logger.warning(
+                "OAuth authorization rejected - invalid redirect URI",
+                ip=client_ip,
+                client_id=client_id,
+                oauth_rejection_reason="redirect_uri_not_registered",
+                requested_redirect_uri=redirect_uri,
+                registered_redirect_uris=getattr(client, 'redirect_uris', [])
+            )
+            
+            await log_response(
+                logger,
+                None,
+                0,
+                ip=client_ip,
+                hostname=request.headers.get("host"),
+                oauth_action="authorize_rejected",
+                oauth_rejection_reason="invalid_redirect_uri",
+                oauth_client_id=client_id,
+                oauth_authorization_granted="rejected"
+            )
+            
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -359,12 +417,54 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         # Validate response_type
         if not client.check_response_type(response_type):
+            logger.warning(
+                "OAuth authorization rejected - unsupported response type",
+                ip=client_ip,
+                client_id=client_id,
+                oauth_rejection_reason="unsupported_response_type",
+                requested_response_type=response_type,
+                supported_response_types=getattr(client, 'response_types', ['code'])
+            )
+            
+            await log_response(
+                logger,
+                None,
+                0,
+                ip=client_ip,
+                hostname=request.headers.get("host"),
+                oauth_action="authorize_rejected",
+                oauth_rejection_reason="unsupported_response_type",
+                oauth_client_id=client_id,
+                oauth_authorization_granted="rejected"
+            )
+            
             return RedirectResponse(
                 url=f"{redirect_uri}?error=unsupported_response_type&state={state}",
             )
 
         # Validate PKCE method
         if code_challenge and code_challenge_method != "S256":
+            logger.warning(
+                "OAuth authorization rejected - invalid PKCE method",
+                ip=client_ip,
+                client_id=client_id,
+                oauth_rejection_reason="invalid_pkce_method",
+                requested_pkce_method=code_challenge_method,
+                supported_pkce_methods=["S256"]
+            )
+            
+            await log_response(
+                logger,
+                None,
+                0,
+                ip=client_ip,
+                hostname=request.headers.get("host"),
+                oauth_action="authorize_rejected",
+                oauth_rejection_reason="invalid_pkce_method",
+                oauth_client_id=client_id,
+                oauth_authorization_granted="rejected"
+            )
+            
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -378,10 +478,38 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Ensure all resources are valid URIs
             for res in resource:
                 if not res.startswith(("http://", "https://")):
+                    logger.warning(
+                        "OAuth authorization rejected - invalid resource URI",
+                        ip=client_ip,
+                        client_id=client_id,
+                        oauth_rejection_reason="invalid_resource_uri",
+                        invalid_resource=res,
+                        all_requested_resources=resource
+                    )
+                    
+                    await log_response(
+                        logger,
+                        None,
+                        0,
+                        ip=client_ip,
+                        hostname=request.headers.get("host"),
+                        oauth_action="authorize_rejected",
+                        oauth_rejection_reason="invalid_resource_uri",
+                        oauth_client_id=client_id,
+                        oauth_authorization_granted="rejected"
+                    )
+                    
                     return RedirectResponse(
                         url=f"{redirect_uri}?error=invalid_resource&error_description=Resource+must+be+a+valid+URI&state={state}",
                     )
-            logger.info(f"Authorization request includes resources: {resource}")
+            logger.info(
+                "OAuth authorization accepted - all validations passed",
+                ip=client_ip,
+                client_id=client_id,
+                resources=resource,
+                scope=scope,
+                has_pkce=bool(code_challenge)
+            )
 
         # Store authorization request state
         auth_state = secrets.token_urlsafe(32)
@@ -413,14 +541,41 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         }
 
         github_url = f"https://github.com/login/oauth/authorize?{urlencode(github_params)}"  # TODO: Break long line
-        return RedirectResponse(
+        
+        # Log the redirect destination
+        logger.info(
+            "OAuth authorize redirecting to GitHub",
+            ip=client_ip,
+            client_id=client_id,
+            redirect_to=github_url,
+            auth_state=auth_state,
+            oauth_validations_passed="all",
+            oauth_authorization_decision="pending_user_consent"
+        )
+        
+        response = RedirectResponse(
             url=github_url,
+            status_code=307,
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
             },
         )
+        
+        # Log response with redirect info
+        await log_response(
+            logger,
+            response,
+            0,  # duration will be calculated by log_response
+            ip=client_ip,
+            hostname=request.headers.get("host"),
+            oauth_action="authorize_redirect",
+            oauth_redirect_to=github_url,
+            oauth_authorization_granted="pending_github_auth"
+        )
+        
+        return response
 
     # Callback endpoint
     @router.get("/callback")
@@ -428,11 +583,13 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         request: Request,
         code: str = Query(...),
         state: str = Query(...),
+        error: Optional[str] = Query(None),
+        error_description: Optional[str] = Query(None),
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """The blessed return path - handles GitHub OAuth callback"""
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_real_client_ip(request)
         
         logger.info(
             "OAuth callback received from GitHub",
@@ -448,7 +605,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             client_ip,
             hostname=request.headers.get("host"),
             oauth_action="callback",
-            oauth_state=state
+            oauth_state=state,
+            oauth_code=code[:8] + "..." if code else "no_code",
+            oauth_error=error,
+            oauth_error_description=error_description
         )
         
         # Retrieve authorization state
@@ -569,7 +729,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if auth_data["redirect_uri"] == "urn:ietf:wg:oauth:2.0:oob":
             logger.debug(
                 "Using out-of-band redirect for auth code display",
-                correlation_id=correlation_id
+                client_id=auth_data["client_id"],
+                state=auth_data["state"]
             )
             return RedirectResponse(
                 url=f"https://auth.{settings.base_domain}/success?code={auth_code}&state={auth_data['state']}",  # TODO: Break long line
@@ -583,21 +744,44 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Normal redirect
         redirect_params = {"code": auth_code, "state": auth_data["state"]}
 
+        final_redirect_url = f"{auth_data['redirect_uri']}?{urlencode(redirect_params)}"
+        
         logger.info(
             "OAuth callback completed, redirecting to client",
             ip=client_ip,
             client_id=auth_data.get('client_id'),
-            redirect_uri=auth_data["redirect_uri"]
+            redirect_uri=auth_data["redirect_uri"],
+            redirect_to=final_redirect_url,
+            auth_code=auth_code[:8] + "...",
+            github_username=user_info["login"],
+            github_email=user_info.get("email", "")
         )
-
-        return RedirectResponse(
-            url=f"{auth_data['redirect_uri']}?{urlencode(redirect_params)}",  # TODO: Break long line
+        
+        response = RedirectResponse(
+            url=final_redirect_url,
+            status_code=307,
             headers={
                 "Cache-Control": "no-cache, no-store, must-revalidate",
                 "Pragma": "no-cache",
                 "Expires": "0",
             },
         )
+        
+        # Log response with detailed OAuth context
+        await log_response(
+            logger,
+            response,
+            0,  # duration will be calculated by log_response
+            ip=client_ip,
+            hostname=request.headers.get("host"),
+            oauth_action="callback_redirect",
+            oauth_redirect_to=final_redirect_url,
+            oauth_authorization_granted="success",
+            oauth_github_username=user_info["login"],
+            oauth_github_email=user_info.get("email", "")
+        )
+        
+        return response
 
     # Token endpoint
     @router.post("/token")
@@ -615,7 +799,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     ):
         """The transmutation chamber - exchanges codes for tokens"""
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_real_client_ip(request)
         
         logger.info(
             "OAuth token exchange request",
@@ -798,7 +982,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 username=code_data["username"],
                 scope=code_data["scope"],
                 resources=token_resources,
-                token_jti=token_claims.get("jti")
+                token_jti=token_claims.get("jti"),
+                token_aud=token_claims.get("aud"),
+                authorized_resources=authorized_resources,
+                requested_resources=requested_resources
             )
             
             # Log response with full token details
@@ -911,11 +1098,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     @router.post("/verify")
     async def verify_token(request: Request):
         """Token examination oracle - validates Bearer tokens for Traefik"""
-        # Get correlation ID from context or generate new one
-        correlation_id = correlation_id_var.get()
-        client_ip = request.headers.get("x-forwarded-for", 
-                                      request.headers.get("x-real-ip", 
-                                                        request.client.host if request.client else "unknown"))
+        # Get client IP for logging
+        client_ip = get_real_client_ip(request)
         
         try:
             # Extract the target resource from forwarded headers
@@ -930,9 +1114,18 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             if forwarded_host:
                 resource = f"{forwarded_proto}://{forwarded_host}"
             
+            # Get the real forwarded IP if present
+            forwarded_ip = request.headers.get("x-forwarded-for", client_ip)
+            if forwarded_ip and forwarded_ip != client_ip:
+                logger.debug(
+                    "Using forwarded IP for verification",
+                    direct_ip=client_ip,
+                    forwarded_ip=forwarded_ip
+                )
+            
             logger.debug(
                 "OAuth token verification request",
-                    ip=client_ip,
+                ip=forwarded_ip,
                 resource=resource,
                 path=forwarded_path,
                 method=forwarded_method
@@ -952,7 +1145,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             logger.info(
                 "OAuth token verified successfully",
-                    ip=client_ip,
+                ip=forwarded_ip,
                 resource=resource,
                 user_id=token.get("sub"),
                 username=token.get("username"),
@@ -975,7 +1168,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Log specific HTTP exceptions (401, 403, etc.)
             logger.warning(
                 "OAuth token verification failed",
-                    ip=client_ip,
+                ip=forwarded_ip,
                 resource=resource,
                 status_code=e.status_code,
                 error=e.detail
@@ -984,7 +1177,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         except Exception as e:
             logger.error(
                 "OAuth token verification error",
-                    ip=client_ip,
+                ip=forwarded_ip,
                 resource=resource,
                 error_type=type(e).__name__,
                 error_message=str(e),
@@ -1005,7 +1198,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     ):
         """Token banishment altar - revokes tokens"""
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_real_client_ip(request)
         
         logger.info(
             "OAuth token revocation request",
@@ -1057,7 +1250,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     ):
         """Token examination oracle - RFC 7662 compliant"""
         # Get client IP
-        client_ip = request.client.host if request.client else "unknown"
+        client_ip = get_real_client_ip(request)
         
         logger.info(
             "OAuth token introspection request",

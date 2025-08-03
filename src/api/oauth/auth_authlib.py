@@ -18,6 +18,9 @@ from authlib.oauth2.rfc6749 import ClientMixin
 
 from .config import Settings
 from .keys import RSAKeyManager
+from ...shared.logging import get_logger
+
+logger = get_logger(__name__)
 
 
 class OAuth2Client(ClientMixin):
@@ -99,9 +102,20 @@ class AuthManager:
         if resources:
             # If resources specified, use them as audience (RFC 8707)
             aud = resources if len(resources) > 1 else resources[0]
+            logger.debug(
+                "Setting token audience from resources",
+                resources=resources,
+                audience=aud,
+                client_id=claims.get("client_id")
+            )
         else:
             # Fallback to auth server URL for backward compatibility
             aud = f"https://auth.{self.settings.base_domain}"
+            logger.debug(
+                "No resources specified, using default audience",
+                audience=aud,
+                client_id=claims.get("client_id")
+            )
         
         payload = {
             **claims,
