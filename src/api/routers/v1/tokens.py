@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from pydantic import BaseModel, EmailStr
 
 from ...auth import get_current_token_info, require_admin
+from ....shared.client_ip import get_real_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -320,7 +321,7 @@ def create_router(storage):
             "token_name": name,
             "admin_token": _["name"],  # Which admin token was used
             "timestamp": datetime.now(timezone.utc).isoformat(),
-            "client_ip": request.client.host if request and request.client else "unknown"
+            "client_ip": get_real_client_ip(request)
         }
         
         # Store audit log in Redis

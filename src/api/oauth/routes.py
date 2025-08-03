@@ -7,6 +7,7 @@ import jwt
 import logging
 import secrets
 import time
+import traceback
 from typing import Optional
 from urllib.parse import urlencode
 
@@ -265,18 +266,24 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         client_ip = get_real_client_ip(request)
         
         logger.info(
-            "OAuth authorization request",
+            "OAuth authorization request - DETAILED WITH RESOURCES",
             ip=client_ip,
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
             state=state,
             resource=resource,
-            code_challenge=bool(code_challenge)
+            resource_count=len(resource) if resource else 0,
+            resource_details=[{"uri": r, "is_valid_url": r.startswith(("http://", "https://"))} for r in (resource or [])],
+            code_challenge=bool(code_challenge),
+            code_challenge_method=code_challenge_method if code_challenge else None,
+            response_type=response_type,
+            request_url=str(request.url),
+            request_headers={k: v for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']}
         )
         
-        # Log request with OAuth context
-        await log_request(
+        # Log request with OAuth context and store context
+        request_context = await log_request(
             logger,
             request,
             client_ip,
@@ -292,6 +299,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             oauth_resources=resource if resource else [],
             oauth_resource_count=len(resource) if resource else 0
         )
+        request_key = request_context.get("_request_key") if request_context else None
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client:
@@ -314,7 +322,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 oauth_action="authorize_rejected",
                 oauth_rejection_reason="invalid_client",
                 oauth_client_id=client_id,
-                oauth_authorization_granted="rejected"
+                oauth_authorization_granted="rejected",
+                request_key=request_key
             )
             
             # RFC 6749 - MUST NOT redirect on invalid client_id
@@ -801,6 +810,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Get client IP
         client_ip = get_real_client_ip(request)
         
+        # DEBUG: Add print to verify execution
+        print(f"[DEBUG] Token exchange request from {client_ip}: grant_type={grant_type}, client_id={client_id}, resource={resource}")
+        
         logger.info(
             "OAuth token exchange request",
             ip=client_ip,
@@ -808,7 +820,18 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             grant_type=grant_type,
             has_code=bool(code),
             has_refresh_token=bool(refresh_token),
-            resource=resource
+            resource=resource,
+            resource_count=len(resource) if resource else 0,
+            redirect_uri=redirect_uri,
+            has_code_verifier=bool(code_verifier),
+            request_headers={k: v for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']},
+            request_form_data={
+                "grant_type": grant_type,
+                "client_id": client_id,
+                "has_client_secret": bool(client_secret),
+                "resource": resource,
+                "redirect_uri": redirect_uri
+            }
         )
         
         # Log request with OAuth context
@@ -942,6 +965,21 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 # Use all authorized resources if none specifically requested
                 token_resources = authorized_resources
 
+            # Log detailed token creation context before generation
+            logger.info(
+                "Creating OAuth access token",
+                ip=client_ip,
+                client_id=client_id,
+                user_id=code_data["user_id"],
+                username=code_data["username"],
+                scope=code_data["scope"],
+                authorized_resources=authorized_resources,
+                requested_resources=requested_resources,
+                final_token_resources=token_resources,
+                resource_count=len(token_resources),
+                audience_will_be_set_to=token_resources  # This becomes the 'aud' claim
+            )
+            
             # Generate tokens
             access_token = await auth_manager.create_jwt_token(
                 {
@@ -970,13 +1008,33 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Delete used authorization code
             await redis_client.delete(f"oauth:code:{code}")
 
-            # Extract token claims for logging
+            # Extract token claims for detailed logging
             import jwt
             token_claims = jwt.decode(access_token, options={"verify_signature": False})
             
             logger.info(
-                "OAuth token issued via authorization code",
-                    ip=client_ip,
+                "OAuth token generated - DETAILED TOKEN INFO",
+                ip=client_ip,
+                client_id=client_id,
+                user_id=code_data["user_id"],
+                username=code_data["username"],
+                token_resources=token_resources,
+                token_audience=token_claims.get("aud"),
+                token_audience_type=type(token_claims.get("aud")).__name__,
+                token_issuer=token_claims.get("iss"),
+                token_subject=token_claims.get("sub"),
+                token_scope=token_claims.get("scope"),
+                token_jti=token_claims.get("jti"),
+                all_token_claims=token_claims,
+                code_data_resources=code_data.get("resources", []),
+                requested_resources_in_token_request=resource,
+                authorized_resources_from_code=authorized_resources
+            )
+            
+            # Log complete token payload (without signature verification)
+            logger.info(
+                "OAuth token issued via authorization code - COMPLETE TOKEN DETAILS",
+                ip=client_ip,
                 client_id=client_id,
                 user_id=code_data["user_id"],
                 username=code_data["username"],
@@ -984,8 +1042,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 resources=token_resources,
                 token_jti=token_claims.get("jti"),
                 token_aud=token_claims.get("aud"),
+                token_aud_type=type(token_claims.get("aud")).__name__,
+                token_aud_count=len(token_claims.get("aud", [])) if isinstance(token_claims.get("aud"), list) else 1,
+                token_exp=token_claims.get("exp"),
+                token_iat=token_claims.get("iat"),
+                token_iss=token_claims.get("iss"),
+                token_sub=token_claims.get("sub"),
+                token_azp=token_claims.get("azp"),
+                complete_claims={
+                    k: v for k, v in token_claims.items() 
+                    if k not in ["access_token", "refresh_token"]  # Don't log actual tokens
+                },
                 authorized_resources=authorized_resources,
-                requested_resources=requested_resources
+                requested_resources=requested_resources,
+                resource_validation_passed=True
             )
             
             # Log response with full token details
@@ -994,7 +1064,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 Response(status_code=200),
                 0,
                     hostname=request.headers.get("host"),
-                oauth_token_issued=True,
+                oauth_token_issued="true",
                 oauth_token_jti=token_claims.get("jti"),
                 oauth_user_id=code_data["user_id"],
                 oauth_username=code_data["username"],
@@ -1052,6 +1122,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 # Use all resources from refresh token
                 token_resources = refresh_data.get("resources", [])
 
+            # Log refresh token context
+            logger.info(
+                "Refreshing OAuth access token",
+                ip=client_ip,
+                client_id=client_id,
+                user_id=refresh_data["user_id"],
+                username=refresh_data["username"],
+                scope=refresh_data["scope"],
+                refresh_token_resources=refresh_data.get("resources", []),
+                requested_resources=resource if resource else [],
+                final_token_resources=token_resources,
+                audience_will_be_set_to=token_resources
+            )
+            
             # Generate new access token
             access_token = await auth_manager.create_jwt_token(
                 {
@@ -1064,18 +1148,26 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 redis_client,
             )
 
-            # Extract token claims for logging
+            # Extract token claims for detailed logging
             token_claims = jwt.decode(access_token, options={"verify_signature": False})
             
             logger.info(
-                "OAuth token refreshed successfully",
-                    ip=client_ip,
+                "OAuth token refreshed successfully - COMPLETE TOKEN DETAILS",
+                ip=client_ip,
                 client_id=client_id,
                 user_id=refresh_data["user_id"],
                 username=refresh_data["username"],
                 scope=refresh_data["scope"],
                 resources=token_resources,
-                token_jti=token_claims.get("jti")
+                token_jti=token_claims.get("jti"),
+                token_aud=token_claims.get("aud"),
+                token_aud_type=type(token_claims.get("aud")).__name__,
+                token_aud_count=len(token_claims.get("aud", [])) if isinstance(token_claims.get("aud"), list) else 1,
+                complete_claims={
+                    k: v for k, v in token_claims.items() 
+                    if k not in ["access_token", "refresh_token"]
+                },
+                refresh_successful=True
             )
 
             return TokenResponse(

@@ -42,20 +42,30 @@ class RequestLogger:
         """Log HTTP request with multiple indexes for efficient querying."""
         timestamp = time.time()
         
-        # Create request data
+        # Create request data with proper serialization for Redis
         request_data = {
-            "timestamp": timestamp,
-            "ip": ip,
-            "hostname": hostname,
-            "method": method,
-            "path": path,
-            "query": query or "",
-            "user_agent": user_agent or "",
-            "auth_user": auth_user or "",
-            "referer": referer or "",
-            "type": "request",
-            **extra_fields
+            "timestamp": str(timestamp),
+            "ip": str(ip),
+            "hostname": str(hostname),
+            "method": str(method),
+            "path": str(path),
+            "query": str(query or ""),
+            "user_agent": str(user_agent or ""),
+            "auth_user": str(auth_user or ""),
+            "referer": str(referer or ""),
+            "type": "request"
         }
+        
+        # Add extra fields with proper Redis serialization
+        for key, value in extra_fields.items():
+            if isinstance(value, (bool, int, float)):
+                request_data[key] = str(value)
+            elif isinstance(value, (list, dict)):
+                request_data[key] = json.dumps(value)
+            elif value is None:
+                request_data[key] = ""
+            else:
+                request_data[key] = str(value)
         
         # Generate unique key using IP and timestamp
         sequence = int((timestamp * 1000) % 1000000)
@@ -130,45 +140,66 @@ class RequestLogger:
         duration_ms: float,
         response_size: Optional[int] = None,
         error: Optional[Dict[str, Any]] = None,
+        request_key: Optional[str] = None,
         **extra_fields
     ) -> None:
-        """Log HTTP response data."""
+        """Log HTTP response data.
+        
+        If request_key is provided, updates the existing request entry.
+        Otherwise creates a new entry (for backwards compatibility).
+        """
         timestamp = time.time()
         
-        # Generate response key using IP and timestamp
-        sequence = int((timestamp * 1000) % 1000000)
-        response_key = f"resp:{ip}:{int(timestamp)}:{sequence}"
+        # Use request_key if provided, otherwise generate new key
+        if request_key:
+            entry_key = request_key
+        else:
+            # Fallback for cases where request_key isn't available
+            sequence = int((timestamp * 1000) % 1000000)
+            entry_key = f"req:{ip}:{int(timestamp)}:{sequence}"
         
-        # Create response data
+        # Create response data with proper Redis serialization
         response_data = {
-            "timestamp": timestamp,
-            "ip": ip,
-            "status": status,
-            "duration_ms": round(duration_ms, 2),
-            "response_size": response_size or 0,
-            "type": "response",
-            **extra_fields
+            "status": str(status),
+            "duration_ms": str(round(duration_ms, 2)),
+            "response_size": str(response_size or 0),
         }
         
-        if error:
-            response_data["error_type"] = error.get("type", "unknown")
-            response_data["error_message"] = error.get("message", "")
+        # If updating existing entry, don't overwrite type
+        if not request_key:
+            response_data["timestamp"] = str(timestamp)
+            response_data["ip"] = str(ip)
+            response_data["type"] = "request"  # Unified entry type
         
-        # Store response data separately
-        await self.redis.hset(response_key, mapping=response_data)
-        await self.redis.expire(response_key, self.ttl_seconds)
+        # Add extra fields with proper Redis serialization
+        for key, value in extra_fields.items():
+            if isinstance(value, (bool, int, float)):
+                response_data[key] = str(value)
+            elif isinstance(value, (list, dict)):
+                response_data[key] = json.dumps(value)
+            elif value is None:
+                response_data[key] = ""
+            else:
+                response_data[key] = str(value)
+        
+        if error:
+            response_data["error_type"] = str(error.get("type", "unknown"))
+            response_data["error_message"] = str(error.get("message", ""))
+        
+        # Update existing entry or create new one
+        await self.redis.hset(entry_key, mapping=response_data)
+        
+        # Only set TTL if creating new entry
+        if not request_key:
+            await self.redis.expire(entry_key, self.ttl_seconds)
         
         # Index by status code
-        await self.redis.zadd(f"idx:req:status:{status}", {response_key: timestamp})
+        await self.redis.zadd(f"idx:req:status:{status}", {entry_key: timestamp})
         await self.redis.expire(f"idx:req:status:{status}", self.ttl_seconds)
-        
-        # Index by IP for responses
-        await self.redis.zadd(f"idx:resp:ip:{ip}", {response_key: timestamp})
-        await self.redis.expire(f"idx:resp:ip:{ip}", self.ttl_seconds)
         
         # Index errors specially
         if status >= 400:
-            await self.redis.zadd(f"idx:req:errors", {response_key: timestamp})
+            await self.redis.zadd(f"idx:req:errors", {entry_key: timestamp})
             
             # Track error statistics
             if hostname := extra_fields.get("hostname", "unknown"):
@@ -186,7 +217,7 @@ class RequestLogger:
         
         # Index slow requests
         if duration_ms > 1000:  # Requests over 1 second
-            await self.redis.zadd(f"idx:req:slow", {response_key: duration_ms})
+            await self.redis.zadd(f"idx:req:slow", {entry_key: duration_ms})
         
         # Update response time statistics
         if hostname := extra_fields.get("hostname", "unknown"):
@@ -207,40 +238,29 @@ class RequestLogger:
         await self.redis.expire(window_key, 600)
     
     async def query_by_ip(self, ip: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
-        """Query requests and responses by IP address."""
+        """Query requests by IP address (includes response data in unified entries)."""
         min_timestamp = time.time() - (hours * 3600)
         
-        # Get request keys from index
+        # Get request keys from index (now includes response data)
         request_keys = await self.redis.zrangebyscore(
             f"idx:req:ip:{ip}",
             min_timestamp,
             "+inf",
             start=0,
-            num=limit // 2  # Split limit between requests and responses
+            num=limit
         )
         
-        # Get response keys from index
-        response_keys = await self.redis.zrangebyscore(
-            f"idx:resp:ip:{ip}",
-            min_timestamp,
-            "+inf",
-            start=0,
-            num=limit // 2
-        )
-        
-        # Batch fetch all data
-        all_keys = list(request_keys) + list(response_keys)
-        if not all_keys:
+        if not request_keys:
             return []
         
         pipeline = self.redis.pipeline()
-        for key in all_keys:
+        for key in request_keys:
             pipeline.hgetall(key)
         
         results = await pipeline.execute()
-        # Sort by timestamp
+        # Sort by timestamp descending (most recent first)
         data = [r for r in results if r]
-        return sorted(data, key=lambda x: float(x.get('timestamp', 0)))
+        return sorted(data, key=lambda x: float(x.get('timestamp', 0)), reverse=True)
     
     async def query_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
         """Query requests by hostname."""

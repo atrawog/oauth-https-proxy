@@ -366,7 +366,7 @@ async def log_request(
     ip: str,
     **extra_context
 ) -> Dict[str, Any]:
-    """Log HTTP request details."""
+    """Log HTTP request details with enhanced body logging for OAuth/MCP endpoints."""
     config = get_logger_config()
     
     log_data = {
@@ -380,14 +380,66 @@ async def log_request(
         **extra_context
     }
     
-    # Log request body if enabled
-    if config["log_request_body"] and hasattr(request, "body"):
+    # Enhanced request body logging for critical endpoints
+    request_path = str(request.url.path)
+    is_critical_endpoint = any(path in request_path for path in [
+        "/token", "/mcp", "/authorize", "/verify", "/introspect", 
+        "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"
+    ])
+    
+    # Log request body if enabled or if it's a critical endpoint
+    if (config["log_request_body"] or is_critical_endpoint) and hasattr(request, "body"):
         try:
             body = await request.body()
-            if body and len(body) <= config["max_body_size"]:
-                log_data["request_body"] = body.decode("utf-8", errors="ignore")
-        except Exception:
-            pass
+            if body:
+                body_text = body.decode("utf-8", errors="ignore")
+                
+                # For critical endpoints, always log (with size limit)
+                if is_critical_endpoint:
+                    max_size = config["max_body_size"] * 2  # Double the limit for critical endpoints
+                    if len(body_text) <= max_size:
+                        log_data["request_body"] = body_text
+                        log_data["request_body_size"] = len(body_text)
+                    else:
+                        log_data["request_body"] = body_text[:max_size] + "... [TRUNCATED]"
+                        log_data["request_body_size"] = len(body_text)
+                        log_data["request_body_truncated"] = True
+                    
+                    # Parse form data for OAuth endpoints
+                    if request.headers.get("content-type", "").startswith("application/x-www-form-urlencoded"):
+                        try:
+                            from urllib.parse import parse_qs
+                            form_data = parse_qs(body_text)
+                            # Mask sensitive fields
+                            masked_form_data = {}
+                            for key, values in form_data.items():
+                                if key.lower() in ["client_secret", "code", "refresh_token", "code_verifier"]:
+                                    masked_form_data[key] = ["***MASKED***" for _ in values]
+                                else:
+                                    masked_form_data[key] = values
+                            log_data["request_form_data"] = masked_form_data
+                        except Exception:
+                            pass
+                
+                elif len(body_text) <= config["max_body_size"]:
+                    log_data["request_body"] = body_text
+                    log_data["request_body_size"] = len(body_text)
+        except Exception as e:
+            log_data["request_body_error"] = str(e)
+    
+    # Add headers for critical endpoints
+    if is_critical_endpoint:
+        critical_headers = {}
+        for header_name in ["authorization", "content-type", "accept", "x-forwarded-host", "x-forwarded-proto"]:
+            header_value = request.headers.get(header_name)
+            if header_value:
+                if header_name == "authorization":
+                    # Mask authorization header
+                    critical_headers[header_name] = header_value[:20] + "..." if len(header_value) > 20 else header_value
+                else:
+                    critical_headers[header_name] = header_value
+        log_data["critical_headers"] = critical_headers
+        log_data["is_critical_endpoint"] = True
     
     # Log to structlog for console output
     logger.info("Request received", **log_data)
@@ -397,6 +449,7 @@ async def log_request(
     request_key = None
     if request_logger:
         try:
+            # Pass ALL log_data to RequestLogger for full visibility in app-logs-by-ip
             request_key = await request_logger.log_request(
                 ip=ip,
                 hostname=log_data.get("hostname", ""),
@@ -406,6 +459,13 @@ async def log_request(
                 user_agent=log_data.get("user_agent", ""),
                 auth_user=extra_context.get("auth_user"),
                 referer=log_data.get("referer", ""),
+                # Include ALL enhanced logging data for OAuth debugging
+                request_body=log_data.get("request_body", ""),
+                request_body_size=log_data.get("request_body_size", 0),
+                request_body_truncated=log_data.get("request_body_truncated", False),
+                request_form_data=log_data.get("request_form_data", {}),
+                critical_headers=log_data.get("critical_headers", {}),
+                is_critical_endpoint=log_data.get("is_critical_endpoint", False),
                 **{k: v for k, v in extra_context.items() if k not in ["hostname", "auth_user"]}
             )
             log_data["_request_key"] = request_key  # Store for later use
@@ -419,9 +479,10 @@ async def log_response(
     logger: BoundLogger,
     response: Any,
     duration_ms: float,
+    request_key: Optional[str] = None,
     **extra_context
 ) -> Dict[str, Any]:
-    """Log HTTP response details."""
+    """Log HTTP response details with enhanced body logging for OAuth/MCP endpoints."""
     config = get_logger_config()
     
     log_data = {
@@ -430,20 +491,101 @@ async def log_response(
         **extra_context
     }
     
-    # Log response body for errors
-    if config["log_response_body"] and log_data.get("status", 0) >= 400:
+    # Determine if this is a critical endpoint response
+    request_path = extra_context.get("path", "")
+    is_critical_endpoint = any(path in str(request_path) for path in [
+        "/token", "/mcp", "/authorize", "/verify", "/introspect", 
+        "/.well-known/oauth-protected-resource", "/.well-known/oauth-authorization-server"
+    ]) or extra_context.get("is_critical_endpoint", False)
+    
+    # Enhanced response body logging
+    should_log_body = (
+        config["log_response_body"] or 
+        is_critical_endpoint or 
+        log_data.get("status", 0) >= 400  # Always log error responses
+    )
+    
+    if should_log_body:
         try:
+            body = None
             if hasattr(response, "body"):
                 body = response.body
+            elif hasattr(response, "content"):
+                body = response.content
+            
+            if body:
                 if isinstance(body, bytes):
-                    body = body.decode("utf-8", errors="ignore")
-                if len(body) <= config["max_body_size"]:
-                    log_data["response_body"] = body
-        except Exception:
-            pass
+                    body_text = body.decode("utf-8", errors="ignore")
+                else:
+                    body_text = str(body)
+                
+                # For critical endpoints or errors, be more generous with size limits
+                max_size = config["max_body_size"]
+                if is_critical_endpoint or log_data.get("status", 0) >= 400:
+                    max_size *= 3  # Triple the limit for critical endpoints and errors
+                
+                if len(body_text) <= max_size:
+                    log_data["response_body"] = body_text
+                    log_data["response_body_size"] = len(body_text)
+                else:
+                    log_data["response_body"] = body_text[:max_size] + "... [TRUNCATED]"
+                    log_data["response_body_size"] = len(body_text)
+                    log_data["response_body_truncated"] = True
+                
+                # Try to parse JSON responses for better logging
+                if body_text.strip().startswith(('{', '[')):
+                    try:
+                        import json
+                        parsed_body = json.loads(body_text)
+                        
+                        # For OAuth token responses, mask sensitive data
+                        if isinstance(parsed_body, dict) and "access_token" in parsed_body:
+                            masked_body = parsed_body.copy()
+                            for sensitive_key in ["access_token", "refresh_token", "id_token"]:
+                                if sensitive_key in masked_body:
+                                    token_value = masked_body[sensitive_key]
+                                    if isinstance(token_value, str) and len(token_value) > 20:
+                                        masked_body[sensitive_key] = token_value[:10] + "..." + token_value[-10:]
+                            log_data["response_json_masked"] = masked_body
+                        else:
+                            log_data["response_json"] = parsed_body
+                    except json.JSONDecodeError:
+                        pass
+        except Exception as e:
+            log_data["response_body_error"] = str(e)
     
-    level = "error" if log_data.get("status", 0) >= 500 else "info"
-    getattr(logger, level)("Response sent", **log_data)
+    # Add response headers for critical endpoints
+    if is_critical_endpoint and hasattr(response, "headers"):
+        critical_response_headers = {}
+        for header_name in ["content-type", "www-authenticate", "cache-control", "location"]:
+            header_value = response.headers.get(header_name)
+            if header_value:
+                critical_response_headers[header_name] = header_value
+        log_data["critical_response_headers"] = critical_response_headers
+    
+    # Enhanced logging for OAuth failures
+    status_code = log_data.get("status", 0)
+    if status_code in [401, 403] and is_critical_endpoint:
+        log_data["oauth_failure_analysis"] = {
+            "status": status_code,
+            "is_auth_failure": status_code == 401,
+            "is_authorization_failure": status_code == 403,
+            "endpoint_type": "oauth_critical",
+            "failure_context": extra_context
+        }
+    
+    # Determine log level based on status code
+    if status_code >= 500:
+        level = "error"
+        message = "Server error response"
+    elif status_code >= 400:
+        level = "warning"
+        message = "Client error response"
+    else:
+        level = "info"
+        message = "Response sent"
+    
+    getattr(logger, level)(message, **log_data)
     
     # Log to RequestLogger if available
     request_logger = get_request_logger()
@@ -456,16 +598,29 @@ async def log_response(
             if log_data.get("status", 0) >= 400:
                 error = {
                     "type": f"http_{log_data.get('status', 'unknown')}",
-                    "message": log_data.get("response_body", "")
+                    "message": log_data.get("response_body", "")[:200]  # Limit error message length
                 }
             
+            # Pass ALL enhanced OAuth response data for app-logs-by-ip visibility
             await request_logger.log_response(
                 ip=ip,
                 status=log_data.get("status", 0),
                 duration_ms=duration_ms,
                 response_size=len(log_data.get("response_body", "")),
                 error=error,
-                **{k: v for k, v in extra_context.items() if k not in ["ip", "status"]}
+                request_key=request_key,  # Pass the request_key for unified entries
+                # Include ALL enhanced OAuth debugging data
+                response_body=log_data.get("response_body", ""),
+                response_body_size=log_data.get("response_body_size", 0),
+                response_body_truncated=log_data.get("response_body_truncated", False),
+                response_json=log_data.get("response_json", {}),
+                response_json_masked=log_data.get("response_json_masked", {}),
+                critical_response_headers=log_data.get("critical_response_headers", {}),
+                oauth_failure_analysis=log_data.get("oauth_failure_analysis", {}),
+                is_critical_endpoint=log_data.get("is_critical_endpoint", False),
+                hostname=extra_context.get("hostname", ""),
+                path=extra_context.get("path", ""),
+                **{k: v for k, v in extra_context.items() if k not in ["ip", "status", "hostname", "path"]}
             )
         except Exception as e:
             logger.error(f"Failed to log response to RequestLogger: {e}")

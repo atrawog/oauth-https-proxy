@@ -59,6 +59,20 @@ class LogEntry(BaseModel):
     error: Optional[Dict] = None
     event: Optional[str] = None
     context: Optional[Dict] = Field(default_factory=dict)
+    # Enhanced OAuth debugging fields
+    is_critical_endpoint: Optional[bool] = False
+    request_body: Optional[str] = ""
+    request_body_size: Optional[int] = 0
+    request_body_truncated: Optional[bool] = False
+    request_form_data: Optional[Dict] = Field(default_factory=dict)
+    critical_headers: Optional[Dict] = Field(default_factory=dict)
+    response_body: Optional[str] = ""
+    response_body_size: Optional[int] = 0
+    response_body_truncated: Optional[bool] = False
+    response_json: Optional[Dict] = Field(default_factory=dict)
+    response_json_masked: Optional[Dict] = Field(default_factory=dict)
+    critical_response_headers: Optional[Dict] = Field(default_factory=dict)
+    oauth_failure_analysis: Optional[Dict] = Field(default_factory=dict)
 
 
 class LogQueryResponse(BaseModel):
@@ -151,16 +165,25 @@ def create_router(storage: RedisStorage) -> APIRouter:
             logs = []
             for req in requests:
                 # Build log entry from request data
+                # Determine log level based on status
+                status = int(req.get("status", 0)) if req.get("status") else 0
+                if status >= 500:
+                    level = "ERROR"
+                elif status >= 400:
+                    level = "WARNING"
+                else:
+                    level = "INFO"
+                
                 log_entry = {
                     "timestamp": float(req.get("timestamp", 0)),
-                    "level": "ERROR" if int(req.get("status", 0)) >= 500 else "INFO",
+                    "level": level,
                     "component": "http.request",
                     "message": f"{req.get('method', '')} {req.get('path', '')} -> {req.get('status', '')}",
                     "ip": req.get("ip"),
                     "hostname": req.get("hostname"),
                     "method": req.get("method"),
                     "path": req.get("path"),
-                    "status": int(req.get("status", 0)) if req.get("status") else None,
+                    "status": status,
                     "duration_ms": float(req.get("duration_ms", 0)) if req.get("duration_ms") else None,
                     "event": "request",
                     "context": {
@@ -169,7 +192,21 @@ def create_router(storage: RedisStorage) -> APIRouter:
                         "query": req.get("query", ""),
                         # Add all OAuth fields
                         **{k: v for k, v in req.items() if k.startswith("oauth_") and v}
-                    }
+                    },
+                    # Add all enhanced OAuth debugging fields at root level for jq access
+                    "is_critical_endpoint": req.get("is_critical_endpoint") == "True" if isinstance(req.get("is_critical_endpoint"), str) else bool(req.get("is_critical_endpoint", False)),
+                    "request_body": req.get("request_body", ""),
+                    "request_body_size": int(req.get("request_body_size", 0)) if req.get("request_body_size") else 0,
+                    "request_body_truncated": req.get("request_body_truncated") == "True" if isinstance(req.get("request_body_truncated"), str) else bool(req.get("request_body_truncated", False)),
+                    "request_form_data": json.loads(req.get("request_form_data", "{}")) if req.get("request_form_data") and req.get("request_form_data") != "" else {},
+                    "critical_headers": json.loads(req.get("critical_headers", "{}")) if req.get("critical_headers") and req.get("critical_headers") != "" else {},
+                    "response_body": req.get("response_body", ""),
+                    "response_body_size": int(req.get("response_body_size", 0)) if req.get("response_body_size") else 0,
+                    "response_body_truncated": req.get("response_body_truncated") == "True" if isinstance(req.get("response_body_truncated"), str) else bool(req.get("response_body_truncated", False)),
+                    "response_json": json.loads(req.get("response_json", "{}")) if req.get("response_json") and req.get("response_json") != "" else {},
+                    "response_json_masked": json.loads(req.get("response_json_masked", "{}")) if req.get("response_json_masked") and req.get("response_json_masked") != "" else {},
+                    "critical_response_headers": json.loads(req.get("critical_response_headers", "{}")) if req.get("critical_response_headers") and req.get("critical_response_headers") != "" else {},
+                    "oauth_failure_analysis": json.loads(req.get("oauth_failure_analysis", "{}")) if req.get("oauth_failure_analysis") and req.get("oauth_failure_analysis") != "" else {}
                 }
                 
                 # Add error info if present
@@ -187,7 +224,9 @@ def create_router(storage: RedisStorage) -> APIRouter:
         
         # Apply filters
         if level:
-            logs = [log for log in logs if log.get("level") == level.value]
+            # Handle both string and enum types
+            level_value = level.value if hasattr(level, 'value') else level
+            logs = [log for log in logs if log.get("level") == level_value]
         if event:
             logs = [log for log in logs if log.get("event", "").startswith(event)]
         
@@ -273,7 +312,9 @@ def create_router(storage: RedisStorage) -> APIRouter:
         
         # Apply filters
         if level:
-            logs = [log for log in logs if log.get("level") == level.value]
+            # Handle both string and enum types
+            level_value = level.value if hasattr(level, 'value') else level
+            logs = [log for log in logs if log.get("level") == level_value]
         if event:
             logs = [log for log in logs if log.get("event", "").startswith(event)]
         

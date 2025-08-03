@@ -12,6 +12,7 @@ from .config import Settings
 from .keys import RSAKeyManager
 from .resource_protector import JWTBearerTokenValidator
 from ...shared.logging import get_logger
+from ...shared.client_ip import get_real_client_ip
 
 logger = get_logger(__name__)
 
@@ -86,10 +87,32 @@ class AsyncResourceProtector:
 
         token_string = auth_header[7:]  # Remove "Bearer " prefix
 
+        # Extract client IP using centralized function
+        client_ip = get_real_client_ip(request)
+        
+        logger.debug(
+            "Starting token validation - DETAILED CONTEXT",
+            ip=client_ip,
+            resource=resource,
+            token_preview=token_string[:20] + "..." if len(token_string) > 20 else token_string,
+            jwt_algorithm=self.settings.jwt_algorithm,
+            expected_issuer=f"https://auth.{self.settings.base_domain}",
+            resource_metadata_url=resource_metadata_url if resource else None
+        )
+        
         # Validate token asynchronously
         token_data = await self.validator.authenticate_token(token_string)
 
         if not token_data:
+            logger.warning(
+                "Token validation FAILED - invalid or expired token",
+                ip=client_ip,
+                resource=resource,
+                token_preview=token_string[:20] + "..." if len(token_string) > 20 else token_string,
+                jwt_algorithm=self.settings.jwt_algorithm,
+                expected_issuer=f"https://auth.{self.settings.base_domain}",
+                validation_failure="token_invalid_or_expired"
+            )
             # Add error parameter to WWW-Authenticate
             www_auth_error = www_authenticate.replace('Bearer', 'Bearer error="invalid_token"')
             raise HTTPException(
@@ -97,8 +120,24 @@ class AsyncResourceProtector:
                 detail={
                     "error": "invalid_token",
                     "error_description": "The access token is invalid or expired",
+                    "debug_info": {
+                        "client_ip": client_ip,
+                        "resource": resource
+                    }
                 },
                 headers={"WWW-Authenticate": www_auth_error},
+            )
+        else:
+            logger.info(
+                "Token validation SUCCESSFUL - token is valid",
+                ip=client_ip,
+                resource=resource,
+                token_jti=token_data.get("jti"),
+                token_sub=token_data.get("sub"),
+                token_username=token_data.get("username"),
+                token_client_id=token_data.get("azp"),
+                token_scope=token_data.get("scope"),
+                token_aud=token_data.get("aud")
             )
 
         # Validate audience if resource is specified
@@ -108,24 +147,71 @@ class AsyncResourceProtector:
             if isinstance(aud, str):
                 aud = [aud]
             
-            logger.debug(
-                "Validating token audience",
+            # Extract client IP using centralized function
+            client_ip = get_real_client_ip(request)
+            
+            logger.info(
+                "Starting token audience validation - DETAILED CONTEXT",
+                ip=client_ip,
                 requested_resource=resource,
                 token_aud=aud,
+                token_aud_type=type(aud).__name__,
+                token_aud_count=len(aud),
                 token_jti=token_data.get("jti"),
                 token_sub=token_data.get("sub"),
-                audience_type=type(aud).__name__
+                token_username=token_data.get("username"),
+                token_client_id=token_data.get("azp"),
+                token_scope=token_data.get("scope"),
+                token_exp=token_data.get("exp"),
+                token_iat=token_data.get("iat"),
+                token_iss=token_data.get("iss"),
+                request_headers={
+                    "host": request.headers.get("host"),
+                    "x-forwarded-host": request.headers.get("x-forwarded-host"),
+                    "x-forwarded-proto": request.headers.get("x-forwarded-proto")
+                }
             )
             
             # Check if resource is in audience
             if resource not in aud:
-                logger.warning(
-                    "Token audience validation failed",
+                logger.error(
+                    "Token audience validation FAILED - CRITICAL: 403 invalid_audience error",
+                    ip=client_ip,
                     requested_resource=resource,
                     token_aud=aud,
+                    token_aud_type=type(aud).__name__,
+                    token_aud_count=len(aud),
                     token_jti=token_data.get("jti"),
                     token_sub=token_data.get("sub"),
-                    client_id=token_data.get("azp")
+                    token_username=token_data.get("username"),
+                    token_client_id=token_data.get("azp"),
+                    token_scope=token_data.get("scope"),
+                    token_iss=token_data.get("iss"),
+                    audience_mismatch_details={
+                        "expected_resource": resource,
+                        "actual_audience": aud,
+                        "audience_contains_resource": resource in aud,
+                        "case_sensitive_match": any(res.lower() == resource.lower() for res in aud) if isinstance(aud, list) else False
+                    },
+                    request_context={
+                        "client_ip": client_ip,
+                        "host_header": request.headers.get("host"),
+                        "forwarded_host": request.headers.get("x-forwarded-host"),
+                        "forwarded_proto": request.headers.get("x-forwarded-proto"),
+                        "user_agent": request.headers.get("user-agent"),
+                        "method": request.method,
+                        "path": str(request.url.path)
+                    },
+                    token_complete_claims={
+                        k: v for k, v in token_data.items() 
+                        if k not in ["access_token", "refresh_token"]
+                    },
+                    debugging_hints=[
+                        f"Token was issued for audience: {aud}",
+                        f"Request is for resource: {resource}",
+                        "Check if the OAuth authorization included the correct resource parameter",
+                        "Verify the client requested the correct resource during token exchange"
+                    ]
                 )
                 www_auth_error = www_authenticate.replace('Bearer', 'Bearer error="invalid_audience"')
                 raise HTTPException(
@@ -133,8 +219,24 @@ class AsyncResourceProtector:
                     detail={
                         "error": "invalid_audience",
                         "error_description": f"Token is not valid for resource: {resource}",
+                        "debug_info": {
+                            "requested_resource": resource,
+                            "token_audience": aud,
+                            "client_ip": client_ip
+                        }
                     },
                     headers={"WWW-Authenticate": www_auth_error},
+                )
+            else:
+                logger.info(
+                    "Token audience validation SUCCESSFUL",
+                    ip=client_ip,
+                    requested_resource=resource,
+                    token_aud=aud,
+                    validation_result="passed",
+                    token_jti=token_data.get("jti"),
+                    token_sub=token_data.get("sub"),
+                    token_username=token_data.get("username")
                 )
 
         return token_data

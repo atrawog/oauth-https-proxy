@@ -30,16 +30,37 @@ class JWTBearerTokenValidator(BearerTokenValidator):
         self.jwt = JsonWebToken(algorithms=[settings.jwt_algorithm])
 
     async def authenticate_token(self, token_string: str) -> Optional[dict[str, Any]]:
-        """Authenticate the bearer token.
+        """Authenticate the bearer token with comprehensive logging.
         This method is called by ResourceProtector to validate tokens.
 
         Returns:
             Token claims if valid, None if invalid
 
         """
+        from ...shared.logging import get_logger
+        logger = get_logger(__name__)
+        
+        token_preview = token_string[:20] + "..." if len(token_string) > 20 else token_string
+        
+        logger.debug(
+            "Starting JWT token authentication - DETAILED VALIDATION",
+            token_preview=token_preview,
+            jwt_algorithm=self.settings.jwt_algorithm,
+            expected_issuer=f"https://auth.{self.settings.base_domain}",
+            has_rsa_key=hasattr(self.key_manager, 'public_key') and self.key_manager.public_key is not None
+        )
+        
         try:
             # Decode and validate token using Authlib
+            claims = None
+            expected_issuer = f"https://auth.{self.settings.base_domain}"
+            
             if self.settings.jwt_algorithm == "RS256":
+                logger.debug(
+                    "Using RS256 algorithm for token validation",
+                    token_preview=token_preview,
+                    public_key_available=self.key_manager.public_key is not None
+                )
                 # Use RSA public key for RS256 verification
                 claims = self.jwt.decode(
                     token_string,
@@ -47,13 +68,18 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                     claims_options={
                         "iss": {
                             "essential": True,
-                            "value": f"https://auth.{self.settings.base_domain}",
+                            "value": expected_issuer,
                         },
                         "exp": {"essential": True},
                         "jti": {"essential": True},
                     },
                 )
             else:
+                logger.debug(
+                    "Using HS256 fallback algorithm for token validation",
+                    token_preview=token_preview,
+                    has_jwt_secret=bool(self.settings.jwt_secret)
+                )
                 # HS256 fallback during transition period
                 claims = self.jwt.decode(
                     token_string,
@@ -61,33 +87,93 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                     claims_options={
                         "iss": {
                             "essential": True,
-                            "value": f"https://auth.{self.settings.base_domain}",
+                            "value": expected_issuer,
                         },
                         "exp": {"essential": True},
                         "jti": {"essential": True},
                     },
                 )
 
+            logger.debug(
+                "JWT token decoded successfully - CLAIMS EXTRACTED",
+                token_preview=token_preview,
+                claims_keys=list(claims.keys()),
+                token_jti=claims.get("jti"),
+                token_sub=claims.get("sub"),
+                token_iss=claims.get("iss"),
+                token_aud=claims.get("aud"),
+                token_exp=claims.get("exp"),
+                token_iat=claims.get("iat"),
+                token_azp=claims.get("azp"),
+                token_scope=claims.get("scope"),
+                claims_count=len(claims)
+            )
+
             # Validate claims
             claims.validate()
+            logger.debug("JWT claims validation passed", token_jti=claims.get("jti"))
 
             # Check if token exists in Redis (not revoked)
             jti = claims["jti"]
-            token_data = await self.redis_client.get(f"oauth:token:{jti}")
+            token_key = f"oauth:token:{jti}"
+            token_data = await self.redis_client.get(token_key)
+
+            logger.debug(
+                "Checking token revocation status in Redis",
+                token_jti=jti,
+                redis_key=token_key,
+                token_exists_in_redis=bool(token_data),
+                token_data_preview=str(token_data)[:100] if token_data else "None"
+            )
 
             if not token_data:
                 # Token has been revoked or doesn't exist
+                logger.warning(
+                    "JWT token validation failed - token revoked or not found in Redis",
+                    token_jti=jti,
+                    token_preview=token_preview,
+                    redis_key=token_key,
+                    failure_reason="token_revoked_or_not_found"
+                )
                 return None
+
+            logger.info(
+                "JWT token authentication successful - TOKEN VALIDATED",
+                token_jti=jti,
+                token_sub=claims.get("sub"),
+                token_username=claims.get("username"),
+                token_client_id=claims.get("azp"),
+                token_scope=claims.get("scope"),
+                token_aud=claims.get("aud"),
+                validation_algorithm=self.settings.jwt_algorithm,
+                redis_validation="passed"
+            )
 
             # Return claims as dict for ResourceProtector
             return dict(claims)
 
         except JoseError as e:
             # Token validation failed
-            print(f"JWT validation error: {e}")
+            logger.error(
+                "JWT validation failed - JOSE error",
+                token_preview=token_preview,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                jwt_algorithm=self.settings.jwt_algorithm,
+                expected_issuer=expected_issuer,
+                validation_stage="jwt_decode"
+            )
             return None
         except Exception as e:
-            print(f"Unexpected error during token validation: {e}")
+            logger.error(
+                "JWT validation failed - unexpected error",
+                token_preview=token_preview,
+                error_type=type(e).__name__,
+                error_message=str(e),
+                jwt_algorithm=self.settings.jwt_algorithm,
+                validation_stage="general_validation",
+                exc_info=True
+            )
             return None
 
     def request_invalid(self, request) -> Optional[str]:

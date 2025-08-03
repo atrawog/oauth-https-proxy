@@ -115,6 +115,8 @@ logs-help:
     @echo ""
     @echo "🔍 Search and Filter:"
     @echo "  just app-logs-by-ip <ip>     # Query logs from specific IP"
+    @echo "  just app-logs-oauth-debug <ip> # Full OAuth flow debug for IP"
+    @echo "  just app-logs-oauth-summary <ip> # OAuth flow summary for IP"
     @echo "  just app-logs-by-client <id> # Query logs from OAuth client"
     @echo "  just app-logs-by-host <host> # Query logs for specific hostname"
     @echo "  just app-logs-search         # Search with multiple filters"
@@ -277,7 +279,7 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
     response=$(curl -sL -H "Authorization: Bearer $token_value" \
         "${BASE_URL}/api/v1/logs/ip/{{ip}}?${query}")
     
-    # Format logs in single-line format
+    # Format logs in single-line format with enhanced OAuth debugging
     echo "$response" | jq -r '
         if .logs then
             .logs | reverse | .[] | 
@@ -287,20 +289,44 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
                 " - " + .method + " " + .path + 
                 (if .context.oauth_action then " [OAuth:" + .context.oauth_action + 
                     (if .context.oauth_state then " state=" + .context.oauth_state else "" end) + "]" 
-                 elif (.path | test("^/(authorize|callback|token)$")) then " [OAuth:" + .path[1:] + "]" 
+                 elif (.path | test("^/(authorize|callback|token|mcp)$")) then " [OAuth:" + .path[1:] + "]" 
                  else "" end) +
-                (if .context.query and (.context.query | length) > 0 then 
-                    " q=" + (.context.query | split("&") | map(select(test("(client_id|state|code|scope|redirect_uri)=")) | .[0:60]) | join(" ")) 
+                (if .query and (.query | length) > 0 then 
+                    " q=" + (.query | split("&") | map(select(test("(client_id|state|code|scope|redirect_uri|resource)=")) | .[0:60]) | join(" ")) 
                  else "" end) +
-                (if .context.referer and .context.referer != "" then " referer=" + .context.referer else "" end) +
-                (if .context.user_agent and .context.user_agent != "" then " UA=\"" + (.context.user_agent | split(" ")[0]) + "\"" else "" end)
+                # Show critical endpoint flag
+                (if .is_critical_endpoint then " [CRITICAL]" else "" end) +
+                # Show request body for OAuth endpoints
+                (if .request_body and (.request_body | length) > 0 and (.request_body | length) < 200 then 
+                    " body=" + .request_body 
+                 else "" end) +
+                # Show form data for token endpoint
+                (if .request_form_data and (.request_form_data | length) > 0 then 
+                    " form_data=" + (.request_form_data | tojson | .[0:100])
+                 else "" end) +
+                # Show critical headers
+                (if .critical_headers and (.critical_headers | length) > 0 then
+                    " headers=" + (.critical_headers | to_entries | map(.key + ":" + (.value | .[0:20])) | join(","))
+                 else "" end) +
+                (if .referer and .referer != "" then " referer=" + .referer else "" end) +
+                (if .user_agent and .user_agent != "" then " UA=\"" + (.user_agent | split(" ")[0]) + "\"" else "" end)
               else
                 " -> " + (.status | tostring) + " (" + (.duration_ms | tostring) + "ms)" +
+                # Show response body for errors
+                (if .response_body and .status >= 400 and (.response_body | length) < 300 then 
+                    " response=" + .response_body 
+                 else "" end) +
+                # Show OAuth failure analysis
+                (if .oauth_failure_analysis then 
+                    " oauth_fail=" + (.oauth_failure_analysis | tojson | .[0:100])
+                 else "" end) +
+                # Show error details
+                (if .error and .error.message then 
+                    " error=" + .error.message
+                 else "" end) +
                 (if .context.oauth_redirect_to then " redirect_to=" + (.context.oauth_redirect_to | split("?")[0]) else "" end) +
                 (if .context.oauth_authorization_granted then " auth=" + .context.oauth_authorization_granted else "" end) +
                 (if .context.oauth_rejection_reason then " rejection=" + .context.oauth_rejection_reason else "" end) +
-                (if .context.oauth_validations_passed then " validations=" + .context.oauth_validations_passed else "" end) +
-                (if .context.oauth_authorization_decision then " decision=" + .context.oauth_authorization_decision else "" end) +
                 (if .context.oauth_github_username then " github_user=" + .context.oauth_github_username else "" end)
               end))
         else
@@ -337,6 +363,202 @@ app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${A
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Search application logs with filters
+# Query application logs by IP with full OAuth flow debug details
+app-logs-oauth-debug ip hours="24" limit="100" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Query logs
+    response=$(curl -sL -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/logs/ip/{{ip}}?hours={{hours}}&limit={{limit}}")
+    
+    # Format logs with full OAuth debug details
+    echo "$response" | jq -r '
+        if .logs then
+            .logs | reverse | .[] | 
+            # Header line with timestamp, level, hostname, IP, method, path, status
+            "\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" +
+            "\n\((.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " "))+"Z") [\(.level)] \(.hostname) \(.ip)" +
+            (if .method then " - \(.method) \(.path)" else "" end) +
+            (if .status then " → \(.status)" else "" end) +
+            (if .duration_ms then " (\(.duration_ms)ms)" else "" end) +
+            
+            # OAuth endpoint detection
+            (if (.path // "" | test("^/(authorize|callback|token|verify|mcp|register)$")) or (.context.oauth_action) then
+                "\n📌 OAuth Flow: " + (.context.oauth_action // .path[1:]) +
+                (if .context.oauth_state then " [state: \(.context.oauth_state)]" else "" end)
+            else "" end) +
+            
+            # Request details
+            (if .method then
+                "\n\n📥 REQUEST:" +
+                (if .context.query then "\n  Query: \(.context.query)" else "" end) +
+                (if .context.request_headers then "\n  Headers: \(.context.request_headers | to_entries | map("\(.key): \(.value)") | join(", "))" else "" end) +
+                (if .context.critical_headers then "\n  Critical Headers: \(.context.critical_headers | to_entries | map("\(.key): \(.value)") | join(", "))" else "" end) +
+                (if .context.request_body then "\n  Body: \(.context.request_body)" else "" end) +
+                (if .context.request_form_data then "\n  Form Data: \(.context.request_form_data | tostring)" else "" end) +
+                (if .context.oauth_resources then "\n  Resources: \(.context.oauth_resources | tostring)" else "" end)
+            else "" end) +
+            
+            # OAuth-specific details
+            (if .context.oauth_client_id then "\n\n🔐 OAuth Details:\n  Client ID: \(.context.oauth_client_id)" else "" end) +
+            (if .context.oauth_grant_type then "\n  Grant Type: \(.context.oauth_grant_type)" else "" end) +
+            (if .context.oauth_scope then "\n  Scope: \(.context.oauth_scope)" else "" end) +
+            (if .context.oauth_user_id then "\n  User ID: \(.context.oauth_user_id)" else "" end) +
+            (if .context.oauth_username then "\n  Username: \(.context.oauth_username)" else "" end) +
+            (if .context.oauth_email then "\n  Email: \(.context.oauth_email)" else "" end) +
+            (if .context.oauth_github_username then "\n  GitHub User: \(.context.oauth_github_username)" else "" end) +
+            
+            # Token details
+            (if .context.oauth_token_jti then "\n\n🎫 Token Details:\n  JTI: \(.context.oauth_token_jti)" else "" end) +
+            (if .context.oauth_token_aud then "\n  Audience: \(.context.oauth_token_aud | tostring)" else "" end) +
+            (if .context.oauth_token_exp then "\n  Expires: \(.context.oauth_token_exp)" else "" end) +
+            (if .context.oauth_token_iat then "\n  Issued: \(.context.oauth_token_iat)" else "" end) +
+            (if .context.oauth_resources then "\n  Resources: \(.context.oauth_resources | tostring)" else "" end) +
+            (if .context.authorized_resources then "\n  Authorized Resources: \(.context.authorized_resources | tostring)" else "" end) +
+            (if .context.requested_resources then "\n  Requested Resources: \(.context.requested_resources | tostring)" else "" end) +
+            (if .context.token_resources then "\n  Token Resources: \(.context.token_resources | tostring)" else "" end) +
+            (if .context.token_audience then "\n  Token Audience: \(.context.token_audience | tostring)" else "" end) +
+            (if .context.complete_claims then "\n  Complete Claims: \(.context.complete_claims | tostring)" else "" end) +
+            
+            # Response details
+            (if .status then
+                "\n\n📤 RESPONSE:" +
+                "\n  Status: \(.status)" +
+                (if .context.response_headers then "\n  Headers: \(.context.response_headers | to_entries | map("\(.key): \(.value)") | join(", "))" else "" end) +
+                (if .context.critical_response_headers then "\n  Critical Headers: \(.context.critical_response_headers | to_entries | map("\(.key): \(.value)") | join(", "))" else "" end) +
+                (if .context.response_body then "\n  Body: \(.context.response_body)" else "" end) +
+                (if .context.response_json then "\n  JSON: \(.context.response_json | tostring)" else "" end) +
+                (if .context.response_json_masked then "\n  JSON (masked): \(.context.response_json_masked | tostring)" else "" end)
+            else "" end) +
+            
+            # Error details
+            (if .error or (.status >= 400) then
+                "\n\n❌ ERROR DETAILS:" +
+                (if .error then "\n  Error: \(.error | tostring)" else "" end) +
+                (if .context.error_detail then "\n  Detail: \(.context.error_detail)" else "" end) +
+                (if .context.parsed_error_data then "\n  Parsed Error: \(.context.parsed_error_data | tostring)" else "" end) +
+                (if .context.oauth_failure_analysis then "\n  Failure Analysis: \(.context.oauth_failure_analysis | tostring)" else "" end) +
+                (if .context.debug_context then "\n  Debug Context: \(.context.debug_context | tostring)" else "" end) +
+                (if .context.debugging_hints then "\n  Debugging Hints:\n    - \(.context.debugging_hints | join("\n    - "))" else "" end)
+            else "" end) +
+            
+            # Authentication details
+            (if .context.auth_enabled then
+                "\n\n🔑 Authentication:" +
+                "\n  Auth Enabled: \(.context.auth_enabled)" +
+                (if .context.auth_proxy then "\n  Auth Proxy: \(.context.auth_proxy)" else "" end) +
+                (if .context.auth_mode then "\n  Auth Mode: \(.context.auth_mode)" else "" end) +
+                (if .context.auth_url then "\n  Auth URL: \(.context.auth_url)" else "" end) +
+                (if .context.auth_failure then "\n  Auth Failure: \(.context.auth_failure)" else "" end) +
+                (if .context.failure_type then "\n  Failure Type: \(.context.failure_type)" else "" end)
+            else "" end) +
+            
+            # MCP details
+            (if .context.mcp_enabled then
+                "\n\n🔌 MCP Configuration:" +
+                "\n  MCP Enabled: \(.context.mcp_enabled)" +
+                (if .context.mcp_metadata_enabled then "\n  Metadata Enabled: \(.context.mcp_metadata_enabled)" else "" end) +
+                (if .context.mcp_endpoint then "\n  Endpoint: \(.context.mcp_endpoint)" else "" end)
+            else "" end) +
+            
+            # Additional context
+            (if .context then
+                (if (.context | keys | map(select(test("^(ip|hostname|method|path|status|duration_ms|level|timestamp|query|user_agent|referer|error|oauth_.*|request_.*|response_.*|auth_.*|mcp_.*|critical_.*|debug.*|token.*|authorized.*|requested.*|complete_claims|parsed_error_data)$") | not))) | length > 0 then
+                    "\n\n📎 Additional Context:" +
+                    (.context | to_entries | map(select(.key | test("^(ip|hostname|method|path|status|duration_ms|level|timestamp|query|user_agent|referer|error|oauth_.*|request_.*|response_.*|auth_.*|mcp_.*|critical_.*|debug.*|token.*|authorized.*|requested.*|complete_claims|parsed_error_data)$") | not)) | map("\n  \(.key): \(.value | tostring)") | join(""))
+                else "" end)
+            else "" end)
+        else
+            .
+        end
+    '
+
+# Query application logs by IP with OAuth flow summary
+app-logs-oauth-summary ip hours="24" limit="100" token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Get token value
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
+        exit 1
+    fi
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Query logs
+    response=$(curl -sL -H "Authorization: Bearer $token_value" \
+        "${BASE_URL}/api/v1/logs/ip/{{ip}}?hours={{hours}}&limit={{limit}}")
+    
+    # Format logs showing OAuth flow summary
+    echo "$response" | jq -r '
+        if .logs then
+            # Filter only OAuth-related requests
+            (.logs | reverse | map(select(
+                (.path // "" | test("^/(authorize|callback|token|verify|mcp|register)$")) or
+                (.context.oauth_action) or
+                (.context.is_critical_endpoint == true)
+            ))) | .[] | 
+            "\((.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " "))) [\(.level)] \(.hostname) \(.ip) - \(.method) \(.path)" +
+            (if .status then " → \(.status) (\(.duration_ms)ms)" else "" end) +
+            
+            # OAuth flow stage
+            (if .path == "/authorize" then " 🔐 AUTHORIZATION" 
+             elif .path == "/callback" then " 🔄 CALLBACK" 
+             elif .path == "/token" then " 🎫 TOKEN EXCHANGE"
+             elif .path == "/verify" then " ✅ VERIFICATION"
+             elif .path == "/mcp" then " 🔌 MCP ACCESS"
+             elif .path == "/register" then " 📝 REGISTRATION"
+             else "" end) +
+            
+            # Key details on same line
+            (if .context.oauth_client_id then " [client: \(.context.oauth_client_id)]" else "" end) +
+            (if .context.oauth_username then " [user: \(.context.oauth_username)]" else "" end) +
+            (if .context.oauth_github_username then " [github: \(.context.oauth_github_username)]" else "" end) +
+            (if .context.oauth_token_jti then " [token: \(.context.oauth_token_jti)]" else "" end) +
+            
+            # Critical info for debugging
+            (if .path == "/authorize" and .context.query then
+                "\n    → Query: " + (.context.query | split("&") | map(select(test("(client_id|resource|scope|redirect_uri)="))) | join(" "))
+            else "" end) +
+            
+            (if .path == "/token" then
+                (if .context.oauth_resources or .context.requested_resources then 
+                    "\n    → Resources requested: \(.context.oauth_resources // .context.requested_resources | tostring)"
+                else "\n    → No resources requested" end) +
+                (if .context.token_audience or .context.oauth_token_aud then 
+                    "\n    → Token audience: \(.context.token_audience // .context.oauth_token_aud | tostring)"
+                else "" end)
+            else "" end) +
+            
+            (if .status >= 400 then
+                "\n    ❌ ERROR: " +
+                (if .context.error_detail then .context.error_detail
+                 elif .context.parsed_error_data then (.context.parsed_error_data | tostring)
+                 elif .error then (.error | tostring)
+                 elif .context.response_body then .context.response_body
+                 else "Status \(.status)" end) +
+                (if .context.debugging_hints then 
+                    "\n    💡 Hints: " + (.context.debugging_hints | join("; "))
+                else "" end)
+            else "" end) +
+            "\n"
+        else
+            .
+        end
+    '
+
 app-logs-search query="" hours="24" event="" level="" hostname="" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail

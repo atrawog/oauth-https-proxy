@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .auth import require_auth, require_auth_header, get_token_info_from_header
 from .models import HealthStatus
+from ..shared.client_ip import get_real_client_ip
 
 # OAuth imports
 from .oauth.config import Settings as OAuthSettings
@@ -126,27 +127,99 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     # MCP OAuth protected resource metadata endpoint
     @app.get("/.well-known/oauth-protected-resource")
     async def oauth_protected_resource(request: Request):
-        """Generate MCP protected resource metadata based on hostname."""
+        """Generate MCP protected resource metadata based on hostname with comprehensive logging."""
+        # Extract client IP using centralized function
+        client_ip = get_real_client_ip(request)
+        
+        logger.info(
+            "MCP metadata endpoint requested - DETAILED REQUEST CONTEXT",
+            ip=client_ip,
+            method=request.method,
+            path=str(request.url.path),
+            headers={
+                "host": request.headers.get("host"),
+                "x-forwarded-host": request.headers.get("x-forwarded-host"),
+                "x-forwarded-proto": request.headers.get("x-forwarded-proto"),
+                "user-agent": request.headers.get("user-agent"),
+                "authorization": "Bearer ..." if request.headers.get("authorization", "").startswith("Bearer") else "None"
+            },
+            query_params=dict(request.query_params)
+        )
+        
         # Get hostname from request - check x-forwarded-host first (set by proxy)
         hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
         if not hostname:
             # Fallback to host header
             hostname = request.headers.get("host", "").split(":")[0]
         if not hostname:
+            logger.error(
+                "MCP metadata request failed - no host header",
+                ip=client_ip,
+                all_headers=dict(request.headers)
+            )
             raise HTTPException(404, "No host header")
+        
+        logger.debug(
+            "MCP metadata hostname resolved",
+            ip=client_ip,
+            hostname=hostname,
+            forwarded_host=request.headers.get("x-forwarded-host"),
+            direct_host=request.headers.get("host")
+        )
         
         # Get proxy target
         target = storage.get_proxy_target(hostname)
         if not target:
+            # Get available proxies for debugging
+            available_proxies = []
+            try:
+                available_proxies = [p.hostname for p in storage.list_proxy_targets()][:10]
+            except Exception:
+                pass
+            
+            logger.error(
+                "MCP metadata request failed - no proxy target configured",
+                ip=client_ip,
+                hostname=hostname,
+                available_proxies=available_proxies
+            )
             raise HTTPException(404, f"No proxy target configured for {hostname}")
+        
+        logger.debug(
+            "MCP metadata proxy target found",
+            ip=client_ip,
+            hostname=hostname,
+            target_enabled=target.enabled,
+            auth_enabled=target.auth_enabled,
+            auth_proxy=target.auth_proxy,
+            mcp_metadata_enabled=getattr(target, 'mcp_metadata', {}).get('enabled', False) if hasattr(target, 'mcp_metadata') else False
+        )
         
         # Check if MCP is enabled
         if not target.mcp_metadata or not target.mcp_metadata.enabled:
+            logger.warning(
+                "MCP metadata request failed - MCP not enabled for proxy",
+                ip=client_ip,
+                hostname=hostname,
+                mcp_metadata_exists=bool(target.mcp_metadata),
+                mcp_enabled=target.mcp_metadata.enabled if target.mcp_metadata else False,
+                auth_enabled=target.auth_enabled,
+                proxy_enabled=target.enabled
+            )
             raise HTTPException(404, "MCP not enabled for this proxy")
         
         # Build resource URI
         proto = request.headers.get("x-forwarded-proto", "https")
         resource_uri = f"{proto}://{hostname}{target.mcp_metadata.endpoint}"
+        
+        logger.debug(
+            "MCP metadata building resource URI",
+            ip=client_ip,
+            hostname=hostname,
+            protocol=proto,
+            endpoint=target.mcp_metadata.endpoint,
+            resource_uri=resource_uri
+        )
         
         # Get authorization server URL
         auth_servers = []
@@ -169,6 +242,23 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         # Add server info if configured
         if target.mcp_metadata.server_info:
             metadata.update(target.mcp_metadata.server_info)
+        
+        logger.info(
+            "MCP metadata endpoint responding successfully - METADATA DETAILS",
+            ip=client_ip,
+            hostname=hostname,
+            resource_uri=resource_uri,
+            auth_servers=auth_servers,
+            scopes_supported=target.mcp_metadata.scopes,
+            has_jwks_uri=bool(auth_servers),
+            metadata_keys=list(metadata.keys()),
+            complete_metadata=metadata,
+            auth_integration={
+                "auth_enabled": target.auth_enabled,
+                "auth_proxy": target.auth_proxy,
+                "auth_servers_count": len(auth_servers)
+            }
+        )
         
         return metadata
     
