@@ -134,6 +134,29 @@ class AuthManager:
         else:
             # HS256 is HERESY but we support it for backwards compatibility during transition
             token = self.jwt.encode(header, payload, self.settings.jwt_secret)
+        
+        # Comprehensive logging of token creation
+        logger.info(
+            "JWT token created - COMPLETE TOKEN PAYLOAD",
+            jti=jti,
+            subject=payload.get("sub"),
+            username=payload.get("username"),
+            email=payload.get("email"),
+            client_id=payload.get("client_id"),
+            authorized_party=payload.get("azp"),
+            audience=payload.get("aud"),
+            audience_type=type(payload.get("aud")).__name__,
+            audience_count=len(payload.get("aud", [])) if isinstance(payload.get("aud"), list) else 1,
+            issuer=payload.get("iss"),
+            issued_at=payload.get("iat"),
+            expires_at=payload.get("exp"),
+            scope=payload.get("scope"),
+            resources=resources,
+            resource_count=len(resources),
+            algorithm=self.settings.jwt_algorithm,
+            complete_payload={k: v for k, v in payload.items() if k not in ["name"]},  # Exclude PII like full name
+            token_lifetime_seconds=self.settings.access_token_lifetime
+        )
 
         # Store token reference in Redis
         await redis_client.setex(

@@ -678,17 +678,25 @@ class EnhancedProxyHandler:
         # Look up instance target from Redis
         instance_target = None
         try:
-            # First try to get it as a port (for localhost instances)
-            port = self.storage.redis_client.get(f"instance:{instance_name}")
-            if port:
-                # Instance ports in Redis have PROXY protocol enabled
-                # But the proxy handler doesn't need to know - it just forwards
-                instance_target = f"http://localhost:{port}"
+            # Prefer the full URL format (from API registration)
+            service_url = self.storage.redis_client.get(f"instance_url:{instance_name}")
+            if service_url:
+                instance_target = service_url
+                logger.debug(f"Found instance {instance_name} with URL: {service_url}")
             else:
-                # Try to get it as a service URL
-                service_url = self.storage.redis_client.get(f"instance_url:{instance_name}")
-                if service_url:
-                    instance_target = service_url
+                # Fallback to port-only format (from dispatcher)
+                # Note: localhost won't work from inside Docker containers
+                port = self.storage.redis_client.get(f"instance:{instance_name}")
+                if port:
+                    # Special handling for known services
+                    if instance_name == "api":
+                        # Use Docker service name instead of localhost
+                        instance_target = f"http://api:9000"
+                        logger.debug(f"Using Docker service name for API instance")
+                    else:
+                        # For other instances, use localhost (may not work from containers)
+                        instance_target = f"http://localhost:{port}"
+                        logger.warning(f"Using localhost for instance {instance_name} - may not work from containers")
         except Exception as e:
             logger.error(f"Failed to lookup instance {instance_name}: {e}")
         

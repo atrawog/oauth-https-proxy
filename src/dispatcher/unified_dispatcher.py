@@ -254,15 +254,32 @@ class UnifiedDispatcher:
             if not enable_http and not enable_https:
                 logger.warning(f"Domain {domain} has no protocols enabled!")
     
-    def register_named_instance(self, name: str, port: int):
-        """Register a named instance for routing targets."""
+    def register_named_instance(self, name: str, port: int, service_url: Optional[str] = None):
+        """Register a named instance for routing targets.
+        
+        Args:
+            name: Instance name (e.g., 'api')
+            port: Port number for localhost access
+            service_url: Full URL for Docker service access (e.g., 'http://api:9000')
+        """
         self.named_instances[name] = port
         logger.info(f"Registered named instance: {name} -> port {port}")
         
         # Store in Redis so proxies can access it
         if self.storage:
             try:
+                # Store port for backward compatibility
                 self.storage.redis_client.set(f"instance:{name}", str(port))
+                
+                # Store proper service URL if provided or derive it
+                if service_url:
+                    self.storage.redis_client.set(f"instance_url:{name}", service_url)
+                    logger.info(f"Stored instance {name} URL in Redis: {service_url}")
+                elif name == "api":
+                    # Special case for API service - use Docker service name
+                    self.storage.redis_client.set(f"instance_url:{name}", "http://api:9000")
+                    logger.info(f"Stored API instance URL in Redis: http://api:9000")
+                
                 logger.debug(f"Stored instance {name} in Redis")
             except Exception as e:
                 logger.error(f"Failed to store instance in Redis: {e}")
@@ -1095,8 +1112,9 @@ class UnifiedMultiInstanceServer:
         self.dispatcher.load_routes_from_storage()
         
         # Register the API service as a named instance
-        # The API runs on port 10001 with PROXY protocol
-        self.dispatcher.register_named_instance('api', 10001)
+        # The API runs on port 10001 with PROXY protocol for external access
+        # But internally, Docker services should use api:9000
+        self.dispatcher.register_named_instance('api', 10001, 'http://api:9000')
         
         # Register localhost to route to the API instance
         self.dispatcher.register_instance(['localhost', '127.0.0.1'], 10001, 10001, enable_http=True, enable_https=False)
