@@ -63,10 +63,13 @@ def create_router(storage, cert_manager):
                     if not acme_url:
                         raise HTTPException(400, "ACME directory URL required")
                 
-                # Use token's cert_email if not provided in request
+                # Use token's cert_email if not provided in request, fallback to ACME_EMAIL
                 email = request.cert_email if request.cert_email else cert_email
                 if not email:
-                    raise HTTPException(400, "Certificate email required")
+                    # Use ACME_EMAIL from environment as fallback
+                    email = os.getenv("ACME_EMAIL")
+                    if not email:
+                        raise HTTPException(400, "Certificate email required (set ACME_EMAIL in environment)")
                 
                 cert_request = CertificateRequest(
                     domain=request.hostname,
@@ -89,12 +92,32 @@ def create_router(storage, cert_manager):
                 storage.store_certificate(cert_name, cert)
                 
                 # Trigger async certificate generation
-                from ...certmanager.async_acme import generate_certificate_async
-                background_tasks.add_task(
-                    generate_certificate_async,
-                    cert_manager,
-                    cert_request
-                )
+                from ...certmanager.async_acme import create_certificate_task
+                from ...main import https_server
+                
+                # Create async certificate generation task without awaiting
+                logger.info(f"Creating async certificate generation task for {cert_name}")
+                
+                # Import synchronously to test
+                import asyncio
+                
+                async def generate_cert_async():
+                    logger.info(f"Async certificate generation task started for {cert_name}")
+                    try:
+                        result = await create_certificate_task(
+                            cert_manager,
+                            cert_request,
+                            https_server,
+                            owner_token_hash=token_hash,
+                            created_by=token_name
+                        )
+                        logger.info(f"Async certificate generation task completed for {cert_name}: {result}")
+                    except Exception as e:
+                        logger.error(f"Error in async certificate generation for {cert_name}: {e}", exc_info=True)
+                
+                # Create task directly
+                asyncio.create_task(generate_cert_async())
+                logger.info(f"Async task created directly for certificate generation of {cert_name}")
                 cert_status = "Certificate generation started"
             else:
                 cert_status = "existing"

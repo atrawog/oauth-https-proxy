@@ -260,6 +260,114 @@ def inject_request_context(logger, method_name, event_dict):
     return event_dict
 
 
+class IPLogCapture:
+    """Captures all logs containing IP addresses and sends them to RequestLogger."""
+    
+    def __init__(self, request_logger):
+        self.request_logger = request_logger
+        self._queue = []
+        self._processing = False
+    
+    def __call__(self, logger, method_name, event_dict):
+        """Process log entries and capture those with IP addresses."""
+        # Skip if this is a RequestLogger call to avoid recursion
+        if event_dict.get("logger", "").startswith("src.shared.request_logger"):
+            return event_dict
+            
+        # Extract IP from various possible fields
+        ip = None
+        for field in ["ip", "client_ip", "x_real_ip", "x_forwarded_for"]:
+            if field in event_dict:
+                ip = event_dict[field]
+                break
+        
+        # Also check message for IP patterns
+        if not ip and "event" in event_dict:
+            import re
+            ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
+            match = re.search(ip_pattern, str(event_dict.get("event", "")))
+            if match:
+                ip = match.group()
+        
+        # If we found an IP and have a request logger, queue for logging
+        if ip and self.request_logger:
+            # Extract relevant fields for RequestLogger
+            hostname = event_dict.get("hostname", "")
+            method = event_dict.get("method", "SYSTEM")
+            path = event_dict.get("path", "/system/log")
+            
+            # Create log entry
+            log_data = {
+                "ip": ip,
+                "hostname": hostname,
+                "method": method,
+                "path": path,
+                "log_level": event_dict.get("level", "INFO"),
+                "component": event_dict.get("logger", ""),
+                "message": event_dict.get("event", ""),
+                "timestamp": event_dict.get("timestamp", ""),
+                "full_event": {k: v for k, v in event_dict.items() if k not in ["_queue", "_processing"]}
+            }
+            
+            # Queue for later processing
+            self._queue.append(log_data)
+            
+            # Try to process queue if not already processing
+            if not self._processing:
+                self._process_queue()
+        
+        return event_dict
+    
+    def _process_queue(self):
+        """Process queued log entries."""
+        if not self._queue or self._processing:
+            return
+            
+        self._processing = True
+        try:
+            import asyncio
+            try:
+                loop = asyncio.get_event_loop()
+                if loop.is_running():
+                    # Process all queued items
+                    items = self._queue[:]
+                    self._queue.clear()
+                    
+                    # Create a single task to process all items
+                    asyncio.create_task(self._log_batch_to_request_logger(items))
+            except RuntimeError:
+                # No event loop or not running
+                self._queue.clear()
+        except Exception:
+            # Clear queue on any error
+            self._queue.clear()
+        finally:
+            self._processing = False
+    
+    async def _log_batch_to_request_logger(self, items):
+        """Asynchronously log a batch of entries to RequestLogger."""
+        for log_data in items:
+            try:
+                await self.request_logger.log_request(
+                    ip=log_data["ip"],
+                    hostname=log_data["hostname"],
+                    method=log_data["method"],
+                    path=log_data["path"],
+                    query="",
+                    user_agent="system-logger",
+                    auth_user=None,
+                    referer=None,
+                    log_level=log_data["log_level"],
+                    component=log_data["component"],
+                    message=log_data["message"],
+                    system_log=True,
+                    **log_data["full_event"]
+                )
+            except Exception:
+                # Silently fail for individual items
+                pass
+
+
 @lru_cache(maxsize=1)
 def get_logger_config() -> Dict[str, Any]:
     """Get logger configuration from environment."""
@@ -275,8 +383,12 @@ def get_logger_config() -> Dict[str, Any]:
     }
 
 
-def configure_logging(redis_client: Optional[redis.Redis] = None) -> Dict[str, Any]:
+def configure_logging(redis_client: Optional[redis.Redis] = None, request_logger=None) -> Dict[str, Any]:
     """Configure structured logging for the application.
+    
+    Args:
+        redis_client: Redis client for log storage
+        request_logger: RequestLogger instance for IP-based log capture
     
     Returns:
         Dict containing logger instances and utilities
@@ -294,6 +406,10 @@ def configure_logging(redis_client: Optional[redis.Redis] = None) -> Dict[str, A
         structlog.processors.StackInfoRenderer(),
         structlog.processors.format_exc_info,
     ]
+    
+    # Add IP log capture processor if RequestLogger is available
+    if request_logger:
+        processors.insert(4, IPLogCapture(request_logger))  # Insert after inject_request_context
     
     # Add JSON renderer for production
     if config["format"] == "json":
@@ -333,13 +449,19 @@ def configure_logging(redis_client: Optional[redis.Redis] = None) -> Dict[str, A
         if not has_redis_handler:
             root_logger.addHandler(redis_handler)
     
-    return {
+    result = {
         "logger": structlog.get_logger(),
         "masker": masker,
         "log_storage": log_storage,
         "redis_handler": redis_handler,
         "config": config,
     }
+    
+    # Save configuration state globally
+    global _logging_config
+    _logging_config = result
+    
+    return result
 
 
 def get_logger(name: str) -> BoundLogger:
@@ -349,15 +471,51 @@ def get_logger(name: str) -> BoundLogger:
 
 # Global request logger instance
 _request_logger = None
+_logging_config = None
 
 def get_request_logger():
     """Get the global request logger instance."""
     return _request_logger
 
 def set_request_logger(logger):
-    """Set the global request logger instance."""
-    global _request_logger
+    """Set the global request logger instance and reconfigure logging."""
+    global _request_logger, _logging_config
     _request_logger = logger
+    
+    # If logging was already configured, reconfigure with RequestLogger
+    if _logging_config and logger:
+        reconfigure_with_request_logger(logger)
+
+def reconfigure_with_request_logger(request_logger):
+    """Reconfigure logging to include IP log capture."""
+    config = get_logger_config()
+    
+    # Create processors with IP capture
+    processors = [
+        structlog.stdlib.filter_by_level,
+        structlog.stdlib.add_logger_name,
+        structlog.stdlib.add_log_level,
+        inject_request_context,
+        IPLogCapture(request_logger),  # Add IP capture
+        structlog.stdlib.PositionalArgumentsFormatter(),
+        TimeStamper(fmt="iso"),
+        structlog.processors.StackInfoRenderer(),
+        structlog.processors.format_exc_info,
+    ]
+    
+    # Add JSON renderer for production
+    if config["format"] == "json":
+        processors.append(JSONRenderer())
+    else:
+        processors.append(structlog.dev.ConsoleRenderer())
+    
+    # Reconfigure structlog with new processors
+    structlog.configure(
+        processors=processors,
+        context_class=dict,
+        logger_factory=structlog.stdlib.LoggerFactory(),
+        cache_logger_on_first_use=False,  # Don't cache to allow reconfiguration
+    )
 
 # Request logging utilities
 async def log_request(

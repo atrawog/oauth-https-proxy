@@ -34,12 +34,14 @@ def initialize_components(config: Config) -> None:
     redis_url = config.get_redis_url_with_password()
     storage = RedisStorage(redis_url)
     
-    # Configure structured logging with Redis
-    logging_components = configure_logging(storage.redis_client)
-    logger.info("Structured logging configured with Redis storage")
-    
-    # Initialize request logger with async Redis
+    # Initialize request logger with async Redis first
     request_logger = RequestLogger(redis_url)
+    
+    # Configure structured logging with Redis and RequestLogger
+    logging_components = configure_logging(storage.redis_client, request_logger)
+    logger.info("Structured logging configured with Redis storage and IP capture")
+    
+    # Set the global request logger
     set_request_logger(request_logger)
     logger.info("Request logger initialized with Redis indexing")
     

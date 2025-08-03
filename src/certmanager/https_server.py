@@ -91,6 +91,40 @@ class HTTPSServer:
         if not self.ssl_contexts:
             self.create_self_signed_default()
     
+    def reload_certificate(self, cert_name: str) -> bool:
+        """Reload a specific certificate by name."""
+        try:
+            certificate = self.manager.storage.get_certificate(cert_name)
+            if not certificate:
+                logger.warning(f"Certificate {cert_name} not found for reload")
+                return False
+            
+            if not certificate.fullchain_pem or not certificate.private_key_pem:
+                logger.warning(f"Certificate {cert_name} missing PEM data")
+                return False
+            
+            # Create new SSL context
+            context = self.create_ssl_context(certificate)
+            
+            # Update SSL contexts for all domains in the certificate
+            for domain in certificate.domains:
+                self.ssl_contexts[domain] = context
+                logger.info(f"Reloaded certificate {cert_name} for domain {domain}")
+            
+            # Notify unified dispatcher if available
+            try:
+                from ..dispatcher.unified_dispatcher import unified_server_instance
+                if unified_server_instance:
+                    unified_server_instance.update_ssl_context(certificate)
+            except Exception as e:
+                logger.debug(f"Could not notify unified dispatcher: {e}")
+            
+            return True
+            
+        except Exception as e:
+            logger.error(f"Failed to reload certificate {cert_name}: {e}")
+            return False
+    
     def create_self_signed_default(self):
         """Create self-signed certificate for fallback."""
         try:

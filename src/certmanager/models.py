@@ -1,5 +1,7 @@
 """Certificate-specific data models."""
 
+import os
+import re
 from datetime import datetime
 from typing import List, Optional
 from pydantic import BaseModel, Field, field_validator, field_serializer
@@ -8,7 +10,7 @@ from pydantic import BaseModel, Field, field_validator, field_serializer
 class CertificateRequest(BaseModel):
     """Request model for certificate generation."""
     domain: str
-    email: str
+    email: Optional[str] = None
     cert_name: str
     acme_directory_url: str = Field(default="https://acme-v02.api.letsencrypt.org/directory")
     
@@ -20,11 +22,16 @@ class CertificateRequest(BaseModel):
             raise ValueError('Invalid domain format')
         return v.lower()
     
-    @field_validator('email')
+    @field_validator('email', mode='before')
     @classmethod
-    def validate_email(cls, v: str) -> str:
+    def validate_email(cls, v: Optional[str]) -> str:
+        if not v:
+            # Use ACME_EMAIL from environment as default
+            v = os.getenv("ACME_EMAIL")
+            if not v:
+                raise ValueError("Email required - set ACME_EMAIL in environment")
         v = v.strip()
-        if not v or '@' not in v:
+        if not re.match(r'^[^@]+@[^@]+\.[^@]+$', v):
             raise ValueError('Invalid email format')
         return v.lower()
 
@@ -33,7 +40,7 @@ class MultiDomainCertificateRequest(BaseModel):
     """Request model for multi-domain certificate creation."""
     cert_name: str
     domains: List[str]
-    email: str
+    email: Optional[str] = None
     acme_directory_url: str
     
     @field_validator('cert_name')
@@ -70,11 +77,16 @@ class MultiDomainCertificateRequest(BaseModel):
         
         return cleaned
     
-    @field_validator('email')
+    @field_validator('email', mode='before')
     @classmethod
-    def validate_email(cls, v: str) -> str:
+    def validate_email(cls, v: Optional[str]) -> str:
+        if not v:
+            # Use ACME_EMAIL from environment as default
+            v = os.getenv("ACME_EMAIL")
+            if not v:
+                raise ValueError("Email required - set ACME_EMAIL in environment")
         v = v.strip()
-        if not v or '@' not in v:
+        if not re.match(r'^[^@]+@[^@]+\.[^@]+$', v):
             raise ValueError('Invalid email format')
         return v.lower()
 

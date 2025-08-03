@@ -75,6 +75,7 @@ async def create_certificate_task(
 ) -> Dict[str, Any]:
     """Create certificate generation task."""
     cert_name = request.cert_name
+    logger.info(f"[ASYNC_ACME] create_certificate_task called for {cert_name}")
     
     # Check if generation is already in progress
     if cert_name in ongoing_generations:
@@ -87,7 +88,7 @@ async def create_certificate_task(
     # Create the async task
     async def generate_and_update():
         try:
-            logger.info(f"Starting async certificate generation for {cert_name}")
+            logger.info(f"[ASYNC_ACME] Starting async certificate generation for {cert_name} with domains {request.domain}")
             
             # Update status to in_progress
             generation_results[cert_name] = {
@@ -108,15 +109,38 @@ async def create_certificate_task(
             
             logger.info(f"Certificate generation completed for {cert_name}")
             
-            # Update SSL context and instance to enable HTTPS if proxy exists
-            from ..dispatcher.unified_dispatcher import unified_server_instance
-            if unified_server_instance:
-                # Update SSL context for the new certificate
-                unified_server_instance.update_ssl_context(certificate)
-                
-                # Certificate may be for multiple domains, update each one
-                for domain in certificate.domains:
-                    await unified_server_instance.update_instance_certificate(domain)
+            # Try to reload certificate in HTTPS server
+            try:
+                from ..main import https_server
+                if https_server:
+                    logger.info(f"Reloading certificate {cert_name} in HTTPS server")
+                    if https_server.reload_certificate(cert_name):
+                        logger.info(f"Successfully reloaded certificate {cert_name} in HTTPS server")
+                    else:
+                        logger.warning(f"Failed to reload certificate {cert_name} in HTTPS server")
+                else:
+                    logger.warning(f"HTTPS server not available for certificate reload")
+            except Exception as e:
+                logger.error(f"Could not access HTTPS server: {e}", exc_info=True)
+            
+            # Also try to update unified dispatcher if available
+            try:
+                from ..dispatcher.unified_dispatcher import unified_server_instance
+                if unified_server_instance:
+                    logger.info(f"unified_server_instance found, updating SSL context for certificate {cert_name}")
+                    # Update SSL context for the new certificate
+                    unified_server_instance.update_ssl_context(certificate)
+                    logger.info(f"SSL context updated in unified dispatcher for {cert_name}")
+                    
+                    # Certificate may be for multiple domains, update each one
+                    for domain in certificate.domains:
+                        logger.info(f"Updating instance certificate for domain {domain}")
+                        await unified_server_instance.update_instance_certificate(domain)
+                        logger.info(f"Instance certificate updated for domain {domain}")
+                else:
+                    logger.warning(f"unified_server_instance not available - certificate will be loaded on next restart")
+            except Exception as e:
+                logger.error(f"Failed to update unified dispatcher: {e}", exc_info=True)
             
             # Update status to completed
             generation_results[cert_name] = {
@@ -193,15 +217,38 @@ async def create_multi_domain_certificate_task(
             
             logger.info(f"Multi-domain certificate generation completed for {cert_name}")
             
-            # Update SSL context and instance to enable HTTPS if proxy exists
-            from ..dispatcher.unified_dispatcher import unified_server_instance
-            if unified_server_instance:
-                # Update SSL context for the new certificate
-                unified_server_instance.update_ssl_context(certificate)
-                
-                # Certificate may be for multiple domains, update each one
-                for domain in certificate.domains:
-                    await unified_server_instance.update_instance_certificate(domain)
+            # Try to reload certificate in HTTPS server
+            try:
+                from ..main import https_server
+                if https_server:
+                    logger.info(f"Reloading multi-domain certificate {cert_name} in HTTPS server")
+                    if https_server.reload_certificate(cert_name):
+                        logger.info(f"Successfully reloaded multi-domain certificate {cert_name} in HTTPS server")
+                    else:
+                        logger.warning(f"Failed to reload multi-domain certificate {cert_name} in HTTPS server")
+                else:
+                    logger.warning(f"HTTPS server not available for multi-domain certificate reload")
+            except Exception as e:
+                logger.error(f"Could not access HTTPS server: {e}", exc_info=True)
+            
+            # Also try to update unified dispatcher if available
+            try:
+                from ..dispatcher.unified_dispatcher import unified_server_instance
+                if unified_server_instance:
+                    logger.info(f"unified_server_instance found, updating SSL context for multi-domain certificate {cert_name}")
+                    # Update SSL context for the new certificate
+                    unified_server_instance.update_ssl_context(certificate)
+                    logger.info(f"SSL context updated in unified dispatcher for multi-domain {cert_name}")
+                    
+                    # Certificate may be for multiple domains, update each one
+                    for domain in certificate.domains:
+                        logger.info(f"Updating instance certificate for domain {domain} in multi-domain cert")
+                        await unified_server_instance.update_instance_certificate(domain)
+                        logger.info(f"Instance certificate updated for domain {domain} in multi-domain cert")
+                else:
+                    logger.warning(f"unified_server_instance not available - multi-domain certificate will be loaded on next restart")
+            except Exception as e:
+                logger.error(f"Failed to update unified dispatcher for multi-domain cert: {e}", exc_info=True)
             
             # Update status to completed
             generation_results[cert_name] = {

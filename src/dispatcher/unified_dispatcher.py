@@ -977,22 +977,35 @@ class UnifiedMultiInstanceServer:
     
     async def update_instance_certificate(self, hostname: str):
         """Update instance when certificate becomes available."""
+        logger.info(f"update_instance_certificate called for hostname {hostname}")
+        
         # Get proxy configuration
         proxy_target = self.https_server.manager.storage.get_proxy_target(hostname)
-        if not proxy_target or not proxy_target.enable_https:
+        if not proxy_target:
+            logger.warning(f"No proxy target found for {hostname}")
             return
+        if not proxy_target.enable_https:
+            logger.info(f"HTTPS not enabled for {hostname}, skipping certificate update")
+            return
+        
+        logger.info(f"Proxy target found for {hostname}, cert_name: {proxy_target.cert_name}")
         
         # Get certificate
         cert = self.https_server.manager.get_certificate(proxy_target.cert_name)
         if not cert:
-            logger.warning(f"Certificate still not available for {hostname}")
+            logger.warning(f"Certificate {proxy_target.cert_name} still not available for {hostname}")
             return
+        
+        logger.info(f"Certificate {proxy_target.cert_name} found for {hostname}")
         
         # Find the instance
         instance = None
+        logger.info(f"Looking for instance with hostname {hostname} in {len(self.instances)} instances")
         for inst in self.instances:
+            logger.debug(f"Checking instance with domains {inst.domains}")
             if hostname in inst.domains:
                 instance = inst
+                logger.info(f"Found instance for {hostname} with domains {inst.domains}")
                 break
         
         if not instance:
@@ -1028,19 +1041,27 @@ class UnifiedMultiInstanceServer:
             logger.warning("Invalid certificate passed to update_ssl_context")
             return
             
-        logger.info(f"Updating SSL context for certificate {certificate.cert_name} domains: {certificate.domains}")
+        logger.info(f"update_ssl_context called for certificate {certificate.cert_name} domains: {certificate.domains}")
+        logger.info(f"Current instances: {[inst.domains for inst in self.instances]}")
         
         # For each domain in the certificate, update the instance if it exists
+        found_instances = False
         for domain in certificate.domains:
             # Find the instance handling this domain
+            instance_found = False
             for instance in self.instances:
                 if domain in instance.domains:
+                    instance_found = True
+                    found_instances = True
+                    logger.info(f"Found instance for domain {domain} with domains {instance.domains}")
+                    
                     # Update the certificate for this instance
                     instance.cert = certificate
+                    logger.info(f"Certificate updated on instance for domain {domain}")
                     
                     # If HTTPS is already running, we need to restart it
                     if instance.https_process and not instance.https_process.done():
-                        logger.info(f"Restarting HTTPS for {domain} to use new certificate")
+                        logger.info(f"HTTPS process is running for {domain}, restarting to use new certificate")
                         # Cancel the current HTTPS process
                         instance.https_process.cancel()
                         # Clean up old temp files
@@ -1050,11 +1071,18 @@ class UnifiedMultiInstanceServer:
                             os.unlink(instance.key_file)
                         # Start HTTPS with new certificate
                         asyncio.create_task(instance.start_https())
+                        logger.info(f"HTTPS restart initiated for {domain}")
                     else:
                         # HTTPS not running yet, just update the cert
-                        logger.info(f"Certificate updated for {domain}, HTTPS will use it when started")
-                    
-                    break  # Found the instance, move to next domain
+                        logger.info(f"HTTPS not running for {domain}, certificate stored for future use")
+                        logger.info(f"Starting HTTPS for {domain} since certificate is now available")
+                        asyncio.create_task(instance.start_https())
+            
+            if not instance_found:
+                logger.warning(f"No instance found for domain {domain} in update_ssl_context")
+        
+        if not found_instances:
+            logger.warning(f"No instances found for any domains in certificate {certificate.cert_name}")
     
     async def run(self):
         """Run the unified multi-instance server architecture."""
