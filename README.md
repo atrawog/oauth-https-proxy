@@ -171,7 +171,7 @@ just mcp-echo-setup
 ```
 ┌─────────────────┐     ┌──────────────────────────┐
 │                 │     │                          │
-│  HTTP Client    │────▶│     Proxy Service        │
+│  HTTP Client    │───▶│     Proxy Service        │
 │                 │     │  - HTTP/HTTPS Gateway    │
 └─────────────────┘     │  - OAuth Server          │
                         │  - Certificate Manager   │
@@ -191,7 +191,7 @@ just mcp-echo-setup
 
 ```
 ┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ External LB   │────▶│ Port 10001      │────▶│ Port 9000       │
+│ External LB   │───▶│ Port 10001      │───▶│ Port 9000       │
 │ w/ PROXY v1   │     │ PROXY Handler   │     │ Hypercorn/API   │
 └───────────────┘     └─────────────────┘     └─────────────────┘
                               │

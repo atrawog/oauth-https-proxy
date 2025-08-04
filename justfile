@@ -2862,6 +2862,62 @@ cleanup-orphaned:
     
     echo "Cleanup completed"
 
+# Save full configuration including SSL certificates to YAML backup file
+config-save filename="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Ensure backup directory exists
+    mkdir -p ./backup
+    
+    # Generate filename if not provided
+    if [ -z "{{filename}}" ]; then
+        filename="backup_$(date +%Y%m%d_%H%M%S).yaml"
+    else
+        filename="{{filename}}"
+    fi
+    
+    # Run the save script in container
+    docker exec {{container_name}} pixi run python scripts/config_save.py "$filename"
+    
+    # Copy the backup file to host
+    docker cp {{container_name}}:/app/backup/"$filename" ./backup/
+    
+    echo "Backup saved to ./backup/$filename"
+
+# Load configuration from YAML backup file
+config-load filename force="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    if [ -z "{{filename}}" ]; then
+        echo "Error: filename is required"
+        echo "Usage: just config-load <filename> [--force]"
+        echo ""
+        echo "Examples:"
+        echo "  just config-load backup_20241215_120000.yaml"
+        echo "  just config-load backup.yaml --force"
+        echo ""
+        echo "Available backups:"
+        ls -la ./backup/*.yaml 2>/dev/null || echo "  No backup files found in ./backup/"
+        exit 1
+    fi
+    
+    # Copy backup file to container if it exists on host
+    if [ -f "./backup/{{filename}}" ]; then
+        docker cp "./backup/{{filename}}" {{container_name}}:/app/backup/
+    elif [ -f "{{filename}}" ]; then
+        # If full path provided
+        docker cp "{{filename}}" {{container_name}}:/app/backup/
+    fi
+    
+    # Run the load script
+    if [ "{{force}}" = "--force" ]; then
+        docker exec {{container_name}} pixi run python scripts/config_load.py "{{filename}}" --force
+    else
+        docker exec {{container_name}} pixi run python scripts/config_load.py "{{filename}}"
+    fi
+
 # OAuth Commands
 # Generate RSA private key for OAuth JWT signing
 generate-oauth-key:

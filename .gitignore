@@ -97,6 +97,10 @@ reports/
 # Analysis
 analysis/
 
+# Backup files
+backup/*
+!backup/.gitkeep
+
 # Docker service management
 dockerfiles/*
 !dockerfiles/.gitkeep
