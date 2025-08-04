@@ -171,21 +171,19 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             
             logger.debug(f"MCP metadata proxy target found for {hostname}")
             
-            # Check if MCP is enabled
-            logger.info(f"Checking MCP metadata - mcp_metadata exists: {hasattr(target, 'mcp_metadata')}, value: {target.mcp_metadata if hasattr(target, 'mcp_metadata') else 'N/A'}")
-            if hasattr(target, 'mcp_metadata') and target.mcp_metadata:
-                logger.info(f"MCP metadata details - enabled: {target.mcp_metadata.enabled}, endpoint: {getattr(target.mcp_metadata, 'endpoint', 'N/A')}, scopes: {getattr(target.mcp_metadata, 'scopes', 'N/A')}")
+            # Check if protected resource metadata is configured
+            logger.info(f"Checking resource metadata - endpoint: {target.resource_endpoint}, scopes: {target.resource_scopes}")
             
-            if not target.mcp_metadata or not target.mcp_metadata.enabled:
-                logger.warning(f"MCP metadata request failed - MCP not enabled for proxy {hostname}")
-                raise HTTPException(404, "MCP not enabled for this proxy")
+            if not target.resource_endpoint:
+                logger.warning(f"Protected resource metadata request failed - not configured for proxy {hostname}")
+                raise HTTPException(404, "Protected resource metadata not configured for this proxy")
             
             # Build resource URI
             logger.info("Building resource URI")
             proto = request.headers.get("x-forwarded-proto", "https")
-            mcp_endpoint = target.mcp_metadata.endpoint if target.mcp_metadata else '/mcp'
-            logger.info(f"Protocol: {proto}, hostname: {hostname}, endpoint: {mcp_endpoint}")
-            resource_uri = f"{proto}://{hostname}{mcp_endpoint}"
+            resource_endpoint = target.resource_endpoint
+            logger.info(f"Protocol: {proto}, hostname: {hostname}, endpoint: {resource_endpoint}")
+            resource_uri = f"{proto}://{hostname}{resource_endpoint}"
             
             logger.debug(f"MCP metadata building resource URI: {resource_uri}")
             
@@ -198,15 +196,21 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             
             # Build metadata response per RFC 9728
             logger.info("Building metadata response")
-            mcp_scopes = target.mcp_metadata.scopes if target.mcp_metadata else ["mcp:read", "mcp:write"]
-            logger.info(f"MCP scopes: {mcp_scopes}")
+            resource_scopes = target.resource_scopes or ["mcp:read", "mcp:write"]
+            logger.info(f"Resource scopes: {resource_scopes}")
+            
+            # Get bearer methods from metadata or use default
+            bearer_methods = target.resource_bearer_methods or ["header"]
+            
+            # Get documentation suffix from metadata or use default
+            doc_suffix = target.resource_documentation_suffix or "/docs"
             
             metadata = {
                 "resource": resource_uri,
                 "authorization_servers": auth_servers,
-                "scopes_supported": mcp_scopes,
-                "bearer_methods_supported": ["header"],
-                "resource_documentation": f"{resource_uri}/docs"
+                "scopes_supported": resource_scopes,
+                "bearer_methods_supported": bearer_methods,
+                "resource_documentation": f"{resource_uri}{doc_suffix}"
             }
             logger.info(f"Created metadata dict: {metadata}")
             
@@ -215,16 +219,24 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 metadata["jwks_uri"] = f"{auth_servers[0]}/jwks"
             
             # Add server info if configured
-            if target.mcp_metadata and hasattr(target.mcp_metadata, 'server_info') and target.mcp_metadata.server_info:
-                logger.info(f"Adding server info: {target.mcp_metadata.server_info}")
-                metadata.update(target.mcp_metadata.server_info)
+            if target.resource_server_info:
+                logger.info(f"Adding server info: {target.resource_server_info}")
+                metadata.update(target.resource_server_info)
             else:
                 logger.info("No server info to add")
+            
+            # Add custom metadata if configured
+            if target.resource_custom_metadata:
+                logger.info(f"Adding custom metadata: {target.resource_custom_metadata}")
+                metadata.update(target.resource_custom_metadata)
             
             logger.info(f"MCP metadata endpoint responding successfully for {hostname}")
             
             return metadata
         
+        except HTTPException:
+            # Re-raise HTTPException as-is
+            raise
         except Exception as e:
             import traceback
             tb = traceback.format_exc()

@@ -260,7 +260,7 @@ class EnhancedProxyHandler:
                     auth_required_users=target.auth_required_users,
                     auth_required_emails=target.auth_required_emails,
                     auth_required_groups=target.auth_required_groups,
-                    mcp_enabled=getattr(target.mcp_metadata, 'enabled', False) if hasattr(target, 'mcp_metadata') and target.mcp_metadata else False
+                    has_resource_metadata=bool(target.resource_endpoint) if hasattr(target, 'resource_endpoint') else False
                 )
                 auth_result = await self._check_unified_auth(request, target)
                 if isinstance(auth_result, Response):

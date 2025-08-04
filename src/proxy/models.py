@@ -5,20 +5,6 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, field_validator, field_serializer
 
 
-class MCPMetadata(BaseModel):
-    """MCP (Model Context Protocol) metadata configuration."""
-    enabled: bool = False
-    endpoint: str = "/mcp"
-    scopes: List[str] = ["mcp:read", "mcp:write"]
-    stateful: bool = False
-    mcp_versions: List[str] = ["2025-06-18"]
-    server_info: Optional[Dict[str, Any]] = None
-    override_backend: bool = False  # If True, always use proxy-generated metadata
-    auto_detected: bool = False  # True if proxy checked backend
-    backend_implements: bool = False  # True if backend has the endpoint
-    last_checked: Optional[datetime] = None
-
-
 class ProxyTarget(BaseModel):
     """Proxy target configuration."""
     hostname: str
@@ -50,8 +36,16 @@ class ProxyTarget(BaseModel):
     enabled_routes: List[str] = []
     disabled_routes: List[str] = []
     
-    # MCP metadata configuration
-    mcp_metadata: Optional[MCPMetadata] = None
+    # Protected Resource Metadata fields (set by proxy-resource-set)
+    resource_endpoint: Optional[str] = None  # Resource endpoint path (e.g., "/mcp")
+    resource_scopes: Optional[List[str]] = None  # Supported scopes
+    resource_stateful: bool = False  # Whether the resource maintains state
+    resource_versions: Optional[List[str]] = None  # Supported protocol versions
+    resource_server_info: Optional[Dict[str, Any]] = None  # Additional server information
+    resource_override_backend: bool = False  # If True, always use proxy-generated metadata
+    resource_bearer_methods: Optional[List[str]] = None  # Bearer token methods supported
+    resource_documentation_suffix: Optional[str] = None  # Documentation URL suffix
+    resource_custom_metadata: Optional[Dict[str, Any]] = None  # Custom metadata fields
     
     @field_validator('auth_mode')
     @classmethod
@@ -136,8 +130,16 @@ class ProxyTargetUpdate(BaseModel):
     route_mode: Optional[str] = None
     enabled_routes: Optional[List[str]] = None
     disabled_routes: Optional[List[str]] = None
-    # MCP metadata field
-    mcp_metadata: Optional[MCPMetadata] = None
+    # Protected Resource Metadata fields
+    resource_endpoint: Optional[str] = None
+    resource_scopes: Optional[List[str]] = None
+    resource_stateful: Optional[bool] = None
+    resource_versions: Optional[List[str]] = None
+    resource_server_info: Optional[Dict[str, Any]] = None
+    resource_override_backend: Optional[bool] = None
+    resource_bearer_methods: Optional[List[str]] = None
+    resource_documentation_suffix: Optional[str] = None
+    resource_custom_metadata: Optional[Dict[str, Any]] = None
     
     @field_validator('target_url')
     @classmethod
@@ -219,31 +221,40 @@ class ProxyAuthConfig(BaseModel):
         return v
 
 
-class ProxyMCPConfig(BaseModel):
-    """Request model for configuring proxy MCP metadata."""
-    enabled: bool = True
-    endpoint: Optional[str] = "/mcp"
-    scopes: Optional[List[str]] = ["mcp:read", "mcp:write"]
-    stateful: Optional[bool] = False
-    mcp_versions: Optional[List[str]] = ["2025-06-18"]
+class ProxyResourceConfig(BaseModel):
+    """Request model for configuring proxy protected resource metadata."""
+    endpoint: str = "/mcp"
+    scopes: List[str] = ["mcp:read", "mcp:write"]
+    stateful: bool = False
+    versions: List[str] = ["2025-06-18"]
     server_info: Optional[Dict[str, Any]] = None
-    override_backend: Optional[bool] = False
+    override_backend: bool = False
+    bearer_methods: List[str] = ["header"]
+    documentation_suffix: str = "/docs"
+    custom_metadata: Optional[Dict[str, Any]] = None
     
     @field_validator('endpoint')
     @classmethod
     def validate_endpoint(cls, v):
-        if v is not None and not v.startswith('/'):
+        if not v.startswith('/'):
             raise ValueError('Endpoint must start with /')
         return v
     
     @field_validator('scopes')
     @classmethod
     def validate_scopes(cls, v):
-        if v is not None:
-            valid_scopes = ["mcp:read", "mcp:write", "mcp:session", "mcp:admin"]
-            for scope in v:
-                if not any(scope.startswith(prefix) for prefix in ["mcp:", "openid", "profile", "email"]):
-                    raise ValueError(f"Invalid scope: {scope}")
+        for scope in v:
+            if not any(scope.startswith(prefix) for prefix in ["mcp:", "openid", "profile", "email", "read", "write", "admin"]):
+                raise ValueError(f"Invalid scope: {scope}")
+        return v
+    
+    @field_validator('bearer_methods')
+    @classmethod
+    def validate_bearer_methods(cls, v):
+        valid_methods = ["header", "body", "query"]
+        for method in v:
+            if method not in valid_methods:
+                raise ValueError(f"Invalid bearer method: {method}")
         return v
 
 

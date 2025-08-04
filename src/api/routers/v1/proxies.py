@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query
 
 from ...auth import require_auth, require_auth_header, get_current_token_info, require_proxy_owner
-from ....proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig, ProxyMCPConfig
+from ....proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate, ProxyAuthConfig, ProxyRoutesConfig, ProxyResourceConfig
 from ....certmanager.models import CertificateRequest
 
 logger = logging.getLogger(__name__)
@@ -521,86 +521,91 @@ def create_router(storage, cert_manager):
         
         return {"status": "Route disabled", "route_id": route_id}
     
-    # MCP (Model Context Protocol) configuration endpoints
-    @router.post("/{hostname}/mcp")
-    async def configure_proxy_mcp(
+    # Protected Resource Metadata configuration endpoints
+    @router.post("/{hostname}/resource")
+    async def configure_proxy_resource(
         hostname: str,
-        config: ProxyMCPConfig,
+        config: ProxyResourceConfig,
         _=Depends(require_proxy_owner)
     ):
-        """Configure MCP metadata for a proxy target - owner only."""
+        """Configure protected resource metadata for a proxy target - owner only."""
         target = storage.get_proxy_target(hostname)
         if not target:
             raise HTTPException(404, f"Proxy target {hostname} not found")
         
-        # Build MCP metadata dict
-        mcp_metadata = {
-            "enabled": config.enabled,
-            "endpoint": config.endpoint,
-            "scopes": config.scopes,
-            "stateful": config.stateful,
-            "mcp_versions": config.mcp_versions,
-            "server_info": config.server_info,
-            "override_backend": config.override_backend
-        }
-        
-        # Update MCP metadata
-        if not storage.update_mcp_metadata(hostname, mcp_metadata):
-            raise HTTPException(500, "Failed to update MCP metadata")
-        
-        # Get updated target
-        target = storage.get_proxy_target(hostname)
-        
-        logger.info(f"MCP configured for proxy {hostname}: enabled={config.enabled}")
-        
-        return {"status": "MCP configured", "proxy_target": target}
-    
-    @router.get("/{hostname}/mcp")
-    async def get_proxy_mcp_config(hostname: str):
-        """Get MCP configuration for a proxy target."""
-        target = storage.get_proxy_target(hostname)
-        if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
-        
-        if not target.mcp_metadata:
-            return {
-                "enabled": False,
-                "message": "MCP not configured for this proxy"
-            }
-        
-        # Return MCP configuration
-        return {
-            "enabled": target.mcp_metadata.enabled,
-            "endpoint": target.mcp_metadata.endpoint,
-            "scopes": target.mcp_metadata.scopes,
-            "stateful": target.mcp_metadata.stateful,
-            "mcp_versions": target.mcp_metadata.mcp_versions,
-            "server_info": target.mcp_metadata.server_info,
-            "override_backend": target.mcp_metadata.override_backend,
-            "auto_detected": target.mcp_metadata.auto_detected,
-            "backend_implements": target.mcp_metadata.backend_implements,
-            "last_checked": target.mcp_metadata.last_checked
-        }
-    
-    @router.delete("/{hostname}/mcp")
-    async def remove_proxy_mcp(
-        hostname: str,
-        _=Depends(require_proxy_owner)
-    ):
-        """Remove MCP configuration from a proxy target - owner only."""
-        target = storage.get_proxy_target(hostname)
-        if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
-        
-        # Remove MCP metadata
-        target.mcp_metadata = None
+        # Update resource metadata fields directly on target
+        target.resource_endpoint = config.endpoint
+        target.resource_scopes = config.scopes
+        target.resource_stateful = config.stateful
+        target.resource_versions = config.versions
+        target.resource_server_info = config.server_info
+        target.resource_override_backend = config.override_backend
+        target.resource_bearer_methods = config.bearer_methods
+        target.resource_documentation_suffix = config.documentation_suffix
+        target.resource_custom_metadata = config.custom_metadata
         
         # Store updated target
         if not storage.store_proxy_target(hostname, target):
             raise HTTPException(500, "Failed to update proxy target")
         
-        logger.info(f"MCP configuration removed for proxy {hostname}")
+        logger.info(f"Protected resource metadata configured for proxy {hostname}")
         
-        return {"status": "MCP configuration removed", "proxy_target": target}
+        return {"status": "Protected resource metadata configured", "proxy_target": target}
+    
+    @router.get("/{hostname}/resource")
+    async def get_proxy_resource_config(hostname: str):
+        """Get protected resource metadata configuration for a proxy target."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        if not target.resource_endpoint:
+            return {
+                "configured": False,
+                "message": "Protected resource metadata not configured for this proxy"
+            }
+        
+        # Return resource configuration
+        return {
+            "configured": True,
+            "endpoint": target.resource_endpoint,
+            "scopes": target.resource_scopes or ["mcp:read", "mcp:write"],
+            "stateful": target.resource_stateful,
+            "versions": target.resource_versions or ["2025-06-18"],
+            "server_info": target.resource_server_info,
+            "override_backend": target.resource_override_backend,
+            "bearer_methods": target.resource_bearer_methods or ["header"],
+            "documentation_suffix": target.resource_documentation_suffix or "/docs",
+            "custom_metadata": target.resource_custom_metadata
+        }
+    
+    @router.delete("/{hostname}/resource")
+    async def remove_proxy_resource(
+        hostname: str,
+        _=Depends(require_proxy_owner)
+    ):
+        """Remove protected resource metadata from a proxy target - owner only."""
+        target = storage.get_proxy_target(hostname)
+        if not target:
+            raise HTTPException(404, f"Proxy target {hostname} not found")
+        
+        # Remove resource metadata fields
+        target.resource_endpoint = None
+        target.resource_scopes = None
+        target.resource_stateful = False
+        target.resource_versions = None
+        target.resource_server_info = None
+        target.resource_override_backend = False
+        target.resource_bearer_methods = None
+        target.resource_documentation_suffix = None
+        target.resource_custom_metadata = None
+        
+        # Store updated target
+        if not storage.store_proxy_target(hostname, target):
+            raise HTTPException(500, "Failed to update proxy target")
+        
+        logger.info(f"Protected resource metadata removed for proxy {hostname}")
+        
+        return {"status": "Protected resource metadata removed", "proxy_target": target}
     
     return router

@@ -1201,10 +1201,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             forwarded_method = request.headers.get("x-original-method", "GET")
             
             # Construct the resource URI if we have the host
-            # For MCP compliance, resource should be the base URL without specific endpoint paths
+            # For MCP compliance, resource should include the full path to match protected resource metadata
             resource = None
             if forwarded_host:
-                resource = f"{forwarded_proto}://{forwarded_host}"
+                # Include the path in the resource URI to match what's in the protected resource metadata
+                resource = f"{forwarded_proto}://{forwarded_host}{forwarded_path}" if forwarded_path else f"{forwarded_proto}://{forwarded_host}"
             
             # Get the real forwarded IP if present
             forwarded_ip = request.headers.get("x-forwarded-for", client_ip)

@@ -1599,8 +1599,8 @@ proxy-auth-show hostname:
     
     echo "$body" | jq '.'
 
-# Configure MCP metadata for a proxy
-proxy-mcp-enable hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false":
+# Set protected resource metadata for a proxy
+proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1618,25 +1618,39 @@ proxy-mcp-enable hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" s
     # Build scopes array
     scopes_json=$(echo "{{scopes}}" | jq -R 'split(" ")')
     
+    # Build bearer methods array
+    bearer_methods_json=$(echo "{{bearer-methods}}" | jq -R 'split(" ")')
+    
+    # Parse server-info and custom-metadata as JSON
+    server_info_json=$(echo '{{server-info}}' | jq '.')
+    custom_metadata_json=$(echo '{{custom-metadata}}' | jq '.')
+    
     # Build request body
     body=$(jq -n \
         --argjson scopes "$scopes_json" \
+        --argjson bearer_methods "$bearer_methods_json" \
+        --argjson server_info "$server_info_json" \
+        --argjson custom_metadata "$custom_metadata_json" \
         '{
-            enabled: true,
             endpoint: "{{endpoint}}",
             scopes: $scopes,
             stateful: {{stateful}},
-            override_backend: {{override-backend}}
+            versions: ["2025-06-18"],
+            override_backend: {{override-backend}},
+            bearer_methods: $bearer_methods,
+            documentation_suffix: "{{doc-suffix}}",
+            server_info: (if $server_info == {} then null else $server_info end),
+            custom_metadata: (if $custom_metadata == {} then null else $custom_metadata end)
         }')
     
-    echo "Enabling MCP for {{hostname}}..."
+    echo "Configuring protected resource metadata for {{hostname}}..."
     echo "$body" | jq '.'
     
     response=$(curl -s -w '\n%{http_code}' -X POST \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d "$body" \
-        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/mcp")
+        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/resource")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1647,11 +1661,11 @@ proxy-mcp-enable hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" s
         exit 1
     fi
     
-    echo "✓ MCP enabled on {{hostname}}"
-    echo "$body" | jq '.proxy_target.mcp_metadata' 2>/dev/null || echo "$body"
+    echo "✓ Protected resource metadata configured on {{hostname}}"
+    echo "$body" | jq '.proxy_target | {resource_endpoint, resource_scopes, resource_stateful, resource_bearer_methods, resource_documentation_suffix}' 2>/dev/null || echo "$body"
 
-# Disable MCP metadata for a proxy
-proxy-mcp-disable hostname token="":
+# Clear protected resource metadata for a proxy
+proxy-resource-clear hostname token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1666,11 +1680,11 @@ proxy-mcp-disable hostname token="":
         TOKEN="{{token}}"
     fi
     
-    echo "Disabling MCP for {{hostname}}..."
+    echo "Removing protected resource metadata for {{hostname}}..."
     
     response=$(curl -s -w '\n%{http_code}' -X DELETE \
         -H "Authorization: Bearer $TOKEN" \
-        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/mcp")
+        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/resource")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1681,14 +1695,14 @@ proxy-mcp-disable hostname token="":
         exit 1
     fi
     
-    echo "✓ MCP disabled on {{hostname}}"
+    echo "✓ Protected resource metadata removed from {{hostname}}"
 
-# Show MCP configuration for a proxy
-proxy-mcp-show hostname:
+# Show protected resource metadata configuration for a proxy
+proxy-resource-show hostname:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/mcp")
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/resource")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1701,16 +1715,21 @@ proxy-mcp-show hostname:
     
     echo "$body" | jq '.'
 
-# Test proxy MCP metadata endpoint
-test-proxy-mcp hostname:
+# Test proxy protected resource metadata endpoint
+test-proxy-resource hostname:
     #!/usr/bin/env bash
     set -euo pipefail
     
     # First check if proxy exists
-    echo "Testing MCP metadata endpoint for {{hostname}}..."
+    echo "Testing protected resource metadata endpoint for {{hostname}}..."
     
-    # Try to fetch the MCP metadata endpoint
-    response=$(curl -s -w '\n%{http_code}' "https://{{hostname}}/.well-known/oauth-protected-resource" -k)
+    # Try to fetch the protected resource metadata endpoint
+    # First try HTTPS, if that fails try HTTP with Host header
+    if curl -s -f "https://{{hostname}}/.well-known/oauth-protected-resource" -k --max-time 2 >/dev/null 2>&1; then
+        response=$(curl -s -w '\n%{http_code}' "https://{{hostname}}/.well-known/oauth-protected-resource" -k)
+    else
+        response=$(curl -s -w '\n%{http_code}' "http://localhost/.well-known/oauth-protected-resource" -H "Host: {{hostname}}")
+    fi
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1719,9 +1738,9 @@ test-proxy-mcp hostname:
     echo "Response:"
     echo "$body" | jq '.' 2>/dev/null || echo "$body"
     
-    # Also check the proxy's MCP configuration
-    echo -e "\nProxy MCP Configuration:"
-    just proxy-mcp-show {{hostname}}
+    # Also check the proxy's resource configuration
+    echo -e "\nProxy Resource Configuration:"
+    just proxy-resource-show {{hostname}}
 
 # ============================================================================
 # DOCKER SERVICE MANAGEMENT

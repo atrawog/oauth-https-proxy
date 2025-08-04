@@ -132,7 +132,7 @@ just service-proxy-create my-app my-app.yourdomain.com true $ADMIN_TOKEN
 # Full example: Service accessible at both localhost:3000 and https://everything.yourdomain.com
 just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 $ADMIN_TOKEN
 just proxy-create everything.yourdomain.com http://mcp-everything:3000 $ADMIN_TOKEN
-just proxy-mcp-enable everything.yourdomain.com $ADMIN_TOKEN /mcp
+just proxy-resource-set everything.yourdomain.com $ADMIN_TOKEN /mcp
 ```
 
 ### Port Management
@@ -247,7 +247,7 @@ just proxy-auth-enable mcp.yourdomain.com $ADMIN_TOKEN auth.yourdomain.com forwa
 just resource-register https://mcp.yourdomain.com mcp.yourdomain.com "My MCP Server"
 
 # 4. Enable MCP metadata (optional - for automatic metadata endpoints)
-just proxy-mcp-enable mcp.yourdomain.com $ADMIN_TOKEN /mcp "mcp:read mcp:write"
+just proxy-resource-set mcp.yourdomain.com $ADMIN_TOKEN /mcp "mcp:read mcp:write"
 
 # Your MCP server is now accessible at https://mcp.yourdomain.com/mcp
 # with full OAuth protection and MCP compliance!

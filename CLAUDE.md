@@ -427,11 +427,12 @@ just proxy-auth-disable <hostname> <token>
 just proxy-auth-config <hostname> <token> users="" emails="" groups=""
 just proxy-auth-show <hostname>
 
-# MCP metadata configuration
-just proxy-mcp-enable <hostname> <token> [endpoint] [scopes] [stateful] [override-backend]
-just proxy-mcp-disable <hostname> <token>
-just proxy-mcp-show <hostname>
-just test-proxy-mcp <hostname>
+# Protected resource metadata configuration (OAuth 2.0 RFC 9728)
+# Note: proxy-mcp-* commands have been renamed to proxy-resource-* for clarity
+just proxy-resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata]
+just proxy-resource-clear <hostname> <token>
+just proxy-resource-show <hostname>
+just test-proxy-resource <hostname>
 
 # Testing
 just test-proxy-basic
