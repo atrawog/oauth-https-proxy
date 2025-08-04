@@ -830,6 +830,12 @@ class EnhancedProxyHandler:
             "X-Forwarded-Path": request.url.path,  # Pass the path for full resource URL construction
         }
         
+        # Add allowed scopes and audiences if configured
+        if target.auth_allowed_scopes:
+            headers["X-Auth-Allowed-Scopes"] = ",".join(target.auth_allowed_scopes)
+        if target.auth_allowed_audiences:
+            headers["X-Auth-Allowed-Audiences"] = ",".join(target.auth_allowed_audiences)
+        
         # Log the headers being sent to auth service
         logger.debug(
             "Sending auth verification request - DETAILED HEADERS",

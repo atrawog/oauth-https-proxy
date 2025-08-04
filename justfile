@@ -1502,7 +1502,7 @@ proxy-delete hostname token="" delete-cert="false" force="false":
     echo "$body" | jq '.'
 
 # Enable OAuth authentication on a proxy
-proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
+proxy-auth-enable hostname token="" auth-proxy="" mode="forward" allowed-scopes="" allowed-audiences="":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1526,15 +1526,35 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward":
         auth_proxy_value="{{auth-proxy}}"
     fi
     
+    # Build the JSON payload
+    json_payload=$(jq -n \
+        --arg auth_proxy "$auth_proxy_value" \
+        --arg mode "{{mode}}" \
+        '{
+            "enabled": true,
+            "auth_proxy": $auth_proxy,
+            "mode": $mode
+        }')
+    
+    # Add allowed_scopes if provided
+    if [ -n "{{allowed-scopes}}" ]; then
+        # Convert comma-separated string to JSON array
+        scopes_array=$(echo "{{allowed-scopes}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson scopes "$scopes_array" '. + {allowed_scopes: $scopes}')
+    fi
+    
+    # Add allowed_audiences if provided
+    if [ -n "{{allowed-audiences}}" ]; then
+        # Convert comma-separated string to JSON array
+        audiences_array=$(echo "{{allowed-audiences}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson audiences "$audiences_array" '. + {allowed_audiences: $audiences}')
+    fi
+    
     # Create auth config
     response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
-        -d '{
-            "enabled": true,
-            "auth_proxy": "'$auth_proxy_value'",
-            "mode": "{{mode}}"
-        }')
+        -d "$json_payload")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1597,6 +1617,97 @@ proxy-auth-show hostname:
         exit 1
     fi
     
+    echo "$body" | jq '.'
+
+# Configure auth settings for a proxy (users, emails, groups, scopes, audiences)
+proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes="" allowed-audiences="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    # Get current auth configuration
+    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth")
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: Failed to get current auth config - HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    # Extract current config
+    current_config=$(echo "$body" | jq '{
+        enabled: .auth_enabled,
+        auth_proxy: .auth_proxy,
+        mode: .auth_mode,
+        pass_headers: .auth_pass_headers,
+        cookie_name: .auth_cookie_name,
+        header_prefix: .auth_header_prefix,
+        excluded_paths: .auth_excluded_paths
+    }')
+    
+    # Build the JSON payload starting with current config
+    json_payload="$current_config"
+    
+    # Add required_users if provided
+    if [ -n "{{users}}" ]; then
+        users_array=$(echo "{{users}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson users "$users_array" '. + {required_users: $users}')
+    fi
+    
+    # Add required_emails if provided
+    if [ -n "{{emails}}" ]; then
+        emails_array=$(echo "{{emails}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson emails "$emails_array" '. + {required_emails: $emails}')
+    fi
+    
+    # Add required_groups if provided
+    if [ -n "{{groups}}" ]; then
+        groups_array=$(echo "{{groups}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson groups "$groups_array" '. + {required_groups: $groups}')
+    fi
+    
+    # Add allowed_scopes if provided
+    if [ -n "{{allowed-scopes}}" ]; then
+        scopes_array=$(echo "{{allowed-scopes}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson scopes "$scopes_array" '. + {allowed_scopes: $scopes}')
+    fi
+    
+    # Add allowed_audiences if provided
+    if [ -n "{{allowed-audiences}}" ]; then
+        audiences_array=$(echo "{{allowed-audiences}}" | jq -R 'split(",") | map(gsub("^\\s+|\\s+$"; ""))')
+        json_payload=$(echo "$json_payload" | jq --argjson audiences "$audiences_array" '. + {allowed_audiences: $audiences}')
+    fi
+    
+    # Update auth config
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ ! "$http_code" =~ ^2 ]]; then
+        echo "Error: HTTP $http_code"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+        exit 1
+    fi
+    
+    echo "✓ Auth configuration updated for {{hostname}}"
     echo "$body" | jq '.'
 
 # Set protected resource metadata for a proxy

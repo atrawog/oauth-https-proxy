@@ -1236,6 +1236,56 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Validate with resource for audience checking
             token = await require_oauth.validate_request(request, resource=resource)
             
+            # Additional validation for allowed scopes and audiences
+            allowed_scopes_header = request.headers.get("x-auth-allowed-scopes", "")
+            allowed_audiences_header = request.headers.get("x-auth-allowed-audiences", "")
+            
+            # Check allowed scopes if configured
+            if allowed_scopes_header:
+                allowed_scopes = [s.strip() for s in allowed_scopes_header.split(",") if s.strip()]
+                token_scopes = token.get("scope", "").split()
+                
+                # Check if at least one token scope is in the allowed list
+                if not any(scope in allowed_scopes for scope in token_scopes):
+                    logger.warning(
+                        "OAuth token validation failed - scope not allowed",
+                        ip=forwarded_ip,
+                        resource=resource,
+                        token_scopes=token_scopes,
+                        allowed_scopes=allowed_scopes
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "insufficient_scope",
+                            "error_description": f"Token scopes {token_scopes} not in allowed scopes {allowed_scopes}"
+                        }
+                    )
+            
+            # Check allowed audiences if configured
+            if allowed_audiences_header:
+                allowed_audiences = [a.strip() for a in allowed_audiences_header.split(",") if a.strip()]
+                token_audiences = token.get("aud", [])
+                if isinstance(token_audiences, str):
+                    token_audiences = [token_audiences]
+                
+                # Check if at least one token audience is in the allowed list
+                if not any(aud in allowed_audiences for aud in token_audiences):
+                    logger.warning(
+                        "OAuth token validation failed - audience not allowed",
+                        ip=forwarded_ip,
+                        resource=resource,
+                        token_audiences=token_audiences,
+                        allowed_audiences=allowed_audiences
+                    )
+                    raise HTTPException(
+                        status_code=403,
+                        detail={
+                            "error": "invalid_audience",
+                            "error_description": f"Token audiences {token_audiences} not in allowed audiences {allowed_audiences}"
+                        }
+                    )
+            
             logger.info(
                 "OAuth token verified successfully",
                 ip=forwarded_ip,

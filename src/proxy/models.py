@@ -26,6 +26,8 @@ class ProxyTarget(BaseModel):
     auth_required_users: Optional[List[str]] = None
     auth_required_emails: Optional[List[str]] = None
     auth_required_groups: Optional[List[str]] = None
+    auth_allowed_scopes: Optional[List[str]] = None  # Allowed token scopes (if None, any scope is allowed)
+    auth_allowed_audiences: Optional[List[str]] = None  # Allowed token audiences (if None, any audience is allowed)
     auth_pass_headers: bool = True
     auth_cookie_name: str = "unified_auth_token"
     auth_header_prefix: str = "X-Auth-"
@@ -122,6 +124,8 @@ class ProxyTargetUpdate(BaseModel):
     auth_required_users: Optional[List[str]] = None
     auth_required_emails: Optional[List[str]] = None
     auth_required_groups: Optional[List[str]] = None
+    auth_allowed_scopes: Optional[List[str]] = None
+    auth_allowed_audiences: Optional[List[str]] = None
     auth_pass_headers: Optional[bool] = None
     auth_cookie_name: Optional[str] = None
     auth_header_prefix: Optional[str] = None
@@ -199,6 +203,8 @@ class ProxyAuthConfig(BaseModel):
     required_users: Optional[List[str]] = None
     required_emails: Optional[List[str]] = None
     required_groups: Optional[List[str]] = None
+    allowed_scopes: Optional[List[str]] = None  # Allowed token scopes
+    allowed_audiences: Optional[List[str]] = None  # Allowed token audiences
     pass_headers: bool = True
     cookie_name: str = "unified_auth_token"
     header_prefix: str = "X-Auth-"

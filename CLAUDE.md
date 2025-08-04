@@ -368,6 +368,8 @@ Three modes for route filtering:
   "auth_mode": "forward",  // forward|redirect|passthrough
   "auth_required_users": ["alice", "bob"],
   "auth_required_emails": ["*@example.com"],
+  "auth_allowed_scopes": ["mcp:read", "mcp:write"],  // Optional: restrict token scopes
+  "auth_allowed_audiences": ["https://api.example.com"],  // Optional: restrict token audiences
   "auth_pass_headers": true
 }
 ```
@@ -422,9 +424,9 @@ just proxy-cert-generate <hostname> <token> [staging]
 just proxy-cert-attach <hostname> <cert-name> <token>
 
 # OAuth proxy authentication
-just proxy-auth-enable <hostname> <token> <auth-proxy> <mode>
+just proxy-auth-enable <hostname> <token> <auth-proxy> <mode> [allowed-scopes] [allowed-audiences]
 just proxy-auth-disable <hostname> <token>
-just proxy-auth-config <hostname> <token> users="" emails="" groups=""
+just proxy-auth-config <hostname> <token> users="" emails="" groups="" allowed-scopes="" allowed-audiences=""
 just proxy-auth-show <hostname>
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)

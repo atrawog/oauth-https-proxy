@@ -287,6 +287,8 @@ def create_router(storage, cert_manager):
         target.auth_required_users = config.required_users
         target.auth_required_emails = config.required_emails
         target.auth_required_groups = config.required_groups
+        target.auth_allowed_scopes = config.allowed_scopes
+        target.auth_allowed_audiences = config.allowed_audiences
         target.auth_pass_headers = config.pass_headers
         target.auth_cookie_name = config.cookie_name
         target.auth_header_prefix = config.header_prefix
@@ -379,6 +381,8 @@ def create_router(storage, cert_manager):
             "auth_required_users": target.auth_required_users,
             "auth_required_emails": target.auth_required_emails,
             "auth_required_groups": target.auth_required_groups,
+            "auth_allowed_scopes": target.auth_allowed_scopes,
+            "auth_allowed_audiences": target.auth_allowed_audiences,
             "auth_pass_headers": target.auth_pass_headers,
             "auth_cookie_name": target.auth_cookie_name,
             "auth_header_prefix": target.auth_header_prefix,
