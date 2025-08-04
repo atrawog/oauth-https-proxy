@@ -127,6 +127,9 @@ logs-help:
     @echo "📊 Analysis:"
     @echo "  just app-logs-event-stats    # Show event statistics"
     @echo ""
+    @echo "🗑️  Maintenance:"
+    @echo "  just logs-clear              # Clear all logs from Redis (requires token)"
+    @echo ""
     @echo "💡 Examples:"
     @echo "  just logs                    # Docker container logs"
     @echo "  just app-logs event=oauth    # Application OAuth logs"
@@ -743,6 +746,64 @@ app-logs-test token="${ADMIN_TOKEN}":
     
     echo ""
     echo "✅ Logging system test complete!"
+
+# Clear all application logs from Redis
+logs-clear token="${ADMIN_TOKEN}":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "=== Clearing All Application Logs ==="
+    echo ""
+    
+    # Check token
+    auth_token="${token:-${ADMIN_TOKEN:-}}"
+    if [ -z "$auth_token" ]; then
+        echo "❌ Error: No authentication token provided"
+        echo "Use: just logs-clear <token> or set ADMIN_TOKEN"
+        exit 1
+    fi
+    
+    echo "⚠️  WARNING: This will delete ALL logs from Redis!"
+    echo "Press Ctrl+C to cancel, or wait 5 seconds to continue..."
+    sleep 5
+    
+    echo ""
+    echo "Clearing logs..."
+    
+    # Use redis-cli to delete log keys using patterns
+    # We need to delete all keys matching the patterns from RequestLogger
+    
+    # Get Redis password if set
+    REDIS_PASSWORD="${REDIS_PASSWORD:-}"
+    REDIS_AUTH=""
+    if [ -n "$REDIS_PASSWORD" ]; then
+        REDIS_AUTH="-a $REDIS_PASSWORD"
+    fi
+    
+    # 1. Delete request data keys: req:*
+    echo "- Clearing request data..."
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "req:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    
+    # 2. Delete all index keys: idx:req:*
+    echo "- Clearing request indexes..."
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "idx:req:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    
+    # 3. Delete stream data: stream:requests
+    echo "- Clearing request stream..."
+    docker compose exec -T redis redis-cli $REDIS_AUTH DEL "stream:requests" 2>/dev/null || true
+    
+    # 4. Delete statistics keys: stats:*
+    echo "- Clearing statistics..."
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:requests:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:unique_ips:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:errors:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:error_types:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:response_times:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    
+    echo ""
+    echo "✅ All logs cleared successfully!"
+    echo ""
+    echo "Note: New requests will start generating logs immediately."
 
 
 # ============================================================================
