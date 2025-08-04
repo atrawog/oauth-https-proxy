@@ -773,32 +773,36 @@ logs-clear token="${ADMIN_TOKEN}":
     # Use redis-cli to delete log keys using patterns
     # We need to delete all keys matching the patterns from RequestLogger
     
-    # Get Redis password if set
-    REDIS_PASSWORD="${REDIS_PASSWORD:-}"
-    REDIS_AUTH=""
-    if [ -n "$REDIS_PASSWORD" ]; then
-        REDIS_AUTH="-a $REDIS_PASSWORD"
+    # Get Redis password from environment or .env file
+    if [ -z "${REDIS_PASSWORD:-}" ] && [ -f .env ]; then
+        export $(grep REDIS_PASSWORD .env | xargs)
     fi
     
     # 1. Delete request data keys: req:*
     echo "- Clearing request data..."
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "req:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "req:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
     
     # 2. Delete all index keys: idx:req:*
     echo "- Clearing request indexes..."
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "idx:req:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "idx:req:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
     
     # 3. Delete stream data: stream:requests
     echo "- Clearing request stream..."
-    docker compose exec -T redis redis-cli $REDIS_AUTH DEL "stream:requests" 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL "stream:requests" 2>/dev/null || true
     
     # 4. Delete statistics keys: stats:*
     echo "- Clearing statistics..."
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:requests:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:unique_ips:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:errors:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:error_types:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
-    docker compose exec -T redis redis-cli $REDIS_AUTH --scan --pattern "stats:response_times:*" | xargs -r docker compose exec -T redis redis-cli $REDIS_AUTH DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "stats:requests:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "stats:unique_ips:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "stats:errors:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "stats:error_types:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "stats:response_times:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
+    
+    # 5. Delete structured logs (from Python logging system)
+    echo "- Clearing structured logs..."
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL "logs:stream" 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "logs:entry:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
+    docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning --scan --pattern "logs:index:*" | xargs -r docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning DEL 2>/dev/null || true
     
     echo ""
     echo "✅ All logs cleared successfully!"

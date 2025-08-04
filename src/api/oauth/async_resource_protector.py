@@ -150,6 +150,12 @@ class AsyncResourceProtector:
             # Extract client IP using centralized function
             client_ip = get_real_client_ip(request)
             
+            # Get allowed audiences from proxy configuration (passed via headers)
+            allowed_audiences_header = request.headers.get("x-auth-allowed-audiences", "")
+            allowed_audiences = []
+            if allowed_audiences_header:
+                allowed_audiences = [a.strip() for a in allowed_audiences_header.split(",") if a.strip()]
+            
             logger.info(
                 "Starting token audience validation - DETAILED CONTEXT",
                 ip=client_ip,
@@ -157,6 +163,8 @@ class AsyncResourceProtector:
                 token_aud=aud,
                 token_aud_type=type(aud).__name__,
                 token_aud_count=len(aud),
+                allowed_audiences=allowed_audiences,
+                allowed_audiences_count=len(allowed_audiences),
                 token_jti=token_data.get("jti"),
                 token_sub=token_data.get("sub"),
                 token_username=token_data.get("username"),
@@ -168,12 +176,19 @@ class AsyncResourceProtector:
                 request_headers={
                     "host": request.headers.get("host"),
                     "x-forwarded-host": request.headers.get("x-forwarded-host"),
-                    "x-forwarded-proto": request.headers.get("x-forwarded-proto")
+                    "x-forwarded-proto": request.headers.get("x-forwarded-proto"),
+                    "x-auth-allowed-audiences": allowed_audiences_header
                 }
             )
             
-            # Check if resource is in audience
-            if resource not in aud:
+            # Check if resource is in audience OR if any token audience is in allowed audiences
+            resource_in_aud = resource in aud
+            allowed_aud_match = False
+            if allowed_audiences:
+                # Check if any token audience is in the allowed list
+                allowed_aud_match = any(token_aud in allowed_audiences for token_aud in aud)
+            
+            if not resource_in_aud and not allowed_aud_match:
                 logger.error(
                     "Token audience validation FAILED - CRITICAL: 403 invalid_audience error",
                     ip=client_ip,
@@ -190,7 +205,9 @@ class AsyncResourceProtector:
                     audience_mismatch_details={
                         "expected_resource": resource,
                         "actual_audience": aud,
-                        "audience_contains_resource": resource in aud,
+                        "allowed_audiences": allowed_audiences,
+                        "audience_contains_resource": resource_in_aud,
+                        "allowed_audience_match": allowed_aud_match,
                         "case_sensitive_match": any(res.lower() == resource.lower() for res in aud) if isinstance(aud, list) else False
                     },
                     request_context={
@@ -233,7 +250,11 @@ class AsyncResourceProtector:
                     ip=client_ip,
                     requested_resource=resource,
                     token_aud=aud,
+                    allowed_audiences=allowed_audiences,
+                    resource_in_aud=resource_in_aud,
+                    allowed_aud_match=allowed_aud_match,
                     validation_result="passed",
+                    validation_reason="resource_match" if resource_in_aud else "allowed_audience_match",
                     token_jti=token_data.get("jti"),
                     token_sub=token_data.get("sub"),
                     token_username=token_data.get("username")
