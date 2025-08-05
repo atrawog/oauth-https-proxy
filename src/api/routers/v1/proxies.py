@@ -548,6 +548,12 @@ def create_router(storage, cert_manager):
         target.resource_documentation_suffix = config.documentation_suffix
         target.resource_custom_metadata = config.custom_metadata
         
+        # Handle X-HackerOne-Research header
+        if config.hacker_one_research_header:
+            if target.custom_response_headers is None:
+                target.custom_response_headers = {}
+            target.custom_response_headers["X-HackerOne-Research"] = config.hacker_one_research_header
+        
         # Store updated target
         if not storage.store_proxy_target(hostname, target):
             raise HTTPException(500, "Failed to update proxy target")

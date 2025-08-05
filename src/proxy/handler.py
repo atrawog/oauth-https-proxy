@@ -300,15 +300,17 @@ class EnhancedProxyHandler:
         
         # Handle OPTIONS (preflight) requests
         if request.method == "OPTIONS":
+            headers = {
+                "Access-Control-Allow-Origin": "*",
+                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
+                "Access-Control-Allow-Headers": "*",
+                "Access-Control-Allow-Credentials": "true",
+                "Access-Control-Max-Age": "86400"
+            }
+            headers = self._add_custom_response_headers(headers, target)
             return Response(
                 status_code=200,
-                headers={
-                    "Access-Control-Allow-Origin": "*",
-                    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS, PATCH",
-                    "Access-Control-Allow-Headers": "*",
-                    "Access-Control-Allow-Credentials": "true",
-                    "Access-Control-Max-Age": "86400"
-                }
+                headers=headers
             )
         
         # Check if this is a WebSocket upgrade request
@@ -409,6 +411,9 @@ class EnhancedProxyHandler:
                 "Access-Control-Allow-Credentials": "true",
                 "Access-Control-Max-Age": "86400"
             })
+            
+            # Add custom response headers from proxy configuration
+            response_headers = self._add_custom_response_headers(response_headers, target)
             
             # Headers processed - no correlation ID needed
             
@@ -668,6 +673,12 @@ class EnhancedProxyHandler:
         
         return filtered
     
+    def _add_custom_response_headers(self, headers: Dict[str, str], target: ProxyTarget) -> Dict[str, str]:
+        """Add custom response headers from proxy configuration."""
+        if target.custom_response_headers:
+            headers.update(target.custom_response_headers)
+        return headers
+    
     async def _handle_instance_route(self, request: Request, route, request_key: Optional[str] = None) -> Response:
         """Handle instance route by looking up the instance target."""
         instance_name = route.target_value
@@ -915,7 +926,9 @@ class EnhancedProxyHandler:
                         response_body=auth_response.text[:200],  # First 200 chars
                         json_decode_error=str(e)
                     )
-                    return Response(content="Authentication service error", status_code=503)
+                    headers = {}
+                    headers = self._add_custom_response_headers(headers, target)
+                    return Response(content="Authentication service error", status_code=503, headers=headers)
                 
                 # Check user/email/group restrictions with detailed logging
                 if target.auth_required_users:
@@ -928,7 +941,9 @@ class EnhancedProxyHandler:
                             username=username,
                             required_users=target.auth_required_users
                         )
-                        return Response(content="User not authorized", status_code=403)
+                        headers = {}
+                        headers = self._add_custom_response_headers(headers, target)
+                        return Response(content="User not authorized", status_code=403, headers=headers)
                 
                 if target.auth_required_emails:
                     email = user_info.get("email", "")
@@ -941,7 +956,9 @@ class EnhancedProxyHandler:
                             user_email=email,
                             required_email_patterns=target.auth_required_emails
                         )
-                        return Response(content="Email not authorized", status_code=403)
+                        headers = {}
+                        headers = self._add_custom_response_headers(headers, target)
+                        return Response(content="Email not authorized", status_code=403, headers=headers)
                 
                 if target.auth_required_groups:
                     user_groups = user_info.get("groups", [])
@@ -954,7 +971,9 @@ class EnhancedProxyHandler:
                             user_groups=user_groups,
                             required_groups=target.auth_required_groups
                         )
-                        return Response(content="Group not authorized", status_code=403)
+                        headers = {}
+                        headers = self._add_custom_response_headers(headers, target)
+                        return Response(content="Group not authorized", status_code=403, headers=headers)
                 
                 return user_info
             
@@ -975,7 +994,9 @@ class EnhancedProxyHandler:
                     return_url = str(request.url)
                     auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}"
                     logger.info(f"Redirecting to auth login: {auth_login_url}", ip=client_ip, hostname=target.hostname)
-                    return RedirectResponse(url=auth_login_url, status_code=302)
+                    headers = {}
+                    headers = self._add_custom_response_headers(headers, target)
+                    return RedirectResponse(url=auth_login_url, status_code=302, headers=headers)
                 else:
                     # Return 401 Unauthorized with MCP-compliant headers (RFC 9728)
                     # Build resource metadata URL based on current host
@@ -1002,10 +1023,12 @@ class EnhancedProxyHandler:
                         auth_metadata_url=auth_metadata_url
                     )
                     
+                    headers = {"WWW-Authenticate": www_authenticate_header}
+                    headers = self._add_custom_response_headers(headers, target)
                     return Response(
                         content="Authentication required",
                         status_code=401,
-                        headers={"WWW-Authenticate": www_authenticate_header}
+                        headers=headers
                     )
             
             else:
@@ -1055,7 +1078,9 @@ class EnhancedProxyHandler:
                         "auth_mode": target.auth_mode
                     }
                 )
-                return Response(content=error_detail, status_code=503)
+                headers = {}
+                headers = self._add_custom_response_headers(headers, target)
+                return Response(content=error_detail, status_code=503, headers=headers)
                 
         except httpx.ConnectError as e:
             logger.error(
@@ -1078,7 +1103,9 @@ class EnhancedProxyHandler:
                 # Continue without auth in passthrough mode
                 logger.info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, hostname=target.hostname)
                 return {}
-            return Response(content="Authentication service unavailable", status_code=503)
+            headers = {}
+            headers = self._add_custom_response_headers(headers, target)
+            return Response(content="Authentication service unavailable", status_code=503, headers=headers)
         except httpx.TimeoutException as e:
             logger.error(
                 "Timeout connecting to auth service - TIMEOUT ERROR",
@@ -1099,7 +1126,9 @@ class EnhancedProxyHandler:
                 # Continue without auth in passthrough mode
                 logger.info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, hostname=target.hostname)
                 return {}
-            return Response(content="Authentication service timeout", status_code=503)
+            headers = {}
+            headers = self._add_custom_response_headers(headers, target)
+            return Response(content="Authentication service timeout", status_code=503, headers=headers)
         except Exception as e:
             logger.error(
                 "Failed to verify auth - UNEXPECTED ERROR",
@@ -1123,5 +1152,7 @@ class EnhancedProxyHandler:
                 # Continue without auth in passthrough mode
                 logger.info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, hostname=target.hostname)
                 return {}
-            return Response(content="Authentication service error", status_code=503)
+            headers = {}
+            headers = self._add_custom_response_headers(headers, target)
+            return Response(content="Authentication service error", status_code=503, headers=headers)
     

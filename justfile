@@ -1776,7 +1776,7 @@ proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes=
     echo "$body" | jq '.'
 
 # Set protected resource metadata for a proxy
-proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}":
+proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1807,6 +1807,7 @@ proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write"
         --argjson bearer_methods "$bearer_methods_json" \
         --argjson server_info "$server_info_json" \
         --argjson custom_metadata "$custom_metadata_json" \
+        --arg hacker_one_research "{{hacker-one-research}}" \
         '{
             endpoint: "{{endpoint}}",
             scopes: $scopes,
@@ -1816,7 +1817,8 @@ proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write"
             bearer_methods: $bearer_methods,
             documentation_suffix: "{{doc-suffix}}",
             server_info: (if $server_info == {} then null else $server_info end),
-            custom_metadata: (if $custom_metadata == {} then null else $custom_metadata end)
+            custom_metadata: (if $custom_metadata == {} then null else $custom_metadata end),
+            hacker_one_research_header: (if $hacker_one_research == "" then null else $hacker_one_research end)
         }')
     
     echo "Configuring protected resource metadata for {{hostname}}..."

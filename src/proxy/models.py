@@ -18,6 +18,7 @@ class ProxyTarget(BaseModel):
     enable_https: bool = True
     preserve_host_header: bool = True
     custom_headers: Optional[Dict[str, str]] = None
+    custom_response_headers: Optional[Dict[str, str]] = None
     
     # Unified Auth Configuration
     auth_enabled: bool = False
@@ -89,6 +90,7 @@ class ProxyTargetRequest(BaseModel):
     enable_https: bool = True
     preserve_host_header: bool = True
     custom_headers: Optional[Dict[str, str]] = None
+    custom_response_headers: Optional[Dict[str, str]] = None
     
     @field_validator('hostname')
     @classmethod
@@ -117,6 +119,7 @@ class ProxyTargetUpdate(BaseModel):
     enable_https: Optional[bool] = None
     preserve_host_header: Optional[bool] = None
     custom_headers: Optional[Dict[str, str]] = None
+    custom_response_headers: Optional[Dict[str, str]] = None
     # Auth fields
     auth_enabled: Optional[bool] = None
     auth_proxy: Optional[str] = None
@@ -238,6 +241,7 @@ class ProxyResourceConfig(BaseModel):
     bearer_methods: List[str] = ["header"]
     documentation_suffix: str = "/docs"
     custom_metadata: Optional[Dict[str, Any]] = None
+    hacker_one_research_header: Optional[str] = None
     
     @field_validator('endpoint')
     @classmethod

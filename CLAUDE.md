@@ -431,7 +431,7 @@ just proxy-auth-show <hostname>
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)
 # Note: proxy-mcp-* commands have been renamed to proxy-resource-* for clarity
-just proxy-resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata]
+just proxy-resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research]
 just proxy-resource-clear <hostname> <token>
 just proxy-resource-show <hostname>
 just test-proxy-resource <hostname>
