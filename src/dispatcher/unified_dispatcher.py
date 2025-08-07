@@ -263,26 +263,30 @@ class UnifiedDispatcher:
             service_url: Full URL for Docker service access (e.g., 'http://api:9000')
         """
         self.named_instances[name] = port
-        logger.info(f"Registered named instance: {name} -> port {port}")
+        logger.info(f"Registered named service: {name} -> port {port}")
         
         # Store in Redis so proxies can access it
         if self.storage:
             try:
-                # Store port for backward compatibility
-                self.storage.redis_client.set(f"instance:{name}", str(port))
-                
-                # Store proper service URL if provided or derive it
+                # Store in new service format
                 if service_url:
-                    self.storage.redis_client.set(f"instance_url:{name}", service_url)
-                    logger.info(f"Stored instance {name} URL in Redis: {service_url}")
+                    self.storage.redis_client.set(f"service:url:{name}", service_url)
+                    logger.info(f"Stored service {name} URL in Redis: {service_url}")
                 elif name == "api":
                     # Special case for API service - use Docker service name
-                    self.storage.redis_client.set(f"instance_url:{name}", "http://api:9000")
-                    logger.info(f"Stored API instance URL in Redis: http://api:9000")
+                    self.storage.redis_client.set(f"service:url:{name}", "http://api:9000")
+                    logger.info(f"Stored API service URL in Redis: http://api:9000")
                 
-                logger.debug(f"Stored instance {name} in Redis")
+                # Store legacy formats for backward compatibility
+                self.storage.redis_client.set(f"instance:{name}", str(port))
+                if service_url:
+                    self.storage.redis_client.set(f"instance_url:{name}", service_url)
+                elif name == "api":
+                    self.storage.redis_client.set(f"instance_url:{name}", "http://api:9000")
+                
+                logger.debug(f"Stored service {name} in Redis with backward compatibility")
             except Exception as e:
-                logger.error(f"Failed to store instance in Redis: {e}")
+                logger.error(f"Failed to store service in Redis: {e}")
     
     def load_routes_from_storage(self):
         """Load routes from Redis storage."""

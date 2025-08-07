@@ -3168,9 +3168,9 @@ mcp-test-all:
     @echo "Running full MCP client test suite..."
     docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py -v -m integration
 
-# Instance Management Commands
-# List all registered instances
-instance-list:
+# External Service Management Commands (replaces instance management)
+# List all external services (formerly instances)
+service-list-external:
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -3183,8 +3183,8 @@ instance-list:
         exit 1
     fi
     
-    echo "=== Named Instances ==="
-    response=$(curl -s "${BASE_URL}/api/v1/instances/" -H "Authorization: Bearer $token_value")
+    echo "=== External Services ==="
+    response=$(curl -s "${BASE_URL}/api/v1/services/external" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -3194,11 +3194,11 @@ instance-list:
     
     # Format the output
     echo "$response" | \
-        jq -r '.[] | [.name, .target_url, .description, .created_by] | @tsv' | \
+        jq -r '.[] | [.service_name, .target_url, .description, .created_by] | @tsv' | \
         column -t -s $'\t' -N "Name,Target URL,Description,Created By"
 
-# Show instance details
-instance-show name:
+# Show external service details
+service-show-external name:
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -3211,7 +3211,8 @@ instance-show name:
         exit 1
     fi
     
-    response=$(curl -s "${BASE_URL}/api/v1/instances/{{name}}" -H "Authorization: Bearer $token_value")
+    # Try to find in external services
+    response=$(curl -s "${BASE_URL}/api/v1/services/external" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -3219,10 +3220,17 @@ instance-show name:
         exit 1
     fi
     
-    echo "$response" | jq '.'
+    # Find the specific service
+    service=$(echo "$response" | jq --arg name "{{name}}" '.[] | select(.service_name == $name)')
+    if [ -z "$service" ]; then
+        echo "Error: Service '{{name}}' not found"
+        exit 1
+    fi
+    
+    echo "$service" | jq '.'
 
-# Register a new named instance
-instance-register name target-url token="" description="":
+# Register an external service (replaces instance-register)
+service-register name target-url token="" description="":
     #!/usr/bin/env bash
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     TOKEN="{{token}}"
@@ -3234,11 +3242,11 @@ instance-register name target-url token="" description="":
         exit 1
     fi
     
-    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${BASE_URL}/api/v1/instances" \
+    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${BASE_URL}/api/v1/services/external" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
-            "name": "{{name}}",
+            "service_name": "{{name}}",
             "target_url": "{{target-url}}",
             "description": "{{description}}"
         }')
@@ -3248,14 +3256,14 @@ instance-register name target-url token="" description="":
     
     if [ "$HTTP_CODE" = "200" ]; then
         echo "$BODY" | jq '.'
-        echo "✓ Instance '{{name}}' registered successfully"
+        echo "✓ External service '{{name}}' registered successfully"
     else
         echo "$BODY" | jq '.' || echo "$BODY"
         exit 1
     fi
 
-# Update an existing instance
-instance-update name target-url token="" description="":
+# Update an external service
+service-update-external name target-url token="" description="":
     #!/usr/bin/env bash
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     TOKEN="{{token}}"
@@ -3267,11 +3275,17 @@ instance-update name target-url token="" description="":
         exit 1
     fi
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X PUT "${BASE_URL}/api/v1/instances/{{name}}" \
+    # Since external services are immutable, we need to delete and recreate
+    # First delete the old one
+    curl -s -X DELETE "${BASE_URL}/api/v1/services/external/{{name}}" \
+        -H "Authorization: Bearer $TOKEN" || true
+    
+    # Now create the new one
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/api/v1/services/external" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
-            "name": "{{name}}",
+            "service_name": "{{name}}",
             "target_url": "{{target-url}}",
             "description": "{{description}}"
         }')
@@ -3281,14 +3295,14 @@ instance-update name target-url token="" description="":
     
     if [ "$HTTP_CODE" = "200" ]; then
         echo "$BODY" | jq '.'
-        echo "✓ Instance '{{name}}' updated successfully"
+        echo "✓ External service '{{name}}' updated successfully"
     else
         echo "$BODY" | jq '.' || echo "$BODY"
         exit 1
     fi
 
-# Delete a named instance
-instance-delete name token="":
+# Delete an external service
+service-unregister name token="":
     #!/usr/bin/env bash
     BASE_URL="${BASE_URL:-{{default_base_url}}}"
     TOKEN="{{token}}"
@@ -3300,22 +3314,102 @@ instance-delete name token="":
         exit 1
     fi
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/api/v1/instances/{{name}}" \
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/api/v1/services/external/{{name}}" \
         -H "Authorization: Bearer $TOKEN")
     
     HTTP_CODE=$(echo "$RESPONSE" | tail -1)
     BODY=$(echo "$RESPONSE" | head -n -1)
     
     if [ "$HTTP_CODE" = "204" ]; then
-        echo "✓ Instance '{{name}}' deleted successfully"
+        echo "✓ External service '{{name}}' deleted successfully"
     else
         echo "$BODY" | jq '.' || echo "$BODY"
         exit 1
     fi
 
-# Register OAuth server instance (convenience command)
-instance-register-oauth token="":
-    just instance-register "auth" "http://auth:8000" "{{token}}" "OAuth 2.0 Authorization Server"
+# Register OAuth server as external service (convenience command)
+service-register-oauth token="":
+    just service-register "auth" "http://auth:8000" "{{token}}" "OAuth 2.0 Authorization Server"
+
+# List all services (Docker and external)
+service-list-all type="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get admin token
+    token_value="${ADMIN_TOKEN:-}"
+    if [ -z "$token_value" ]; then
+        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        exit 1
+    fi
+    
+    # Build query parameter
+    query=""
+    if [ -n "{{type}}" ]; then
+        query="?service_type={{type}}"
+    fi
+    
+    echo "=== All Services ==="
+    response=$(curl -s "${BASE_URL}/api/v1/services/unified${query}" -H "Authorization: Bearer $token_value")
+    
+    # Check if response is an error
+    if echo "$response" | jq -e '.detail' &>/dev/null; then
+        echo "Error: $(echo "$response" | jq -r '.detail')"
+        exit 1
+    fi
+    
+    # Display summary
+    echo "$response" | jq -r '"Total: \(.total)"'
+    echo "$response" | jq -r '.by_type | to_entries[] | "  \(.key): \(.value)"'
+    echo ""
+    
+    # Format the service list
+    echo "$response" | \
+        jq -r '.services[] | [.service_name, .service_type, (.target_url // .docker_info.image // "N/A"), .description] | @tsv' | \
+        column -t -s $'\t' -N "Name,Type,Target/Image,Description"
+
+# Migrate old instance data to new service format
+migrate-instances-to-services:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    echo "=== Migrating Instances to Services ==="
+    echo "This will convert all instance_url:* keys to service:url:* format"
+    echo ""
+    
+    # Use redis-cli to find and migrate all instance keys
+    docker compose exec redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning eval "
+        local instance_keys = redis.call('keys', 'instance_url:*')
+        local migrated = 0
+        
+        for _, key in ipairs(instance_keys) do
+            local name = string.sub(key, 14)  -- Remove 'instance_url:' prefix
+            local url = redis.call('get', key)
+            
+            -- Store in new service format
+            redis.call('set', 'service:url:' .. name, url)
+            
+            -- Add to external services set
+            redis.call('sadd', 'services:external', name)
+            
+            -- Delete old keys
+            redis.call('del', key)
+            redis.call('del', 'instance_info:' .. name)
+            redis.call('del', 'instance:' .. name)
+            
+            migrated = migrated + 1
+        end
+        
+        return migrated
+    " 0 | tail -1 | {
+        read count
+        echo "✓ Migrated $count instances to services"
+    }
+    
+    echo ""
+    echo "Migration complete. Use 'just service-list-all' to see all services."
 
 # Route Management Commands
 # List all routes

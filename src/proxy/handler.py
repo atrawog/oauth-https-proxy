@@ -179,7 +179,8 @@ class EnhancedProxyHandler:
                 if route.target_type == RouteTargetType.URL:
                     return await self._handle_url_route(request, route, request_key)
                 elif route.target_type == RouteTargetType.INSTANCE:
-                    return await self._handle_instance_route(request, route, request_key)
+                    # Handle both INSTANCE (legacy) and SERVICE (new) target types
+                    return await self._handle_service_route(request, route, request_key)
                 else:
                     # For other route types, we can't handle them here
                     logger.warning(
@@ -679,60 +680,69 @@ class EnhancedProxyHandler:
             headers.update(target.custom_response_headers)
         return headers
     
-    async def _handle_instance_route(self, request: Request, route, request_key: Optional[str] = None) -> Response:
-        """Handle instance route by looking up the instance target."""
-        instance_name = route.target_value
+    async def _handle_service_route(self, request: Request, route, request_key: Optional[str] = None) -> Response:
+        """Handle service route by looking up the service target.
         
-        # For domain-specific proxy instances, we need to forward all instance routes
-        # including the "api" instance to the appropriate target port
+        This method supports both legacy instance lookups and new service lookups.
+        """
+        service_name = route.target_value
         
-        # Look up instance target from Redis
-        instance_target = None
+        # Look up service target from Redis
+        service_target = None
         try:
-            # Prefer the full URL format (from API registration)
-            service_url = self.storage.redis_client.get(f"instance_url:{instance_name}")
+            # Check new service format first
+            service_url = self.storage.redis_client.get(f"service:url:{service_name}")
             if service_url:
-                instance_target = service_url
-                logger.debug(f"Found instance {instance_name} with URL: {service_url}")
+                service_target = service_url
+                logger.debug(f"Found service {service_name} with URL: {service_url}")
             else:
-                # Fallback to port-only format (from dispatcher)
-                # Note: localhost won't work from inside Docker containers
-                port = self.storage.redis_client.get(f"instance:{instance_name}")
-                if port:
-                    # Special handling for known services
-                    if instance_name == "api":
-                        # Use Docker service name instead of localhost
-                        instance_target = f"http://api:9000"
-                        logger.debug(f"Using Docker service name for API instance")
-                    else:
-                        # For other instances, use localhost (may not work from containers)
-                        instance_target = f"http://localhost:{port}"
-                        logger.warning(f"Using localhost for instance {instance_name} - may not work from containers")
+                # Fallback to legacy instance format for backward compatibility
+                instance_url = self.storage.redis_client.get(f"instance_url:{service_name}")
+                if instance_url:
+                    service_target = instance_url
+                    logger.debug(f"Found legacy instance {service_name} with URL: {instance_url}")
+                else:
+                    # Final fallback to port-only format (from dispatcher)
+                    port = self.storage.redis_client.get(f"instance:{service_name}")
+                    if port:
+                        # Special handling for known services
+                        if service_name == "api":
+                            # Use Docker service name instead of localhost
+                            service_target = f"http://api:9000"
+                            logger.debug(f"Using Docker service name for API service")
+                        else:
+                            # For other services, use localhost (may not work from containers)
+                            service_target = f"http://localhost:{port}"
+                            logger.warning(f"Using localhost for service {service_name} - may not work from containers")
         except Exception as e:
-            logger.error(f"Failed to lookup instance {instance_name}: {e}")
+            logger.error(f"Failed to lookup service {service_name}: {e}")
         
-        if not instance_target:
-            # Get available instances for debugging
-            available_instances = []
+        if not service_target:
+            # Get available services for debugging
+            available_services = []
             try:
-                # Get all instance keys from Redis
+                # Get all service keys from Redis (both new and legacy)
+                service_keys = self.storage.redis_client.keys("service:url:*")
                 instance_keys = self.storage.redis_client.keys("instance:*")
-                available_instances = [key.decode().split(":", 1)[1] for key in instance_keys[:10]]
+                available_services = (
+                    [key.decode().split(":", 2)[2] for key in service_keys[:5]] +
+                    [key.decode().split(":", 1)[1] for key in instance_keys[:5]]
+                )
             except Exception:
                 pass
                 
             logger.error(
-                "Instance not found in registry - returning 503",
-                instance_name=instance_name,
-                available_instances=available_instances,
+                "Service not found in registry - returning 503",
+                service_name=service_name,
+                available_services=available_services,
                 route_id=route.route_id if hasattr(route, 'route_id') else None,
                 route_pattern=route.path_pattern if hasattr(route, 'path_pattern') else None,
                 route_target_type=route.target_type.value if hasattr(route, 'target_type') else None
             )
-            raise HTTPException(503, f"Instance {instance_name} not available")
+            raise HTTPException(503, f"Service {service_name} not available")
         
-        # Forward to the instance using the same logic as URL routes
-        route.target_value = instance_target
+        # Forward to the service using the same logic as URL routes
+        route.target_value = service_target
         return await self._handle_url_route(request, route, request_key)
     
     async def _handle_url_route(self, request: Request, route, request_key: Optional[str] = None) -> Response:

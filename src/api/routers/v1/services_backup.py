@@ -44,24 +44,6 @@ def create_router(storage) -> APIRouter:
             docker_manager = DockerManager(storage)
         return docker_manager
     
-    @router.get("/", response_model=DockerServiceListResponse)
-    async def list_services(
-        owned_only: bool = Query(False, description="Only show services owned by current token"),
-        token_info: Dict = Depends(get_token_info_from_header)
-    ):
-        """List all Docker services."""
-        manager = get_docker_manager()
-        
-        # Filter by owner if requested
-        owner_hash = token_info["hash"] if owned_only else None
-        services = await manager.list_services(owner_hash)
-        
-        return DockerServiceListResponse(
-            services=services,
-            total=len(services)
-        )
-    
-
     @router.post("/", response_model=DockerServiceCreateResponse)
     async def create_service(
         config: DockerServiceConfig,
@@ -128,181 +110,23 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error creating service: {e}")
             raise HTTPException(500, f"Error creating service: {str(e)}")
     
-
-    @router.get("/unified", response_model=UnifiedServiceListResponse)
-    async def list_all_services(
-        service_type: Optional[ServiceType] = Query(None, description="Filter by service type"),
-        token_info: Optional[Dict] = Depends(get_token_info_from_header)
-    ):
-        """List all services (Docker and external)."""
-        try:
-            all_services = []
-            
-            # Get Docker services
-            if not service_type or service_type == ServiceType.DOCKER:
-                manager = get_docker_manager()
-                docker_services = await manager.list_services()
-                for ds in docker_services:
-                    all_services.append(UnifiedServiceInfo(
-                        service_name=ds.service_name,
-                        service_type=ServiceType.DOCKER,
-                        docker_info=ds,
-                        description=f"Docker container: {ds.image or 'custom'}",
-                        created_at=ds.created_at,
-                        owner_token_hash=ds.owner_token_hash,
-                        created_by=None  # DockerServiceInfo doesn't have created_by field
-                    ))
-            
-            # Get external services
-            if not service_type or service_type == ServiceType.EXTERNAL:
-                external_services = await list_external_services()
-                all_services.extend(external_services)
-            
-            # Count by type
-            by_type = {}
-            for service in all_services:
-                by_type[service.service_type.value] = by_type.get(service.service_type.value, 0) + 1
-            
-            return UnifiedServiceListResponse(
-                services=all_services,
-                total=len(all_services),
-                by_type=by_type
-            )
-            
-        except Exception as e:
-            logger.error(f"Failed to list all services: {e}")
-            raise HTTPException(500, f"Failed to list services: {str(e)}")
-    
-
-    @router.post("/external", response_model=UnifiedServiceInfo)
-    async def register_external_service(
-        config: ExternalServiceConfig,
+    @router.get("/", response_model=DockerServiceListResponse)
+    async def list_services(
+        owned_only: bool = Query(False, description="Only show services owned by current token"),
         token_info: Dict = Depends(get_token_info_from_header)
     ):
-        """Register an external service (replaces instance registration).
+        """List all Docker services."""
+        manager = get_docker_manager()
         
-        This creates a named service that routes to an external URL.
-        """
-        try:
-            # Check if service already exists
-            existing = storage.redis_client.get(f"service:external:{config.service_name}")
-            if existing:
-                # Check for Docker service with same name
-                docker_key = f"docker_service:{config.service_name}"
-                if storage.redis_client.exists(docker_key):
-                    raise HTTPException(409, f"Docker service '{config.service_name}' already exists")
-                raise HTTPException(409, f"Service '{config.service_name}' already exists")
-            
-            # Create service info
-            service_info = UnifiedServiceInfo(
-                service_name=config.service_name,
-                service_type=ServiceType.EXTERNAL,
-                target_url=config.target_url,
-                description=config.description,
-                routing_enabled=config.routing_enabled,
-                created_at=datetime.now(timezone.utc),
-                owner_token_hash=token_info["hash"],
-                created_by=token_info.get("name", "unknown")
-            )
-            
-            # Store in Redis (new format)
-            storage.redis_client.set(f"service:external:{config.service_name}", service_info.json())
-            storage.redis_client.set(f"service:url:{config.service_name}", config.target_url)
-            
-            # Add to service set
-            storage.redis_client.sadd("services:external", config.service_name)
-            
-            # Migrate old instance data if it exists
-            old_instance_url = storage.redis_client.get(f"instance_url:{config.service_name}")
-            if old_instance_url:
-                storage.redis_client.delete(f"instance_url:{config.service_name}")
-                storage.redis_client.delete(f"instance_info:{config.service_name}")
-                storage.redis_client.delete(f"instance:{config.service_name}")
-                logger.info(f"Migrated instance '{config.service_name}' to external service")
-            
-            logger.info(f"Registered external service '{config.service_name}' -> {config.target_url}")
-            return service_info
-            
-        except HTTPException:
-            raise
-        except Exception as e:
-            logger.error(f"Failed to register external service: {e}")
-            raise HTTPException(500, f"Failed to register service: {str(e)}")
-    
-
-    @router.get("/external", response_model=List[UnifiedServiceInfo])
-    async def list_external_services(
-        token_info: Optional[Dict] = Depends(get_token_info_from_header)
-    ):
-        """List all external services."""
-        try:
-            services = []
-            
-            # Get all external services
-            service_names = storage.redis_client.smembers("services:external") or set()
-            
-            for name in service_names:
-                service_data = storage.redis_client.get(f"service:external:{name}")
-                if service_data:
-                    try:
-                        service_info = UnifiedServiceInfo.parse_raw(service_data)
-                        services.append(service_info)
-                    except Exception as e:
-                        logger.error(f"Failed to parse service data for {name}: {e}")
-                        # Create minimal service info
-                        target_url = storage.redis_client.get(f"service:url:{name}")
-                        if target_url:
-                            services.append(UnifiedServiceInfo(
-                                service_name=name,
-                                service_type=ServiceType.EXTERNAL,
-                                target_url=target_url,
-                                description="",
-                                created_at=datetime.now(timezone.utc)
-                            ))
-            
-            # Also check for migrated instances (backward compatibility)
-            for key in storage.redis_client.scan_iter(match="instance_url:*"):
-                name = key.split(":")[-1]
-                if name not in [s.service_name for s in services]:
-                    target_url = storage.redis_client.get(key)
-                    if target_url:
-                        services.append(UnifiedServiceInfo(
-                            service_name=name,
-                            service_type=ServiceType.EXTERNAL,
-                            target_url=target_url,
-                            description="(Migrated from instance)",
-                            created_at=datetime.now(timezone.utc)
-                        ))
-            
-            # Sort by name
-            services.sort(key=lambda x: x.service_name)
-            return services
-            
-        except Exception as e:
-            logger.error(f"Failed to list external services: {e}")
-            raise HTTPException(500, f"Failed to list services: {str(e)}")
-    
-
-    @router.post("/cleanup")
-    async def cleanup_orphaned_services(
-        token_info: Dict = Depends(get_token_info_from_header)
-    ):
-        """Clean up orphaned Docker resources (admin only)."""
-        # Check admin permission
-        if token_info.get("name") != "ADMIN":
-            raise HTTPException(403, "Admin token required")
+        # Filter by owner if requested
+        owner_hash = token_info["hash"] if owned_only else None
+        services = await manager.list_services(owner_hash)
         
-        try:
-            manager = get_docker_manager()
-            await manager.cleanup_orphaned_services()
-            return {"message": "Cleanup completed successfully"}
-        except Exception as e:
-            logger.error(f"Error during cleanup: {e}")
-            raise HTTPException(500, f"Error during cleanup: {str(e)}")
+        return DockerServiceListResponse(
+            services=services,
+            total=len(services)
+        )
     
-    # Port management endpoints
-    
-
     @router.get("/{service_name}", response_model=DockerServiceInfo)
     async def get_service(
         service_name: str,
@@ -317,7 +141,6 @@ def create_router(storage) -> APIRouter:
         
         return service_info
     
-
     @router.put("/{service_name}", response_model=DockerServiceInfo)
     async def update_service(
         service_name: str,
@@ -349,7 +172,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error updating service {service_name}: {e}")
             raise HTTPException(500, f"Error updating service: {str(e)}")
     
-
     @router.delete("/{service_name}")
     async def delete_service(
         service_name: str,
@@ -390,7 +212,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error deleting service {service_name}: {e}")
             raise HTTPException(500, f"Error deleting service: {str(e)}")
     
-
     @router.post("/{service_name}/start")
     async def start_service(
         service_name: str,
@@ -418,7 +239,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error starting service {service_name}: {e}")
             raise HTTPException(500, f"Error starting service: {str(e)}")
     
-
     @router.post("/{service_name}/stop")
     async def stop_service(
         service_name: str,
@@ -446,7 +266,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error stopping service {service_name}: {e}")
             raise HTTPException(500, f"Error stopping service: {str(e)}")
     
-
     @router.post("/{service_name}/restart")
     async def restart_service(
         service_name: str,
@@ -474,7 +293,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error restarting service {service_name}: {e}")
             raise HTTPException(500, f"Error restarting service: {str(e)}")
     
-
     @router.get("/{service_name}/logs", response_model=DockerServiceLogs)
     async def get_service_logs(
         service_name: str,
@@ -508,7 +326,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error getting logs for service {service_name}: {e}")
             raise HTTPException(500, f"Error getting logs: {str(e)}")
     
-
     @router.get("/{service_name}/stats", response_model=DockerServiceStats)
     async def get_service_stats(
         service_name: str,
@@ -530,7 +347,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error getting stats for service {service_name}: {e}")
             raise HTTPException(500, f"Error getting stats: {str(e)}")
     
-
     @router.post("/{service_name}/proxy")
     async def create_service_proxy(
         service_name: str,
@@ -586,7 +402,25 @@ def create_router(storage) -> APIRouter:
             raise HTTPException(500, f"Error creating proxy: {str(e)}")
     
     
-
+    @router.post("/cleanup")
+    async def cleanup_orphaned_services(
+        token_info: Dict = Depends(get_token_info_from_header)
+    ):
+        """Clean up orphaned Docker resources (admin only)."""
+        # Check admin permission
+        if token_info.get("name") != "ADMIN":
+            raise HTTPException(403, "Admin token required")
+        
+        try:
+            manager = get_docker_manager()
+            await manager.cleanup_orphaned_services()
+            return {"message": "Cleanup completed successfully"}
+        except Exception as e:
+            logger.error(f"Error during cleanup: {e}")
+            raise HTTPException(500, f"Error during cleanup: {str(e)}")
+    
+    # Port management endpoints
+    
     @router.post("/{service_name}/ports", response_model=ServicePort)
     async def add_service_port(
         service_name: str,
@@ -630,7 +464,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error adding port to service {service_name}: {e}")
             raise HTTPException(500, f"Error adding port: {str(e)}")
     
-
     @router.get("/{service_name}/ports", response_model=List[ServicePort])
     async def list_service_ports(
         service_name: str,
@@ -651,7 +484,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error getting ports for service {service_name}: {e}")
             raise HTTPException(500, f"Error getting ports: {str(e)}")
     
-
     @router.delete("/{service_name}/ports/{port_name}")
     async def remove_service_port(
         service_name: str,
@@ -681,7 +513,6 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error removing port from service {service_name}: {e}")
             raise HTTPException(500, f"Error removing port: {str(e)}")
     
-
     @router.put("/{service_name}/ports/{port_name}")
     async def update_service_port(
         service_name: str,
@@ -735,7 +566,157 @@ def create_router(storage) -> APIRouter:
     
     # External service endpoints (replaces instance endpoints)
     
-
+    @router.post("/external", response_model=UnifiedServiceInfo)
+    async def register_external_service(
+        config: ExternalServiceConfig,
+        token_info: Dict = Depends(get_token_info_from_header)
+    ):
+        """Register an external service (replaces instance registration).
+        
+        This creates a named service that routes to an external URL.
+        """
+        try:
+            # Check if service already exists
+            existing = storage.redis_client.get(f"service:external:{config.service_name}")
+            if existing:
+                # Check for Docker service with same name
+                docker_key = f"docker_service:{config.service_name}"
+                if storage.redis_client.exists(docker_key):
+                    raise HTTPException(409, f"Docker service '{config.service_name}' already exists")
+                raise HTTPException(409, f"Service '{config.service_name}' already exists")
+            
+            # Create service info
+            service_info = UnifiedServiceInfo(
+                service_name=config.service_name,
+                service_type=ServiceType.EXTERNAL,
+                target_url=config.target_url,
+                description=config.description,
+                routing_enabled=config.routing_enabled,
+                created_at=datetime.now(timezone.utc),
+                owner_token_hash=token_info["hash"],
+                created_by=token_info.get("name", "unknown")
+            )
+            
+            # Store in Redis (new format)
+            storage.redis_client.set(f"service:external:{config.service_name}", service_info.json())
+            storage.redis_client.set(f"service:url:{config.service_name}", config.target_url)
+            
+            # Add to service set
+            storage.redis_client.sadd("services:external", config.service_name)
+            
+            # Migrate old instance data if it exists
+            old_instance_url = storage.redis_client.get(f"instance_url:{config.service_name}")
+            if old_instance_url:
+                storage.redis_client.delete(f"instance_url:{config.service_name}")
+                storage.redis_client.delete(f"instance_info:{config.service_name}")
+                storage.redis_client.delete(f"instance:{config.service_name}")
+                logger.info(f"Migrated instance '{config.service_name}' to external service")
+            
+            logger.info(f"Registered external service '{config.service_name}' -> {config.target_url}")
+            return service_info
+            
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to register external service: {e}")
+            raise HTTPException(500, f"Failed to register service: {str(e)}")
+    
+    @router.get("/external", response_model=List[UnifiedServiceInfo])
+    async def list_external_services(
+        token_info: Optional[Dict] = Depends(get_token_info_from_header)
+    ):
+        """List all external services."""
+        try:
+            services = []
+            
+            # Get all external services
+            service_names = storage.redis_client.smembers("services:external") or set()
+            
+            for name in service_names:
+                service_data = storage.redis_client.get(f"service:external:{name}")
+                if service_data:
+                    try:
+                        service_info = UnifiedServiceInfo.parse_raw(service_data)
+                        services.append(service_info)
+                    except Exception as e:
+                        logger.error(f"Failed to parse service data for {name}: {e}")
+                        # Create minimal service info
+                        target_url = storage.redis_client.get(f"service:url:{name}")
+                        if target_url:
+                            services.append(UnifiedServiceInfo(
+                                service_name=name,
+                                service_type=ServiceType.EXTERNAL,
+                                target_url=target_url,
+                                description="",
+                                created_at=datetime.now(timezone.utc)
+                            ))
+            
+            # Also check for migrated instances (backward compatibility)
+            for key in storage.redis_client.scan_iter(match="instance_url:*"):
+                name = key.split(":")[-1]
+                if name not in [s.service_name for s in services]:
+                    target_url = storage.redis_client.get(key)
+                    if target_url:
+                        services.append(UnifiedServiceInfo(
+                            service_name=name,
+                            service_type=ServiceType.EXTERNAL,
+                            target_url=target_url,
+                            description="(Migrated from instance)",
+                            created_at=datetime.now(timezone.utc)
+                        ))
+            
+            # Sort by name
+            services.sort(key=lambda x: x.service_name)
+            return services
+            
+        except Exception as e:
+            logger.error(f"Failed to list external services: {e}")
+            raise HTTPException(500, f"Failed to list services: {str(e)}")
+    
+    @router.get("/unified", response_model=UnifiedServiceListResponse)
+    async def list_all_services(
+        service_type: Optional[ServiceType] = Query(None, description="Filter by service type"),
+        token_info: Optional[Dict] = Depends(get_token_info_from_header)
+    ):
+        """List all services (Docker and external)."""
+        try:
+            all_services = []
+            
+            # Get Docker services
+            if not service_type or service_type == ServiceType.DOCKER:
+                manager = get_docker_manager()
+                docker_services = await manager.list_services()
+                for ds in docker_services:
+                    all_services.append(UnifiedServiceInfo(
+                        service_name=ds.service_name,
+                        service_type=ServiceType.DOCKER,
+                        docker_info=ds,
+                        description=f"Docker container: {ds.image or 'custom'}",
+                        created_at=ds.created_at,
+                        owner_token_hash=ds.owner_token_hash,
+                        created_by=ds.created_by
+                    ))
+            
+            # Get external services
+            if not service_type or service_type == ServiceType.EXTERNAL:
+                external_services = await list_external_services()
+                all_services.extend(external_services)
+            
+            # Count by type
+            by_type = {}
+            for service in all_services:
+                by_type[service.service_type.value] = by_type.get(service.service_type.value, 0) + 1
+            
+            return UnifiedServiceListResponse(
+                services=all_services,
+                total=len(all_services),
+                by_type=by_type
+            )
+            
+        except Exception as e:
+            logger.error(f"Failed to list all services: {e}")
+            raise HTTPException(500, f"Failed to list services: {str(e)}")
+    
     @router.delete("/external/{service_name}")
     async def unregister_external_service(
         service_name: str,
@@ -792,5 +773,4 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Failed to unregister service: {e}")
             raise HTTPException(500, f"Failed to unregister service: {str(e)}")
     
-
     return router

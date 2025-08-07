@@ -19,7 +19,6 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         proxies, 
         tokens,
         routes,
-        instances,
         resources,
         oauth_status,
         oauth_admin,
@@ -72,13 +71,8 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     )
     logger.info("Included routes router in v1")
     
-    # Instance endpoints: /api/v1/instances/*
-    v1_router.include_router(
-        instances.create_router(storage),
-        prefix="/instances",
-        tags=["instances"]
-    )
-    logger.info("Included instances router in v1")
+    # Note: Instance endpoints have been deprecated and merged into services
+    # Use /api/v1/services/external for external service registration (formerly instances)
     
     # MCP Resource endpoints: /api/v1/resources/*
     v1_router.include_router(

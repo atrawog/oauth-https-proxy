@@ -147,8 +147,8 @@ class DockerManager:
                 )
                 await self.port_manager.add_service_port(service_port)
         
-        # Auto-register in instance registry
-        await self._register_instance(service_info)
+        # Auto-register as a service for routing
+        await self._register_as_service(service_info)
         
         return service_info
         
@@ -302,28 +302,29 @@ class DockerManager:
         # Also store in a set for listing
         self.storage.redis_client.sadd("docker_services", service_info.service_name)
             
-    async def _register_instance(self, service_info: DockerServiceInfo):
-        """Register service in instance registry.
+    async def _register_as_service(self, service_info: DockerServiceInfo):
+        """Register Docker container as a service for routing.
         
         Args:
             service_info: Service information
         """
-        instance_name = f"docker-{service_info.service_name}"
+        # Service name without docker- prefix for simplicity
+        service_name = service_info.service_name
         target_url = f"http://{service_info.service_name}:{service_info.internal_port}"
         
-        instance_data = {
-            "name": instance_name,
-            "target_url": target_url,
-            "description": f"Docker service: {service_info.service_name}",
-            "created_at": service_info.created_at.isoformat(),
-            "created_by": "docker-manager"
-        }
+        # Store as a service in new format
+        self.storage.redis_client.set(f"service:url:{service_name}", target_url)
         
-        # Store instance URL mapping
-        self.storage.redis_client.set(f"instance_url:{instance_name}", target_url)
-        self.storage.redis_client.set(f"instance_info:{instance_name}", json.dumps(instance_data))
+        # For backward compatibility, also store with docker- prefix
+        docker_name = f"docker-{service_name}"
+        self.storage.redis_client.set(f"service:url:{docker_name}", target_url)
         
-        logger.info(f"Registered instance {instance_name} -> {target_url}")
+        # Clean up old instance format if it exists
+        self.storage.redis_client.delete(f"instance_url:{docker_name}")
+        self.storage.redis_client.delete(f"instance_info:{docker_name}")
+        self.storage.redis_client.delete(f"instance:{docker_name}")
+        
+        logger.info(f"Registered Docker service {service_name} -> {target_url}")
         
     async def get_service(self, service_name: str) -> Optional[DockerServiceInfo]:
         """Get service information.
@@ -461,10 +462,15 @@ class DockerManager:
         # Clean up exposed ports
         await self.port_manager.remove_all_service_ports(service_name)
         
-        # Remove from instance registry
+        # Remove from service registry
+        self.storage.redis_client.delete(f"service:url:{service_name}")
+        self.storage.redis_client.delete(f"service:url:docker-{service_name}")
+        
+        # Clean up old instance format (backward compatibility)
         instance_name = f"docker-{service_name}"
         self.storage.redis_client.delete(f"instance_url:{instance_name}")
         self.storage.redis_client.delete(f"instance_info:{instance_name}")
+        self.storage.redis_client.delete(f"instance:{instance_name}")
         
         # Remove service info from Redis
         self.storage.redis_client.delete(f"docker_service:{service_name}")

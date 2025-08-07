@@ -1,9 +1,17 @@
 """Docker service models and data structures."""
 
-from typing import Dict, List, Optional, Any
+from typing import Dict, List, Optional, Any, Union
 from datetime import datetime
+from enum import Enum
 from pydantic import BaseModel, Field, validator
 import re
+
+
+class ServiceType(str, Enum):
+    """Types of services that can be managed."""
+    DOCKER = "docker"      # Full container management
+    EXTERNAL = "external"  # External URL mapping (replaces instances)
+    INTERNAL = "internal"  # Built-in services (api, oauth)
 
 
 class DockerServiceConfig(BaseModel):
@@ -248,3 +256,117 @@ class DockerServiceCreateResponse(BaseModel):
     proxy_created: bool = Field(False, description="Whether a proxy was auto-created")
     instance_registered: bool = Field(False, description="Whether instance was registered")
     warnings: List[str] = Field(default_factory=list, description="Any warnings during creation")
+
+
+class ExternalServiceConfig(BaseModel):
+    """Configuration for external service registration."""
+    
+    service_name: str = Field(..., description="Service name (lowercase, alphanumeric, dash, underscore)")
+    target_url: str = Field(..., description="Target URL for the service")
+    description: str = Field("", description="Service description")
+    routing_enabled: bool = Field(True, description="Whether to enable routing to this service")
+    
+    @validator('service_name')
+    def validate_service_name(cls, v):
+        """Validate service name format."""
+        if not v or not v.strip():
+            raise ValueError("Service name cannot be empty")
+        # Only allow alphanumeric, dash, and underscore
+        import re
+        if not re.match(r'^[a-zA-Z0-9_-]+$', v):
+            raise ValueError("Service name can only contain letters, numbers, dash, and underscore")
+        return v.lower()
+    
+    @validator('target_url')
+    def validate_target_url(cls, v):
+        """Validate target URL."""
+        from urllib.parse import urlparse
+        
+        # If it doesn't start with http:// or https://, prepend http://
+        if not v.startswith(('http://', 'https://')):
+            v = f"http://{v}"
+        
+        # Validate the URL
+        try:
+            result = urlparse(v)
+            # Check if scheme and netloc are present
+            if not all([result.scheme, result.netloc]):
+                raise ValueError("Invalid URL format")
+            # Check for spaces in the URL
+            if ' ' in v:
+                raise ValueError("URL cannot contain spaces")
+        except Exception:
+            raise ValueError("Invalid URL format")
+        
+        return v
+
+
+class UnifiedServiceInfo(BaseModel):
+    """Unified service information for all service types."""
+    
+    service_name: str = Field(..., description="Service name")
+    service_type: ServiceType = Field(..., description="Type of service")
+    target_url: Optional[str] = Field(None, description="Target URL (for external/internal)")
+    docker_info: Optional[DockerServiceInfo] = Field(None, description="Docker service info (for docker type)")
+    description: str = Field("", description="Service description")
+    routing_enabled: bool = Field(True, description="Whether routing is enabled")
+    created_at: datetime = Field(default_factory=lambda: datetime.now(), description="Creation timestamp")
+    owner_token_hash: Optional[str] = Field(None, description="Hash of token that owns this service")
+    created_by: Optional[str] = Field(None, description="Token name that created this service")
+    
+    @validator('docker_info')
+    def validate_docker_info(cls, v, values):
+        """Ensure docker_info is only set for docker services."""
+        service_type = values.get('service_type')
+        if service_type == ServiceType.DOCKER and not v:
+            raise ValueError("Docker services must have docker_info")
+        if service_type != ServiceType.DOCKER and v:
+            raise ValueError("Only docker services can have docker_info")
+        return v
+    
+    @validator('target_url')
+    def validate_target_url(cls, v, values):
+        """Ensure target_url is set for external/internal services."""
+        service_type = values.get('service_type')
+        if service_type in [ServiceType.EXTERNAL, ServiceType.INTERNAL] and not v:
+            raise ValueError("External and internal services must have target_url")
+        return v
+
+
+class UnifiedServiceCreateRequest(BaseModel):
+    """Request for creating any type of service."""
+    
+    service_name: str = Field(..., description="Service name")
+    service_type: Optional[ServiceType] = Field(None, description="Type of service (auto-detected if not specified)")
+    
+    # For external/internal services
+    target_url: Optional[str] = Field(None, description="Target URL for external/internal services")
+    description: Optional[str] = Field("", description="Service description")
+    
+    # For docker services
+    docker_config: Optional[DockerServiceConfig] = Field(None, description="Docker configuration")
+    
+    # Common fields
+    routing_enabled: bool = Field(True, description="Whether to enable routing")
+    
+    @validator('service_type')
+    def auto_detect_type(cls, v, values):
+        """Auto-detect service type if not specified."""
+        if v:
+            return v
+        
+        # Auto-detect based on provided fields
+        if values.get('docker_config'):
+            return ServiceType.DOCKER
+        elif values.get('target_url'):
+            return ServiceType.EXTERNAL
+        else:
+            raise ValueError("Cannot determine service type. Provide either docker_config or target_url")
+
+
+class UnifiedServiceListResponse(BaseModel):
+    """Response for listing all services."""
+    
+    services: List[UnifiedServiceInfo] = Field(..., description="List of all services")
+    total: int = Field(..., description="Total number of services")
+    by_type: Dict[str, int] = Field(..., description="Count by service type")
