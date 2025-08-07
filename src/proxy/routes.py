@@ -14,8 +14,8 @@ if TYPE_CHECKING:
 class RouteTargetType(str, Enum):
     """Types of routing targets."""
     PORT = "port"  # Forward to localhost:port
-    INSTANCE = "instance"  # Forward to named instance (e.g., 'localhost', 'api')
-    HOSTNAME = "hostname"  # Forward to instance handling specific hostname
+    SERVICE = "service"  # Forward to named service (e.g., 'api', 'auth')
+    HOSTNAME = "hostname"  # Forward to service handling specific hostname
     URL = "url"  # Forward to any URL (http://service:port or https://example.com)
 
 
@@ -24,7 +24,7 @@ class Route(BaseModel):
     route_id: str = Field(..., description="Unique identifier for the route")
     path_pattern: str = Field(..., description="Path prefix or regex pattern")
     target_type: RouteTargetType = Field(..., description="Type of routing target")
-    target_value: Union[int, str] = Field(..., description="Port number or instance/hostname name")
+    target_value: Union[int, str] = Field(..., description="Port number or service/hostname name")
     priority: int = Field(50, ge=0, le=999, description="Higher priority routes are checked first")
     methods: Optional[List[str]] = Field(None, description="HTTP methods to match (None = all)")
     is_regex: bool = Field(False, description="Whether path_pattern is a regex")
@@ -121,7 +121,7 @@ class RouteCreateRequest(BaseModel):
     """Request model for creating a route."""
     path_pattern: str = Field(..., description="Path prefix or regex pattern")
     target_type: RouteTargetType = Field(..., description="Type of routing target")
-    target_value: Union[int, str] = Field(..., description="Port number or instance/hostname name")
+    target_value: Union[int, str] = Field(..., description="Port number or service/hostname name")
     priority: int = Field(50, ge=0, le=999, description="Higher priority routes are checked first")
     methods: Optional[List[str]] = Field(None, description="HTTP methods to match (None = all)")
     is_regex: bool = Field(False, description="Whether path_pattern is a regex")
@@ -146,7 +146,7 @@ DEFAULT_ROUTES = [
     {
         "route_id": "acme-challenge",
         "path_pattern": "/.well-known/acme-challenge/",
-        "target_type": RouteTargetType.INSTANCE,
+        "target_type": RouteTargetType.SERVICE,
         "target_value": "api",
         "priority": 100,
         "description": "ACME challenge validation",
@@ -155,7 +155,7 @@ DEFAULT_ROUTES = [
     {
         "route_id": "oauth-protected-resource",
         "path_pattern": "/.well-known/oauth-protected-resource",
-        "target_type": RouteTargetType.INSTANCE,
+        "target_type": RouteTargetType.SERVICE,
         "target_value": "api",
         "priority": 100,
         "description": "MCP OAuth protected resource metadata",
@@ -164,7 +164,7 @@ DEFAULT_ROUTES = [
     {
         "route_id": "oauth-authorization-server",
         "path_pattern": "/.well-known/oauth-authorization-server",
-        "target_type": RouteTargetType.INSTANCE,
+        "target_type": RouteTargetType.SERVICE,
         "target_value": "api",
         "priority": 95,
         "description": "OAuth authorization server metadata",

@@ -171,7 +171,7 @@ just mcp-echo-setup
 ```
 ┌─────────────────┐     ┌──────────────────────────┐
 │                 │     │                          │
-│  HTTP Client    │───▶│     Proxy Service        │
+│  HTTP Client    │───▶│   PROXY & API Service    │
 │                 │     │  - HTTP/HTTPS Gateway    │
 └─────────────────┘     │  - OAuth Server          │
                         │  - Certificate Manager   │

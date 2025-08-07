@@ -6,16 +6,16 @@ import ssl
 
 
 @dataclass
-class DomainInstance:
-    """Represents a domain instance with its routing configuration."""
+class DomainService:
+    """Represents a domain service with its routing configuration."""
     hostname: str
-    is_api_instance: bool  # True for FastAPI (localhost), False for proxy instances
+    is_api_service: bool  # True for FastAPI (localhost), False for proxy services
     internal_http_port: int
     internal_https_port: int
     ssl_context: Optional[ssl.SSLContext] = None
     
     def __repr__(self):
-        return (f"DomainInstance(hostname={self.hostname}, "
-                f"api={self.is_api_instance}, "
+        return (f"DomainService(hostname={self.hostname}, "
+                f"api={self.is_api_service}, "
                 f"http={self.internal_http_port}, "
                 f"https={self.internal_https_port})")

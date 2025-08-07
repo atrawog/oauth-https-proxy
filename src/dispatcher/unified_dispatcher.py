@@ -22,7 +22,7 @@ from ..middleware.proxy_protocol_handler import create_proxy_protocol_server
 from ..proxy.models import ProxyTarget
 from ..proxy.routes import Route, RouteTargetType
 from ..proxy.app import create_proxy_app
-from .models import DomainInstance
+from .models import DomainService
 from ..shared.logging import get_logger, configure_logging
 from ..shared.config import Config
 
@@ -34,7 +34,7 @@ logger = get_logger(__name__)
 unified_server_instance = None
 
 
-class DomainInstance:
+class HypercornInstance:
     """Represents a Hypercorn instance serving a specific set of domains."""
     
     def __init__(self, app, domains: List[str], http_port: int, https_port: int, 
@@ -116,7 +116,7 @@ class DomainInstance:
             self.proxy_handler = asyncio.create_task(proxy_server.serve_forever())
             
         except Exception as e:
-            logger.error(f"Failed to start HTTP instance: {e}")
+            logger.error(f"Failed to start HTTP server: {e}")
             raise
     
     async def start_https(self):
@@ -160,7 +160,7 @@ class DomainInstance:
             self.proxy_handler_https = asyncio.create_task(proxy_server.serve_forever())
             
         except Exception as e:
-            logger.error(f"Failed to start HTTPS instance: {e}")
+            logger.error(f"Failed to start HTTPS server: {e}")
             self.cleanup()
             raise
     
@@ -214,7 +214,7 @@ class UnifiedDispatcher:
         # Generic routing rules sorted by priority (highest first)
         self.routes: List[Route] = []
         # Named instances for routing targets
-        self.named_instances: Dict[str, int] = {}  # name -> port
+        self.named_services: Dict[str, int] = {}  # name -> port
         # HTTP client for URL route forwarding
         self.http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0),
@@ -239,7 +239,7 @@ class UnifiedDispatcher:
             # All routes except disabled ones
             return [r for r in self.routes if r.route_id not in proxy_config.disabled_routes]
     
-    def register_instance(self, domains: List[str], http_port: int, https_port: int, 
+    def register_domain(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
         """Register a domain instance for specific domains and protocols."""
         for domain in domains:
@@ -254,21 +254,21 @@ class UnifiedDispatcher:
             if not enable_http and not enable_https:
                 logger.warning(f"Domain {domain} has no protocols enabled!")
     
-    def register_named_instance(self, name: str, port: int, service_url: Optional[str] = None):
-        """Register a named instance for routing targets.
+    def register_named_service(self, name: str, port: int, service_url: Optional[str] = None):
+        """Register a named service for routing targets.
         
         Args:
-            name: Instance name (e.g., 'api')
+            name: Service name (e.g., 'api')
             port: Port number for localhost access
             service_url: Full URL for Docker service access (e.g., 'http://api:9000')
         """
-        self.named_instances[name] = port
+        self.named_services[name] = port
         logger.info(f"Registered named service: {name} -> port {port}")
         
         # Store in Redis so proxies can access it
         if self.storage:
             try:
-                # Store in new service format
+                # Store service URL
                 if service_url:
                     self.storage.redis_client.set(f"service:url:{name}", service_url)
                     logger.info(f"Stored service {name} URL in Redis: {service_url}")
@@ -277,14 +277,7 @@ class UnifiedDispatcher:
                     self.storage.redis_client.set(f"service:url:{name}", "http://api:9000")
                     logger.info(f"Stored API service URL in Redis: http://api:9000")
                 
-                # Store legacy formats for backward compatibility
-                self.storage.redis_client.set(f"instance:{name}", str(port))
-                if service_url:
-                    self.storage.redis_client.set(f"instance_url:{name}", service_url)
-                elif name == "api":
-                    self.storage.redis_client.set(f"instance_url:{name}", "http://api:9000")
-                
-                logger.debug(f"Stored service {name} in Redis with backward compatibility")
+                logger.debug(f"Stored service {name} in Redis")
             except Exception as e:
                 logger.error(f"Failed to store service in Redis: {e}")
     
@@ -332,8 +325,8 @@ class UnifiedDispatcher:
         """Resolve a route to a target port or URL."""
         if route.target_type == RouteTargetType.PORT:
             return route.target_value if isinstance(route.target_value, int) else int(route.target_value)
-        elif route.target_type == RouteTargetType.INSTANCE:
-            return self.named_instances.get(route.target_value)
+        elif route.target_type == RouteTargetType.SERVICE:
+            return self.named_services.get(route.target_value)
         elif route.target_type == RouteTargetType.HOSTNAME:
             # hostname_to_http_port contains ports with PROXY protocol enabled
             return self.hostname_to_http_port.get(route.target_value)
@@ -585,12 +578,12 @@ class UnifiedDispatcher:
                                 return
                             else:
                                 # Regular port-based forwarding
-                                instance_name = route.target_value if route.target_type == RouteTargetType.INSTANCE else None
+                                service_name = route.target_value if route.target_type == RouteTargetType.SERVICE else None
                                 logger.info(f"Request {method} {request_path} matched route '{route.description or route.path_pattern}' -> port {target}")
                                 await self._forward_connection(
                                     reader, writer, data, '127.0.0.1', target, 
                                     client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
-                                    hostname=hostname, instance_name=instance_name
+                                    hostname=hostname, service_name=service_name
                                 )
                                 return
                         else:
@@ -606,7 +599,7 @@ class UnifiedDispatcher:
                     hostname=hostname,
                     available_http_hosts=available_http_hosts,
                     total_http_hosts=len(self.hostname_to_http_port),
-                    named_instances=list(self.named_instances.keys())[:10]
+                    named_services=list(self.named_services.keys())[:10]
                 )
                 # Send 404 response
                 response = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
@@ -618,17 +611,17 @@ class UnifiedDispatcher:
             
             
             # Determine if this is a named instance or proxy target
-            instance_name = None
-            for name, port in self.named_instances.items():
+            service_name = None
+            for name, port in self.named_services.items():
                 if port == target_port:
-                    instance_name = name
+                    service_name = name
                     break
             
             # Forward to the target instance with PROXY protocol enabled
             await self._forward_connection(
                 reader, writer, data, '127.0.0.1', target_port, 
                 client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
-                hostname=hostname, instance_name=instance_name
+                hostname=hostname, service_name=service_name
             )
             
         except Exception as e:
@@ -720,17 +713,17 @@ class UnifiedDispatcher:
                     hostname=hostname,
                     available_https_hosts=available_https_hosts,
                     total_https_hosts=len(self.hostname_to_https_port),
-                    named_instances=list(self.named_instances.keys())[:10]
+                    named_services=list(self.named_services.keys())[:10]
                 )
                 writer.close()
                 await writer.wait_closed()
                 return
             
             # Determine if this is a named instance or proxy target
-            instance_name = None
-            for name, port in self.named_instances.items():
+            service_name = None
+            for name, port in self.named_services.items():
                 if port == target_port:
-                    instance_name = name
+                    service_name = name
                     break
             
             
@@ -738,7 +731,7 @@ class UnifiedDispatcher:
             await self._forward_connection(
                 reader, writer, data, '127.0.0.1', target_port, 
                 client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
-                hostname=hostname, instance_name=instance_name
+                hostname=hostname, service_name=service_name
             )
             
         except Exception as e:
@@ -773,7 +766,7 @@ class UnifiedDispatcher:
     async def _forward_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                                   initial_data: bytes, target_host: str, target_port: int, 
                                   client_ip: str = None, client_port: int = None, use_proxy_protocol: bool = False,
-                                  hostname: str = None, instance_name: str = None):
+                                  hostname: str = None, service_name: str = None):
         """Forward a connection to target host:port with optional PROXY protocol support."""
         try:
             # Connect to the target
@@ -788,11 +781,11 @@ class UnifiedDispatcher:
                     client_port = 0
                 
                 # Enhanced logging with hostname and instance
-                instance_info = f" (instance: {instance_name})" if instance_name else ""
+                service_info = f" (service: {service_name})" if service_name else ""
                 logger.info(
                     f"Forwarding connection - Client: {client_ip}:{client_port} -> "
                     f"Hostname: {hostname or 'unknown'} -> "
-                    f"Target: {target_host}:{target_port}{instance_info} "
+                    f"Target: {target_host}:{target_port}{service_info} "
                     f"[PROXY protocol: {'enabled' if use_proxy_protocol else 'disabled'}]"
                 )
                 await self._send_proxy_protocol_header(target_writer, client_ip, client_port, target_port)
@@ -888,7 +881,7 @@ class UnifiedMultiInstanceServer:
         self.https_server = https_server_instance
         self.app = app  # Not used anymore - each instance creates its own proxy app
         self.host = host
-        self.instances: List[DomainInstance] = []
+        self.instances: List[HypercornInstance] = []
         # Pass storage to dispatcher for route management
         storage = https_server_instance.manager.storage if https_server_instance else None
         self.dispatcher = UnifiedDispatcher(host, storage)
@@ -917,7 +910,7 @@ class UnifiedMultiInstanceServer:
                 logger.warning(f"Certificate not yet available for {hostname}, creating HTTP-only instance")
         
         # Create instance - this is a proxy-only instance
-        instance = DomainInstance(
+        instance = HypercornInstance(
             app=None,  # Will create its own proxy app
             domains=[hostname],
             http_port=self.next_http_port,
@@ -932,7 +925,7 @@ class UnifiedMultiInstanceServer:
         self.instances.append(instance)
         
         # Register with dispatcher
-        self.dispatcher.register_instance(
+        self.dispatcher.register_domain(
             [hostname], 
             self.next_http_port, 
             self.next_https_port,
@@ -1029,7 +1022,7 @@ class UnifiedMultiInstanceServer:
         await instance.start_https()
         
         # Update dispatcher registration to enable HTTPS
-        self.dispatcher.register_instance(
+        self.dispatcher.register_domain(
             [hostname], 
             instance.http_port, 
             instance.https_port,
@@ -1146,10 +1139,10 @@ class UnifiedMultiInstanceServer:
         # Register the API service as a named instance
         # The API runs on port 10001 with PROXY protocol for external access
         # But internally, Docker services should use api:9000
-        self.dispatcher.register_named_instance('api', 10001, 'http://api:9000')
+        self.dispatcher.register_named_service('api', 10001, 'http://api:9000')
         
         # Register localhost to route to the API instance
-        self.dispatcher.register_instance(['localhost', '127.0.0.1'], 10001, 10001, enable_http=True, enable_https=False)
+        self.dispatcher.register_domain(['localhost', '127.0.0.1'], 10001, 10001, enable_http=True, enable_https=False)
         
         if not cert_to_domains and not domain_to_proxy:
             logger.info("No additional certificates or proxy configurations available")
@@ -1165,7 +1158,7 @@ class UnifiedMultiInstanceServer:
             proxy_configs = {d: domain_to_proxy[d] for d in domains if d in domain_to_proxy}
             
             # Create instance - these are proxy domains
-            instance = DomainInstance(
+            instance = HypercornInstance(
                 app=None,  # Will create its own proxy app
                 domains=domains,
                 http_port=self.next_http_port,
@@ -1199,7 +1192,7 @@ class UnifiedMultiInstanceServer:
                 https_enabled = True
             
             # Register with dispatcher for enabled protocols
-            self.dispatcher.register_instance(
+            self.dispatcher.register_domain(
                 domains, 
                 self.next_http_port, 
                 self.next_https_port,

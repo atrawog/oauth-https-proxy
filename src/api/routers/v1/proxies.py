@@ -307,8 +307,8 @@ def create_router(storage, cert_manager):
             oauth_route = Route(
                 route_id=route_id,
                 path_pattern="/.well-known/oauth-authorization-server",
-                target_type=RouteTargetType.INSTANCE,
-                target_value="auth",  # Route to auth instance, not hostname
+                target_type=RouteTargetType.SERVICE,
+                target_value="auth",  # Route to auth service, not hostname
                 priority=90,  # High priority but below system routes
                 enabled=True,
                 description=f"OAuth metadata for {hostname}",

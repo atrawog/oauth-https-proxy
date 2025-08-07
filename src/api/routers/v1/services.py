@@ -212,14 +212,6 @@ def create_router(storage) -> APIRouter:
             # Add to service set
             storage.redis_client.sadd("services:external", config.service_name)
             
-            # Migrate old instance data if it exists
-            old_instance_url = storage.redis_client.get(f"instance_url:{config.service_name}")
-            if old_instance_url:
-                storage.redis_client.delete(f"instance_url:{config.service_name}")
-                storage.redis_client.delete(f"instance_info:{config.service_name}")
-                storage.redis_client.delete(f"instance:{config.service_name}")
-                logger.info(f"Migrated instance '{config.service_name}' to external service")
-            
             logger.info(f"Registered external service '{config.service_name}' -> {config.target_url}")
             return service_info
             
@@ -259,20 +251,6 @@ def create_router(storage) -> APIRouter:
                                 description="",
                                 created_at=datetime.now(timezone.utc)
                             ))
-            
-            # Also check for migrated instances (backward compatibility)
-            for key in storage.redis_client.scan_iter(match="instance_url:*"):
-                name = key.split(":")[-1]
-                if name not in [s.service_name for s in services]:
-                    target_url = storage.redis_client.get(key)
-                    if target_url:
-                        services.append(UnifiedServiceInfo(
-                            service_name=name,
-                            service_type=ServiceType.EXTERNAL,
-                            target_url=target_url,
-                            description="(Migrated from instance)",
-                            created_at=datetime.now(timezone.utc)
-                        ))
             
             # Sort by name
             services.sort(key=lambda x: x.service_name)
@@ -746,9 +724,7 @@ def create_router(storage) -> APIRouter:
             # Check if service exists
             service_data = storage.redis_client.get(f"service:external:{service_name}")
             if not service_data:
-                # Check old instance format
-                if not storage.redis_client.exists(f"instance_url:{service_name}"):
-                    raise HTTPException(404, f"Service '{service_name}' not found")
+                raise HTTPException(404, f"Service '{service_name}' not found")
             
             # Check ownership
             if service_data:
@@ -773,15 +749,10 @@ def create_router(storage) -> APIRouter:
                     f"Cannot delete service '{service_name}' - used by routes: {', '.join(routes_using_service[:5])}"
                 )
             
-            # Delete service (new format)
+            # Delete service
             storage.redis_client.delete(f"service:external:{service_name}")
             storage.redis_client.delete(f"service:url:{service_name}")
             storage.redis_client.srem("services:external", service_name)
-            
-            # Delete old instance format (cleanup)
-            storage.redis_client.delete(f"instance_url:{service_name}")
-            storage.redis_client.delete(f"instance_info:{service_name}")
-            storage.redis_client.delete(f"instance:{service_name}")
             
             logger.info(f"Unregistered external service '{service_name}'")
             return Response(status_code=204)

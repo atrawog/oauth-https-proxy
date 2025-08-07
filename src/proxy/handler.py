@@ -178,8 +178,8 @@ class EnhancedProxyHandler:
                 # Handle different route types
                 if route.target_type == RouteTargetType.URL:
                     return await self._handle_url_route(request, route, request_key)
-                elif route.target_type == RouteTargetType.INSTANCE:
-                    # Handle both INSTANCE (legacy) and SERVICE (new) target types
+                elif route.target_type == RouteTargetType.SERVICE:
+                    # Handle SERVICE target type
                     return await self._handle_service_route(request, route, request_key)
                 else:
                     # For other route types, we can't handle them here
@@ -681,39 +681,17 @@ class EnhancedProxyHandler:
         return headers
     
     async def _handle_service_route(self, request: Request, route, request_key: Optional[str] = None) -> Response:
-        """Handle service route by looking up the service target.
-        
-        This method supports both legacy instance lookups and new service lookups.
-        """
+        """Handle service route by looking up the service target."""
         service_name = route.target_value
         
         # Look up service target from Redis
         service_target = None
         try:
-            # Check new service format first
+            # Check service URL
             service_url = self.storage.redis_client.get(f"service:url:{service_name}")
             if service_url:
                 service_target = service_url
                 logger.debug(f"Found service {service_name} with URL: {service_url}")
-            else:
-                # Fallback to legacy instance format for backward compatibility
-                instance_url = self.storage.redis_client.get(f"instance_url:{service_name}")
-                if instance_url:
-                    service_target = instance_url
-                    logger.debug(f"Found legacy instance {service_name} with URL: {instance_url}")
-                else:
-                    # Final fallback to port-only format (from dispatcher)
-                    port = self.storage.redis_client.get(f"instance:{service_name}")
-                    if port:
-                        # Special handling for known services
-                        if service_name == "api":
-                            # Use Docker service name instead of localhost
-                            service_target = f"http://api:9000"
-                            logger.debug(f"Using Docker service name for API service")
-                        else:
-                            # For other services, use localhost (may not work from containers)
-                            service_target = f"http://localhost:{port}"
-                            logger.warning(f"Using localhost for service {service_name} - may not work from containers")
         except Exception as e:
             logger.error(f"Failed to lookup service {service_name}: {e}")
         
@@ -721,13 +699,9 @@ class EnhancedProxyHandler:
             # Get available services for debugging
             available_services = []
             try:
-                # Get all service keys from Redis (both new and legacy)
+                # Get all service keys from Redis
                 service_keys = self.storage.redis_client.keys("service:url:*")
-                instance_keys = self.storage.redis_client.keys("instance:*")
-                available_services = (
-                    [key.decode().split(":", 2)[2] for key in service_keys[:5]] +
-                    [key.decode().split(":", 1)[1] for key in instance_keys[:5]]
-                )
+                available_services = [key.decode().split(":", 2)[2] for key in service_keys[:10]]
             except Exception:
                 pass
                 

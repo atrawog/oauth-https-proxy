@@ -312,17 +312,12 @@ class DockerManager:
         service_name = service_info.service_name
         target_url = f"http://{service_info.service_name}:{service_info.internal_port}"
         
-        # Store as a service in new format
+        # Store as a service
         self.storage.redis_client.set(f"service:url:{service_name}", target_url)
         
-        # For backward compatibility, also store with docker- prefix
+        # Also store with docker- prefix for compatibility
         docker_name = f"docker-{service_name}"
         self.storage.redis_client.set(f"service:url:{docker_name}", target_url)
-        
-        # Clean up old instance format if it exists
-        self.storage.redis_client.delete(f"instance_url:{docker_name}")
-        self.storage.redis_client.delete(f"instance_info:{docker_name}")
-        self.storage.redis_client.delete(f"instance:{docker_name}")
         
         logger.info(f"Registered Docker service {service_name} -> {target_url}")
         
@@ -465,12 +460,6 @@ class DockerManager:
         # Remove from service registry
         self.storage.redis_client.delete(f"service:url:{service_name}")
         self.storage.redis_client.delete(f"service:url:docker-{service_name}")
-        
-        # Clean up old instance format (backward compatibility)
-        instance_name = f"docker-{service_name}"
-        self.storage.redis_client.delete(f"instance_url:{instance_name}")
-        self.storage.redis_client.delete(f"instance_info:{instance_name}")
-        self.storage.redis_client.delete(f"instance:{instance_name}")
         
         # Remove service info from Redis
         self.storage.redis_client.delete(f"docker_service:{service_name}")
