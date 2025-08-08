@@ -11,7 +11,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **MCP Compliance**: Full support for Model Context Protocol with OAuth protection
 - **WebSocket Support**: Proxy WebSocket and Server-Sent Events (SSE) connections
 - **Route Management**: Priority-based path routing with regex support
-- **Instance Registry**: Named service discovery for internal services
+- **External Service Management**: Named service registration for external URLs
 - **Docker Service Management**: Create and manage Docker containers dynamically
 - **MCP Metadata**: Automatic metadata endpoints for MCP-compliant services
 - **Port Management**: Comprehensive port allocation with bind address control
@@ -20,6 +20,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 ### Security Features
 - **Token-Based API**: All administrative operations require bearer tokens
 - **OAuth Protection**: Protect any proxied service with OAuth authentication
+- **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist
 - **Certificate Isolation**: Multi-domain certificates with ownership tracking
 - **Redis-Only Storage**: No filesystem persistence for enhanced security
 - **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
@@ -66,7 +67,7 @@ base64 -w 0 private.pem
 ### 3. Start Services
 
 ```bash
-# Start all services
+# Start all services (api and redis)
 just up
 
 # Generate an admin token
@@ -84,7 +85,7 @@ Open http://localhost in your browser to access the management interface.
 
 ```bash
 # Proxy example.com to a backend service
-just proxy-create api.yourdomain.com http://backend:8080 $ADMIN_TOKEN
+just proxy-create api.yourdomain.com http://backend:8080 [token]
 
 # The proxy will automatically:
 # - Obtain an HTTPS certificate
@@ -96,13 +97,13 @@ just proxy-create api.yourdomain.com http://backend:8080 $ADMIN_TOKEN
 
 ```bash
 # First, ensure OAuth routes are set up
-just oauth-routes-setup auth.yourdomain.com $ADMIN_TOKEN
+just oauth-routes-setup auth.yourdomain.com [token]
 
 # Create the auth proxy
-just proxy-create auth.yourdomain.com http://localhost:9000 $ADMIN_TOKEN
+just proxy-create auth.yourdomain.com http://localhost:9000 [token]
 
 # Enable OAuth on your API proxy
-just proxy-auth-enable api.yourdomain.com $ADMIN_TOKEN auth.yourdomain.com forward
+just proxy-auth-enable api.yourdomain.com [token] auth.yourdomain.com [mode]
 ```
 
 ### Docker Service Management
@@ -111,46 +112,42 @@ Create and manage Docker containers with automatic port exposure:
 
 ```bash
 # Create a service with exposed port on localhost
-just service-create-exposed my-app nginx:alpine 8080 127.0.0.1 $ADMIN_TOKEN
+just service-create-exposed my-app nginx:alpine 8080 127.0.0.1 [token]
 
 # Create a service accessible from all interfaces
-just service-create-exposed public-api node:18 3000 0.0.0.0 $ADMIN_TOKEN
+just service-create-exposed public-api node:18 3000 0.0.0.0 [token]
 
 # Real example: Create mcp-everything service on port 3000
-just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 $ADMIN_TOKEN
+just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 [token]
 
 # Add additional ports to existing service
-just service-port-add my-app admin 8081 8081 127.0.0.1 $ADMIN_TOKEN
+just service-port-add my-app 8081 [bind-address] [source-token] [token]
 
 # List all services and their ports
 just service-list
 just service-port-list my-app
 
 # Create proxy for service (optional) - makes it accessible via HTTPS
-just service-proxy-create my-app my-app.yourdomain.com true $ADMIN_TOKEN
+just service-proxy-create my-app [hostname] [enable-https] [token]
 
 # Full example: Service accessible at both localhost:3000 and https://everything.yourdomain.com
-just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 $ADMIN_TOKEN
-just proxy-create everything.yourdomain.com http://mcp-everything:3000 $ADMIN_TOKEN
-just proxy-resource-set everything.yourdomain.com $ADMIN_TOKEN /mcp
+just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 [token]
+just proxy-create everything.yourdomain.com http://mcp-everything:3000 [token]
+just proxy-resource-set everything.yourdomain.com [token] [endpoint] [scopes]
 ```
 
 ### Port Management
 
-Control port allocation and access:
+Services can expose ports with fine-grained control:
 
 ```bash
-# View all allocated ports
-just port-list
+# Check if a port is available
+just service-port-check 8080 [bind-address]
 
-# Check available port ranges
-just port-available
-
-# Create port access token for specific services/ports
-just port-token-create api-access "my-app,api-service" "8080,8081" 30d
-
-# Revoke port access
-just port-token-revoke api-access
+# Add/remove ports from services
+just service-port-add <service> <port> [bind-address] [source-token] [token]
+just service-port-remove <service> <port-name> [token]
+just service-port-list <service>
 ```
 
 ### Set Up MCP Echo Servers (Example)
@@ -171,7 +168,7 @@ just mcp-echo-setup
 ```
 ┌─────────────────┐     ┌──────────────────────────┐
 │                 │     │                          │
-│  HTTP Client    │───▶│   PROXY & API Service    │
+│  HTTP Client    │───▶│       API Service        │
 │                 │     │  - HTTP/HTTPS Gateway    │
 └─────────────────┘     │  - OAuth Server          │
                         │  - Certificate Manager   │
@@ -207,14 +204,14 @@ The PROXY protocol handler:
 - Forwards clean traffic to port 9000 (Hypercorn)
 - ASGI middleware retrieves client IP and injects headers
 
-- **Proxy Service**: All-in-one container with HTTP/HTTPS gateway, OAuth server, certificate manager, and Docker management
+- **API Service**: All-in-one container with HTTP/HTTPS gateway, OAuth server, certificate manager, and Docker management
 - **Redis**: Stores all configuration, certificates, tokens, and session data
 - **Docker Socket**: Enables dynamic container creation and management
 - **Backend Services**: Your applications (MCP servers, APIs, Docker containers)
 
 ### Request Flow
 
-1. **Incoming Request** → Proxy receives on port 80/443
+1. **Incoming Request** → API service receives on port 80/443
 2. **Route Matching** → Finds target based on hostname/path
 3. **Auth Check** → Validates OAuth token if required
 4. **Certificate** → Loads SSL certificate for HTTPS
@@ -238,16 +235,13 @@ This proxy is fully compliant with MCP 2025-06-18 specification:
 
 ```bash
 # 1. Create proxy for your MCP server
-just proxy-create mcp.yourdomain.com http://mcp-server:3000 $ADMIN_TOKEN
+just proxy-create mcp.yourdomain.com http://mcp-server:3000 [token]
 
 # 2. Enable OAuth protection
-just proxy-auth-enable mcp.yourdomain.com $ADMIN_TOKEN auth.yourdomain.com forward
+just proxy-auth-enable mcp.yourdomain.com [token] auth.yourdomain.com [mode]
 
-# 3. Register as MCP resource
-just resource-register https://mcp.yourdomain.com mcp.yourdomain.com "My MCP Server"
-
-# 4. Enable MCP metadata (optional - for automatic metadata endpoints)
-just proxy-resource-set mcp.yourdomain.com $ADMIN_TOKEN /mcp "mcp:read mcp:write"
+# 3. Enable MCP metadata (for automatic metadata endpoints)
+just proxy-resource-set mcp.yourdomain.com [token] [endpoint] [scopes]
 
 # Your MCP server is now accessible at https://mcp.yourdomain.com/mcp
 # with full OAuth protection and MCP compliance!
@@ -317,7 +311,7 @@ Routes are managed dynamically via API/CLI:
 
 ```bash
 # Create a route
-just route-create /api/v1/ instance backend-api $ADMIN_TOKEN
+just route-create /api/v1/ service backend-api [token]
 
 # List all routes
 just route-list
@@ -335,23 +329,23 @@ just route-list
 
 ```bash
 # Create certificate for multiple domains
-just cert-create-multi shared-cert "api.domain.com,app.domain.com,www.domain.com" admin@domain.com $ADMIN_TOKEN
+just cert-create-multi shared-cert "api.domain.com,app.domain.com,www.domain.com" admin@domain.com [token]
 
 # Attach to proxies
-just proxy-cert-attach api.domain.com shared-cert $ADMIN_TOKEN
-just proxy-cert-attach app.domain.com shared-cert $ADMIN_TOKEN
+just proxy-cert-attach api.domain.com shared-cert [token]
+just proxy-cert-attach app.domain.com shared-cert [token]
 ```
 
-### Instance Registry
+### External Service Management
 
 ```bash
 # Register named services for route targeting
-just instance-register backend-api http://api:8080 $ADMIN_TOKEN "Backend API"
-just instance-register frontend http://frontend:3000 $ADMIN_TOKEN "Frontend"
+just service-register backend-api http://api:8080 [token] [description]
+just service-register frontend http://frontend:3000 [token] [description]
 
-# Create routes targeting instances
-just route-create /api/ instance backend-api $ADMIN_TOKEN
-just route-create / instance frontend $ADMIN_TOKEN
+# Create routes targeting services
+just route-create /api/ service backend-api [token]
+just route-create / service frontend [token]
 ```
 
 ### OAuth Client Management
@@ -370,23 +364,23 @@ just oauth-metrics
 
 ```bash
 # Create a service from Docker image
-just service-create my-nginx nginx:latest "" 8080 $ADMIN_TOKEN "512m" "1.0" true
+just service-create my-nginx nginx:latest [dockerfile] [port] [token] [memory] [cpu] [auto-proxy]
 
 # Create a service from Dockerfile
-just service-create my-app "" ./dockerfiles/app.Dockerfile 3000 $ADMIN_TOKEN
+just service-create my-app "" ./dockerfiles/app.Dockerfile 3000 [token]
 
 # Manage service lifecycle
-just service-start my-app
-just service-stop my-app
-just service-restart my-app
+just service-start my-app [token]
+just service-stop my-app [token]
+just service-restart my-app [token]
 
 # Monitor services
 just service-list
-just service-logs my-app 100 true
+just service-logs my-app [lines] [timestamps]
 just service-stats my-app
 
 # Create proxy for service
-just service-proxy-create my-app app.domain.com true $ADMIN_TOKEN
+just service-proxy-create my-app [hostname] [enable-https] [token]
 ```
 
 ### Logging and Monitoring
@@ -462,9 +456,9 @@ Authorization: Bearer your-admin-token
 - Support for regex patterns
 - Method-specific routing
 
-#### Instance Registry (`/api/v1/instances/*`)
-- Named service registration
-- Internal service discovery
+#### External Service Management (`/api/v1/services/external/*`)
+- Named service registration for external URLs
+- Service discovery for routing
 
 #### OAuth Admin (`/api/v1/oauth/*`)
 - Client and session management
@@ -598,7 +592,7 @@ mcp-http-proxy/
    curl http://yourdomain.com/.well-known/acme-challenge/test
    
    # Use staging certificates for testing
-   just cert-create test-cert yourdomain.com admin@domain.com $ADMIN_TOKEN staging
+   just cert-create test-cert yourdomain.com admin@domain.com [token] [staging]
    ```
 
 2. **OAuth Login Issues**
@@ -615,8 +609,8 @@ mcp-http-proxy/
    # Check proxy target health
    just proxy-show problematic.domain.com
    
-   # View proxy logs
-   just logs proxy
+   # View service logs
+   just logs api
    ```
 
 4. **Docker Service Creation Fails**
@@ -637,7 +631,7 @@ just health              # System health check
 just stats               # Resource statistics
 just cleanup-orphaned    # Clean up orphaned resources
 just redis-cli          # Direct Redis access
-just shell              # Shell into proxy container
+just shell              # Shell into api container
 ```
 
 ## Contributing

@@ -30,10 +30,8 @@ The system uses a dual-Redis architecture for high-performance logging:
 The RequestLogger provides efficient HTTP request/response logging with multiple indexes:
 
 **Key Features**:
-- Correlation ID tracking across request/response pairs
 - Multiple indexes for efficient querying (IP, hostname, status, user, path)
 - Real-time streaming for monitoring
-- Automatic TTL management (24 hours default)
 - HyperLogLog for unique visitor tracking
 - Response time statistics with sliding windows
 
