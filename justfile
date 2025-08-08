@@ -2664,48 +2664,43 @@ service-token-revoke token-name:
 # TESTING COMMANDS
 # ============================================================================
 
-# Run tests (optionally specify test files)
-test *files="tests/test_health.py":
+# Run tests - smart default (quick suite) or specific files
+test *files="":
     #!/usr/bin/env bash
-    if [ "$#" -eq 0 ]; then
-        echo "Running basic API tests..."
-        docker exec {{container_name}} pixi run pytest tests/test_health.py -v
+    if [ -z "{{files}}" ]; then
+        # No arguments: run quick test suite
+        echo "Running quick test suite..."
+        echo "════════════════════════════════════════════════════════════════"
+        echo "  Quick tests: health, basic tokens, certs, proxy, routes, oauth"
+        echo "  Use 'just test-all' for comprehensive testing"
+        echo "  Use 'just test <file>' to run specific test files"
+        echo "════════════════════════════════════════════════════════════════"
+        docker exec {{container_name}} pixi run pytest \
+            tests/test_health.py \
+            tests/test_tokens.py \
+            tests/test_certificates.py \
+            tests/test_proxy.py \
+            tests/test_routes.py \
+            tests/test_oauth.py \
+            -v \
+            -m "not slow and not integration" \
+            --tb=short \
+            --maxfail=5 \
+            -x
     else
-        echo "Running specified tests: $@"
-        docker exec {{container_name}} pixi run pytest "$@" -v
+        # Arguments provided: run specified tests
+        echo "Running specified tests: {{files}}"
+        docker exec {{container_name}} pixi run pytest {{files}} -v
     fi
 
-# Run comprehensive test suite
+# Run all tests comprehensively
 test-all:
-    docker exec {{container_name}} pixi run pytest tests/ -v
-
-# Test certificate operations
-test-certs:
-    docker exec {{container_name}} pixi run pytest tests/test_certificates.py -v
-
-# Test proxy operations
-test-proxy-basic:
-    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "basic"
-
-# Run sidecar tests with coverage
-test-sidecar-coverage:
-    docker exec {{container_name}} pixi run pytest tests/test_sidecar_coverage.py::test_all_with_json_report -v
-
-# Test token management
-test-tokens:
-    docker exec {{container_name}} pixi run pytest tests/test_tokens.py -v
-
-# Test all proxy operations
-test-proxy-all:
-    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v
-
-# Test proxy authentication
-test-proxy-auth:
-    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "TestProxyAuthentication"
-
-# Test OAuth functionality
-test-auth token="${ADMIN_TOKEN}":
-    docker exec {{container_name}} pixi run pytest tests/test_oauth.py -v
+    @echo "Running comprehensive test suite..."
+    @echo "════════════════════════════════════════════════════════════════"
+    @echo "  Running ALL tests including slow and integration tests"
+    @echo "  This may take 5-10 minutes to complete"
+    @echo "════════════════════════════════════════════════════════════════"
+    docker exec {{container_name}} pixi run pytest tests/ -v --tb=short
 
 # Test OAuth flow for a specific hostname
 test-auth-flow hostname:
@@ -2715,70 +2710,6 @@ test-auth-flow hostname:
     @curl -s https://{{hostname}}/.well-known/oauth-protected-resource | jq -e . > /dev/null && echo "✓ OAuth protected resource metadata OK" || echo "✗ OAuth protected resource metadata FAILED"
     @curl -s -o /dev/null -w "✓ MCP endpoint returns %{http_code} (expected 401)\n" https://{{hostname}}/mcp || true
     @curl -s -I https://{{hostname}}/mcp | grep -q "www-authenticate:" && echo "✓ WWW-Authenticate header present" || echo "✗ WWW-Authenticate header missing"
-
-# Test route management
-test-routes:
-    docker exec {{container_name}} pixi run pytest tests/test_routes.py -v
-
-# Test instance management
-test-instances:
-    docker exec {{container_name}} pixi run pytest tests/test_instances.py -v
-
-# Test with specific marks
-test-mark mark:
-    docker exec {{container_name}} pixi run pytest tests/ -v -m {{mark}}
-
-# Test MCP functionality
-test-mcp:
-    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py -v
-
-# Test OAuth status API
-test-oauth-status-api:
-    docker exec {{container_name}} pixi run pytest tests/test_oauth.py::TestOAuthStatus -v
-
-# Test WebSocket proxy
-test-websocket-proxy:
-    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "websocket"
-
-# Test streaming proxy
-test-streaming-proxy:
-    docker exec {{container_name}} pixi run pytest tests/test_proxy.py -v -k "streaming"
-
-# Test multi-domain certificates
-test-multi-domain:
-    docker exec {{container_name}} pixi run pytest tests/test_certificates.py::TestMultiDomainCertificates -v
-
-# Test proxy routes
-test-proxy-routes:
-    docker exec {{container_name}} pixi run pytest tests/test_routes.py::TestProxyRouteControl -v
-
-# Test MCP compliance
-test-mcp-compliance:
-    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py::TestMCPProtocolCompliance -v
-
-# Test resource indicators
-test-resource-indicators:
-    docker exec {{container_name}} pixi run pytest tests/test_oauth.py::TestMCPResourceManagement -v
-
-# Test audience validation  
-test-audience-validation:
-    docker exec {{container_name}} pixi run pytest tests/test_oauth.py -v -k "audience"
-
-# Test Docker service management
-test-docker-services:
-    docker exec {{container_name}} pixi run pytest tests/test_docker_services.py -v
-
-# Test Docker service API
-test-docker-api:
-    docker exec {{container_name}} pixi run pytest tests/test_docker_services.py::TestDockerServiceAPI -v
-
-# Test port management functionality
-test-ports:
-    docker exec {{container_name}} pixi run pytest tests/test_ports.py -v
-
-# Test service port management
-test-service-ports:
-    docker exec {{container_name}} pixi run pytest tests/test_service_ports.py -v
 
 # ============================================================================
 # UTILITY COMMANDS
