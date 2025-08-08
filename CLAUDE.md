@@ -2,6 +2,12 @@
 
 ## General Development Guidelines
 
+### API Design Patterns
+- **Collection Endpoints**: All collection endpoints (GET lists) require trailing slashes to avoid HTTP 307 redirects
+  - Example: `/api/v1/routes/` not `/api/v1/routes`
+  - FastAPI/Starlette automatically redirects non-trailing slash URLs
+  - This applies to: tokens, certificates, services, routes, resources, ports, proxy/targets
+
 ### Execution Requirements
 - **Command execution**: ONLY via `just` commands - no direct Python/bash or docker exec execution
 - **Configuration**: Single source `.env` file loaded by `just` - all environment variables are documented in their relevant sections below 
@@ -126,8 +132,8 @@ just app-logs-test                            # Test logging system
 ```
 
 ### API Endpoints
-- `GET /api/v1/tokens` - List all tokens
-- `POST /api/v1/tokens` - Create new token
+- `GET /api/v1/tokens/` - List all tokens (requires trailing slash)
+- `POST /api/v1/tokens/` - Create new token
 - `POST /api/v1/tokens/generate` - Generate token for display
 - `PUT /api/v1/tokens/email` - Update certificate email for current token
 - `GET /api/v1/tokens/info` - Get current token information
@@ -148,10 +154,10 @@ just token-email-update <n> <email>      # Update token cert email
 ## Service Architecture
 
 ### Docker Services
-- **proxy**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API  
+- **api**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API (exposed on ports 80, 443, 9000)
 - **redis**: State storage for all services (including PROXY protocol client info)
 
-**Note**: OAuth functionality is now integrated directly into the proxy service - there is no separate auth service.
+**Note**: The "api" service handles everything - proxy, OAuth, certificates, and API endpoints. There is no separate "proxy" or "auth" service.
 
 ### PROXY Protocol Architecture
 The system supports HAProxy PROXY protocol v1 for preserving real client IPs:
@@ -172,7 +178,7 @@ External LB → Port 10001 (PROXY handler) → Port 9000 (Hypercorn)
 - **Redis side channel**: Stores client info keyed by `proxy:client:{server_port}:{client_port}`
 
 ### Unified Multi-Instance Dispatcher
-**CRITICAL**: UnifiedDispatcher is THE server - FastAPI is just another instance!
+**CRITICAL**: UnifiedDispatcher is THE server - FastAPI is just another service it manages!
 
 #### Server Configuration
 - `HTTP_PORT` - HTTP server port (default: 80)
@@ -185,11 +191,11 @@ External LB → Port 10001 (PROXY handler) → Port 9000 (Hypercorn)
   - Port 10001: PROXY protocol endpoint (forwards to 9000)
 
 ```
-Client → Port 80/443 → UnifiedDispatcher
+Client → Port 80/443 → UnifiedDispatcher (in api container)
                               ↓
                     Route by hostname/path
                               ↓
-         ├→ localhost → FastAPI App (API/GUI)
+         ├→ localhost → FastAPI App (API/GUI/OAuth)
          ├→ proxy1.com → Proxy App (forwarding only)
          └→ proxy2.com → Proxy App (forwarding only)
 
@@ -213,10 +219,10 @@ External LB → Port 10001 → PROXY Handler → Port 9000 → UnifiedDispatcher
 - NO lifespan side effects
 - Clean shutdown without affecting others
 
-### Instance Management
+### Service Management
 ```python
-class DomainInstance:
-    is_api_instance: bool  # True=FastAPI, False=Proxy
+class DomainService:
+    is_api_service: bool  # True=FastAPI, False=Proxy
     internal_http_port: int  # 9000+ 
     internal_https_port: int  # 10000+
     ssl_context: Optional[SSLContext]  # Pre-loaded
@@ -275,9 +281,9 @@ class DomainInstance:
 - No downtime during renewal
 
 ### API Endpoints
-- `POST /api/v1/certificates` - Single domain (async)
+- `POST /api/v1/certificates/` - Single domain (async)
 - `POST /api/v1/certificates/multi-domain` - Multiple domains (async)
-- `GET /api/v1/certificates` - List all certificates
+- `GET /api/v1/certificates/` - List all certificates (requires trailing slash)
 - `GET /api/v1/certificates/{cert_name}` - Get certificate details
 - `GET /api/v1/certificates/{cert_name}/status` - Generation status
 - `POST /api/v1/certificates/{cert_name}/renew` - Manual renewal
@@ -340,25 +346,37 @@ just test-multi-domain           # Test multi-domain certificates
 ```
 
 ### Route Management
-Priority-based path routing with Redis storage:
+Priority-based path routing with Redis storage and scope support:
 
 ```json
 {
   "route_id": "api-v1",
   "path_pattern": "/api/v1/",
-  "target_type": "instance",  // port|instance|hostname
-  "target_value": "proxy",
+  "target_type": "service",  // port|service|hostname|url
+  "target_value": "auth",
   "priority": 90,  // Higher = checked first
   "methods": ["GET", "POST"],
-  "enabled": true
+  "enabled": true,
+  "scope": "global",  // global|proxy - defines route applicability
+  "proxy_hostnames": []  // List of proxies when scope=proxy
 }
 ```
 
-### Per-Proxy Route Control
-Three modes for route filtering:
-- **all**: All global routes apply (default)
-- **selective**: Only explicitly enabled routes
-- **none**: Hostname-based routing only
+#### Route Target Types
+- **port**: Forward to `localhost:<port>` (e.g., `8080`)
+- **service**: Forward to named service - Docker, external, or internal (e.g., `auth`, `api-gateway`)
+- **hostname**: Forward to proxy handling that hostname (e.g., `api.example.com`)
+- **url**: Forward to any URL directly (e.g., `http://backend:8080` or `https://api.example.com`)
+
+#### Route Scopes
+Routes can be scoped to control their applicability:
+- **global**: Route applies to all proxies (default)
+- **proxy**: Route applies only to specified proxy hostnames
+
+When multiple routes match a request, they are evaluated by:
+1. Filtering by scope (global routes + proxy-specific routes for current proxy)
+2. Sorting by priority (higher values checked first)
+3. Matching path and methods
 
 ### OAuth Integration
 ```json
@@ -392,8 +410,8 @@ When enabled, the proxy automatically serves:
 - Integration with OAuth for token validation
 
 ### API Endpoints
-- `POST /api/v1/proxy/targets` - Create proxy target
-- `GET /api/v1/proxy/targets` - List all proxies
+- `POST /api/v1/proxy/targets/` - Create proxy target
+- `GET /api/v1/proxy/targets/` - List all proxies (requires trailing slash)
 - `GET /api/v1/proxy/targets/{hostname}` - Get proxy details
 - `PUT /api/v1/proxy/targets/{hostname}` - Update proxy
 - `DELETE /api/v1/proxy/targets/{hostname}` - Delete proxy
@@ -446,45 +464,54 @@ just test-auth-flow <hostname>
 ```
 
 ### Route API Endpoints
-- `GET /api/v1/routes` - List all routing rules
-- `POST /api/v1/routes` - Create new routing rule
+**Note**: Collection endpoints require trailing slashes to avoid 307 redirects.
+- `GET /api/v1/routes/` - List all routing rules (requires trailing slash)
+- `POST /api/v1/routes/` - Create new routing rule
 - `GET /api/v1/routes/{route_id}` - Get specific route details
 - `PUT /api/v1/routes/{route_id}` - Update route configuration
 - `DELETE /api/v1/routes/{route_id}` - Delete route
-- `PUT /api/v1/routes/{route_id}/enable` - Enable route
-- `PUT /api/v1/routes/{route_id}/disable` - Disable route
+- `GET /api/v1/routes/formatted` - Get routes in formatted table
 
 ### Route Commands
 ```bash
-just route-list
-just route-show <route-id>
+# Basic route operations
+just route-list                                      # List all routes in table format
+just route-show <route-id>                          # Show route details in JSON
 just route-create <path> <target-type> <target-value> <token> [priority] [methods] [is-regex] [description]
-just route-update <route-id> <token> [options]
-just route-delete <route-id> <token>
-just route-enable <route-id> <token>
-just route-disable <route-id> <token>
+just route-delete <route-id> <token>                # Delete a route
 
-# Service setup shortcuts
-just migrate-service-names       # Migrate old service names
+# Scope-based route operations
+just route-create-global <path> <target-type> <target-value> [token] [priority] [methods] [is-regex] [description]  # Create global route
+just route-create-proxy <path> <target-type> <target-value> <proxies> [token] [priority] [methods] [is-regex] [description]  # Create proxy-specific route
+just route-list-by-scope [scope]                    # List routes filtered by scope (all|global|proxy)
 
-# Per-proxy route control
-just proxy-routes-show <hostname>
-just proxy-routes-mode <hostname> <token> <all|selective|none>
-just proxy-route-enable <hostname> <route-id> <token>
-just proxy-route-disable <hostname> <route-id> <token>
-just proxy-routes-set <hostname> <token> <enabled-routes> <disabled-routes>
-just test-proxy-routes
+# Service migration utilities
+just migrate-instances-to-services                  # Migrate old instance configs to services
+just migrate-service-names                          # Migrate old service names
+
+# Testing
+just test-proxy-routes                              # Test proxy route functionality
 ```
 
-## Docker Service Management
+## Service Management
 
 ### Overview
-The system supports creating and managing Docker containers as services:
-- Dynamic container creation with custom images or Dockerfiles
-- Automatic port allocation and management
-- Integration with proxy for external access
-- Resource limits (CPU, memory)
-- Container lifecycle management
+The system provides unified management for all service types:
+- **Docker Services**: Container management with lifecycle control
+- **External Services**: Named references to external URLs (replaces instances)
+- **Internal Services**: Built-in services like API and auth
+
+### Service Types
+```python
+class ServiceType(str, Enum):
+    DOCKER = "docker"      # Docker container services
+    EXTERNAL = "external"  # External URL references (registered via API)
+    INTERNAL = "internal"  # Built-in services (currently only 'api')
+```
+
+### Internal Services
+The system automatically registers these internal services:
+- **api**: The main API service (http://api:9000) - handles all API, OAuth, and certificate operations
 
 ### Docker Configuration
 - `DOCKER_GID` - Docker group GID on host (default: 999, varies by OS)
@@ -492,10 +519,11 @@ The system supports creating and managing Docker containers as services:
 - `DOCKER_HOST` - Docker socket path (default: unix:///var/run/docker.sock)
 - `BASE_DOMAIN` - Base domain for auto-created service proxies
 
-### Service Schema
+### Docker Service Schema
 ```json
 {
   "service_name": "my-app",
+  "service_type": "docker",
   "image": "nginx:latest",  // OR use dockerfile_path
   "dockerfile_path": "./dockerfiles/custom.Dockerfile",
   "internal_port": 8080,  // Port inside container (auto-detected from image if not specified)
@@ -522,8 +550,12 @@ The system supports creating and managing Docker containers as services:
 ```
 
 ### API Endpoints
-- `POST /api/v1/services` - Create new Docker service
-- `GET /api/v1/services` - List all services
+- `POST /api/v1/services/` - Create new Docker service
+- `GET /api/v1/services/` - List all Docker services (requires trailing slash)
+- `GET /api/v1/services/unified` - List all services (Docker + external)
+- `POST /api/v1/services/external` - Register external service
+- `GET /api/v1/services/external` - List external services
+- `DELETE /api/v1/services/external/{name}` - Delete external service
 - `GET /api/v1/services/{name}` - Get service details
 - `PUT /api/v1/services/{name}` - Update service configuration
 - `DELETE /api/v1/services/{name}` - Delete service
@@ -541,7 +573,7 @@ The system supports creating and managing Docker containers as services:
 - `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove a port from service
 
 #### Port Allocation Endpoints (NEW)
-- `GET /api/v1/ports` - List all allocated ports
+- `GET /api/v1/ports/` - List all allocated ports (requires trailing slash)
 - `GET /api/v1/ports/available` - Get available port ranges
 - `POST /api/v1/ports/tokens` - Create port access token
 - `GET /api/v1/ports/tokens` - List port access tokens
@@ -549,15 +581,26 @@ The system supports creating and managing Docker containers as services:
 
 ### Service Commands
 ```bash
-# Service lifecycle management
+# Docker service management
 just service-create <name> <image> [dockerfile] [port] [token] [memory] [cpu] [auto-proxy]
 just service-create-exposed <name> <image> <port> <bind-address> [token] [memory] [cpu]  # NEW: Create with exposed port
-just service-list [owned-only] [token]
+just service-list [owned-only] [token]  # List Docker services
 just service-show <name>
 just service-delete <name> [token] [force] [delete-proxy]
 just service-start <name> [token]
 just service-stop <name> [token]
 just service-restart <name> [token]
+
+# External service management (replaces instance commands)
+just service-register <name> <target-url> [token] [description]  # Register external service
+just service-list-external                                       # List external services
+just service-show-external <name>                                # Show external service details
+just service-update-external <name> <target-url> [token] [desc] # Update external service
+just service-unregister <name> [token]                          # Delete external service
+just service-register-oauth [token]                              # Register OAuth as external service
+
+# Unified service views
+just service-list-all [type]                                     # List all services (Docker + external)
 
 # Service monitoring
 just service-logs <name> [lines] [timestamps]
@@ -829,8 +872,8 @@ Response:
 
 ### MCP Resource Management API Endpoints
 **Note**: These management endpoints are optional conveniences, not MCP requirements.
-- `GET /api/v1/resources` - List registered MCP resources
-- `POST /api/v1/resources` - Register new MCP resource
+- `GET /api/v1/resources/` - List registered MCP resources (requires trailing slash)
+- `POST /api/v1/resources/` - Register new MCP resource
 - `GET /api/v1/resources/{uri}` - Get resource details
 - `PUT /api/v1/resources/{uri}` - Update resource
 - `DELETE /api/v1/resources/{uri}` - Remove resource
@@ -895,53 +938,90 @@ resource:{resource_uri} = {
 }
 ```
 
-## Instance Management
-
-### Named Instance Registry
-The system supports registering named instances for internal services:
-- Provides stable names for service discovery
-- Maps instance names to target URLs
-- Enables route targeting by instance name
-
-### Instance Schema
+### External Service Schema
 ```json
 {
-  "name": "my-service",
-  "target_url": "http://service:8080",
-  "description": "Backend API service",
+  "service_name": "api-gateway",
+  "service_type": "external",
+  "target_url": "https://gateway.example.com",
+  "description": "API Gateway service",
+  "routing_enabled": true,
   "created_by": "admin",
-  "created_at": "2024-01-15T10:00:00Z"
+  "created_at": "2024-01-15T10:00:00Z",
+  "owner_token_hash": "sha256:..."
 }
 ```
 
-### Instance API Endpoints
-- `GET /api/v1/instances` - List all registered instances
-- `POST /api/v1/instances` - Register new instance
-- `GET /api/v1/instances/{name}` - Get instance details
-- `PUT /api/v1/instances/{name}` - Update instance
-- `DELETE /api/v1/instances/{name}` - Delete instance
+## Redis Storage Schema
 
-### Instance Commands
-```bash
-just instance-list                                        # List all registered instances
-just instance-show <name>                                 # Show instance details
-just instance-register <name> <target-url> <token> [desc] # Register new instance
-just instance-update <name> <target-url> <token> [desc]   # Update instance
-just instance-delete <name> <token>                       # Delete instance
-just instance-register-oauth <token>                      # Register OAuth server instance
+### Service Keys
+```
+service:url:{name}          # Service name to URL mapping (all service types)
+service:external:{name}     # External service configuration JSON
+docker_service:{name}       # Docker service configuration JSON
+services:external           # Set of external service names
+```
+
+### Token Keys
+```
+token:{name}                # Token data by name
+token:hash:{hash}           # Token hash to name mapping
+```
+
+### Certificate Keys
+```
+cert:{name}                 # Certificate data JSON
+cert:domain:{domain}        # Domain to certificate name mapping
+cert:status:{name}          # Certificate generation status
+```
+
+### Proxy Keys
+```
+proxy:{hostname}            # Proxy target configuration JSON
+proxy:client:{port}:{port}  # PROXY protocol client info (60s TTL)
+```
+
+### Route Keys
+```
+route:{id}                  # Route configuration JSON
+route:unique:{path}:{prio}  # Unique route constraint
+route:priority:{prio}:{id}  # Priority-ordered route index
+```
+
+### OAuth Keys
+```
+oauth:client:{id}           # OAuth client data
+oauth:state:{state}         # OAuth authorization state
+oauth:code:{code}           # OAuth authorization code
+oauth:token:{jti}           # OAuth access token data
+oauth:refresh:{token}       # OAuth refresh token data
+oauth:user_tokens:{user}    # Set of token JTIs for user
+```
+
+### Port Management Keys
+```
+port:{port}                 # Port allocation data
+port:token:{hash}           # Port access token data
+port:token:name:{name}      # Token name to hash mapping
+service:ports:{service}     # Hash of service port configurations
+```
+
+### Resource Keys (MCP)
+```
+resource:{uri}              # MCP resource configuration
 ```
 
 ## Key Implementation Insights
 
 1. **Dispatcher-Centric**: UnifiedDispatcher owns ports, routes all traffic
-2. **Instance Isolation**: Each proxy has dedicated app and resources
+2. **Service Isolation**: Each proxy domain gets its own ASGI app instance
 3. **Redis-Only**: All configuration and state in Redis
 4. **Async Operations**: Certificate generation non-blocking
 5. **Token Authentication**: All write operations require bearer tokens
 6. **Route Priority**: Higher priority routes checked first
 7. **Certificate Sharing**: Multi-domain certs reduce overhead
 8. **OAuth Integration**: Integrated into proxy service, accessed via routes
-9. **Instance Registry**: Named instances for stable service discovery
+9. **Unified Service Model**: Single API for Docker, external, and internal services
 10. **Docker Management**: Dynamic container creation via Docker socket
 11. **MCP Metadata**: Automatic metadata endpoints for MCP compliance
 12. **Resource Limits**: CPU and memory limits for Docker services
@@ -989,9 +1069,9 @@ To ensure MCP compliance for any proxy:
 just up                      # Start all services
 just down                    # Stop all services
 just restart                 # Restart all services
-just rebuild <service>       # Rebuild specific service
+just rebuild <service>       # Rebuild specific service (api or redis)
 just logs [service]          # View service logs (all or specific)
-just shell                   # Shell into proxy container
+just shell                   # Shell into api container
 just redis-cli               # Access Redis CLI
 just dev                     # Run development server locally
 just setup                   # Quick setup for development

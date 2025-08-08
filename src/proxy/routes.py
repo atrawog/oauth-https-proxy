@@ -19,6 +19,12 @@ class RouteTargetType(str, Enum):
     URL = "url"  # Forward to any URL (http://service:port or https://example.com)
 
 
+class RouteScope(str, Enum):
+    """Scope of route applicability."""
+    GLOBAL = "global"  # Applies to all proxies
+    PROXY = "proxy"    # Applies to specific proxies only
+
+
 class Route(BaseModel):
     """Represents a routing rule."""
     route_id: str = Field(..., description="Unique identifier for the route")
@@ -30,6 +36,8 @@ class Route(BaseModel):
     is_regex: bool = Field(False, description="Whether path_pattern is a regex")
     description: str = Field("", description="Human-readable description")
     enabled: bool = Field(True, description="Whether this route is active")
+    scope: RouteScope = Field(RouteScope.GLOBAL, description="Route scope (global or proxy-specific)")
+    proxy_hostnames: List[str] = Field(default_factory=list, description="Proxies this route applies to (when scope=proxy)")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     owner_token_hash: Optional[str] = Field(None, description="Hash of token that owns this route")
     created_by: Optional[str] = Field(None, description="Token name that created this route")
@@ -84,6 +92,17 @@ class Route(BaseModel):
             return v
         return v
     
+    @field_validator('proxy_hostnames')
+    @classmethod
+    def validate_proxy_hostnames(cls, v: List[str], info: ValidationInfo) -> List[str]:
+        """Validate proxy hostnames are only set for proxy-scoped routes."""
+        scope = info.data.get('scope', RouteScope.GLOBAL)
+        if scope == RouteScope.PROXY and not v:
+            raise ValueError("proxy_hostnames must be specified for proxy-scoped routes")
+        elif scope == RouteScope.GLOBAL and v:
+            raise ValueError("proxy_hostnames should not be set for global routes")
+        return v
+    
     def matches(self, path: str, method: Optional[str] = None) -> bool:
         """Check if this route matches the given path and method."""
         if not self.enabled:
@@ -127,6 +146,8 @@ class RouteCreateRequest(BaseModel):
     is_regex: bool = Field(False, description="Whether path_pattern is a regex")
     description: str = Field("", description="Human-readable description")
     enabled: bool = Field(True, description="Whether this route is active")
+    scope: RouteScope = Field(RouteScope.GLOBAL, description="Route scope (global or proxy-specific)")
+    proxy_hostnames: List[str] = Field(default_factory=list, description="Proxies this route applies to (when scope=proxy)")
 
 
 class RouteUpdateRequest(BaseModel):
@@ -139,6 +160,8 @@ class RouteUpdateRequest(BaseModel):
     is_regex: Optional[bool] = None
     description: Optional[str] = None
     enabled: Optional[bool] = None
+    scope: Optional[RouteScope] = None
+    proxy_hostnames: Optional[List[str]] = None
 
 
 # Default routes that should always exist
@@ -232,9 +255,9 @@ OAUTH_ROUTES = [
 
 
 def get_applicable_routes(storage, proxy_config: 'ProxyTarget') -> List[Route]:
-    """Get routes applicable to a specific proxy based on its configuration."""
+    """Get routes applicable to a specific proxy based on its configuration and scope."""
     # Load all routes from storage
-    routes = []
+    all_routes = []
     for key in storage.redis_client.scan_iter(match="route:*"):
         # Skip priority and unique index keys
         if key.startswith("route:priority:") or key.startswith("route:unique:"):
@@ -244,20 +267,40 @@ def get_applicable_routes(storage, proxy_config: 'ProxyTarget') -> List[Route]:
             try:
                 route = Route.from_redis(route_data)
                 if route.enabled:
-                    routes.append(route)
-            except Exception:
-                pass
+                    all_routes.append(route)
+            except Exception as e:
+                # Handle old routes without scope field
+                try:
+                    route_dict = json.loads(route_data)
+                    if 'scope' not in route_dict:
+                        route_dict['scope'] = RouteScope.GLOBAL.value
+                        route_dict['proxy_hostnames'] = []
+                    route = Route(**route_dict)
+                    if route.enabled:
+                        all_routes.append(route)
+                except Exception:
+                    pass
+    
+    # Filter routes by scope
+    applicable_routes = []
+    for route in all_routes:
+        if route.scope == RouteScope.GLOBAL:
+            # Global routes apply to all proxies
+            applicable_routes.append(route)
+        elif route.scope == RouteScope.PROXY and proxy_config.hostname in route.proxy_hostnames:
+            # Proxy-specific routes only apply to listed proxies
+            applicable_routes.append(route)
     
     # Sort by priority (higher first)
-    routes.sort(key=lambda r: r.priority, reverse=True)
+    applicable_routes.sort(key=lambda r: r.priority, reverse=True)
     
-    # Apply route filtering based on route_mode
+    # Apply existing route filtering based on route_mode
     if proxy_config.route_mode == "none":
         # No routes apply
         return []
     elif proxy_config.route_mode == "selective":
         # Only enabled routes apply
-        return [r for r in routes if r.route_id in proxy_config.enabled_routes]
+        return [r for r in applicable_routes if r.route_id in proxy_config.enabled_routes]
     else:  # route_mode == "all" (default)
         # All routes except disabled ones
-        return [r for r in routes if r.route_id not in proxy_config.disabled_routes]
+        return [r for r in applicable_routes if r.route_id not in proxy_config.disabled_routes]

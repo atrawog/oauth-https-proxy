@@ -37,6 +37,8 @@ def create_router(storage):
             is_regex=request.is_regex,
             description=request.description,
             enabled=request.enabled,
+            scope=request.scope,
+            proxy_hostnames=request.proxy_hostnames,
             owner_token_hash=token_hash,
             created_by=token_name
         )
@@ -92,6 +94,11 @@ def create_router(storage):
             # Status
             status = "enabled" if route.enabled else "disabled"
             
+            # Format scope
+            scope_info = route.scope
+            if route.scope == "proxy" and route.proxy_hostnames:
+                scope_info = f"proxy({','.join(route.proxy_hostnames[:2])}{'...' if len(route.proxy_hostnames) > 2 else ''})"
+            
             rows.append([
                 route.route_id,
                 route.path_pattern,
@@ -100,18 +107,19 @@ def create_router(storage):
                 methods,
                 "regex" if route.is_regex else "prefix",
                 status,
+                scope_info,
                 route.description or ""
             ])
         
         if format == "csv":
             output = io.StringIO()
             writer = csv.writer(output)
-            writer.writerow(["ID", "Path", "Target", "Priority", "Methods", "Type", "Status", "Description"])
+            writer.writerow(["ID", "Path", "Target", "Priority", "Methods", "Type", "Status", "Scope", "Description"])
             writer.writerows(rows)
             return PlainTextResponse(output.getvalue(), media_type="text/csv")
         
         # Default to table format
-        headers = ["ID", "Path", "Target", "Priority", "Methods", "Type", "Status", "Description"]
+        headers = ["ID", "Path", "Target", "Priority", "Methods", "Type", "Status", "Scope", "Description"]
         table = tabulate(rows, headers=headers, tablefmt="grid")
         return PlainTextResponse(table, media_type="text/plain")
     

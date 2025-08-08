@@ -3,7 +3,7 @@
 from .handler import EnhancedProxyHandler
 from .app import create_proxy_app
 from .models import ProxyTarget
-from .routes import Route, RouteTargetType, DEFAULT_ROUTES
+from .routes import Route, RouteTargetType, RouteScope, DEFAULT_ROUTES
 
 # For backward compatibility
 ProxyHandler = EnhancedProxyHandler
@@ -14,6 +14,7 @@ __all__ = [
     'create_proxy_app',
     'Route',
     'RouteTargetType',
+    'RouteScope',
     'DEFAULT_ROUTES',
     'ProxyTarget'
 ]

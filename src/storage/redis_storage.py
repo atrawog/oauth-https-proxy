@@ -617,7 +617,15 @@ class RedisStorage:
             key = f"route:{route_id}"
             value = self.redis_client.get(key)
             if value:
-                return Route.parse_raw(value)
+                try:
+                    return Route.parse_raw(value)
+                except Exception:
+                    # Handle old routes without scope field
+                    route_dict = json.loads(value)
+                    if 'scope' not in route_dict:
+                        route_dict['scope'] = 'global'  # Default to global scope
+                        route_dict['proxy_hostnames'] = []
+                    return Route(**route_dict)
             return None
         except (RedisError, json.JSONDecodeError) as e:
             logger.error(f"Failed to get route: {e}")

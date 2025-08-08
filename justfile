@@ -3153,7 +3153,7 @@ resource-list:
         exit 1
     fi
     
-    response=$(curl -sf -X GET "${BASE_URL}/api/v1/resources" \
+    response=$(curl -sf -X GET "${BASE_URL}/api/v1/resources/" \
         -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
@@ -3544,6 +3544,159 @@ route-delete route-id token="":
         echo "✓ Route '{{route-id}}' deleted successfully"
     else
         echo "Error deleting route: $response" >&2
+        exit 1
+    fi
+
+# Create a global route (applies to all proxies)
+route-create-global path target-type target-value token="" priority="50" methods="*" is-regex="false" description="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    # Create route via API
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Build the JSON payload with scope=global
+    json_payload='{'
+    json_payload="${json_payload}\"path_pattern\": \"{{path}}\","
+    json_payload="${json_payload}\"target_type\": \"{{target-type}}\","
+    json_payload="${json_payload}\"target_value\": \"{{target-value}}\","
+    json_payload="${json_payload}\"priority\": {{priority}},"
+    json_payload="${json_payload}\"is_regex\": {{is-regex}},"
+    json_payload="${json_payload}\"scope\": \"global\","
+    json_payload="${json_payload}\"proxy_hostnames\": [],"
+    json_payload="${json_payload}\"description\": \"{{description}}\""
+    json_payload="${json_payload}}"
+    
+    # Add methods if specified and not "*"
+    if [ -n "{{methods}}" ] && [ "{{methods}}" != "*" ]; then
+        methods_array=$(echo "{{methods}}" | sed 's/,/","/g' | sed 's/^/["/;s/$/"]/')
+        json_payload=$(echo "$json_payload" | jq ". + {methods: $methods_array}")
+    fi
+    
+    json_payload=$(echo "$json_payload" | jq -c '.')
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/routes/" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "✓ Created global route"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+    else
+        echo "Error creating global route: HTTP $http_code" >&2
+        echo "$body" | jq '.' 2>/dev/null || echo "$body" >&2
+        exit 1
+    fi
+
+# Create a proxy-specific route (only applies to specified proxies)
+route-create-proxy path target-type target-value proxies token="" priority="500" methods="*" is-regex="false" description="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    # Default to ADMIN_TOKEN if no token specified
+    if [ -z "{{token}}" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    elif [ "{{token}}" = "ADMIN" ]; then
+        token_value="${ADMIN_TOKEN:-}"
+        if [ -z "$token_value" ]; then
+            echo "Error: ADMIN_TOKEN not set in environment" >&2
+            exit 1
+        fi
+    else
+        token_value="{{token}}"
+    fi
+    
+    # Create route via API
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Convert comma-separated proxies to JSON array
+    proxies_array=$(echo "{{proxies}}" | sed 's/,/","/g' | sed 's/^/["/;s/$/"]/')
+    
+    # Build the JSON payload with scope=proxy
+    json_payload='{'
+    json_payload="${json_payload}\"path_pattern\": \"{{path}}\","
+    json_payload="${json_payload}\"target_type\": \"{{target-type}}\","
+    json_payload="${json_payload}\"target_value\": \"{{target-value}}\","
+    json_payload="${json_payload}\"priority\": {{priority}},"
+    json_payload="${json_payload}\"is_regex\": {{is-regex}},"
+    json_payload="${json_payload}\"scope\": \"proxy\","
+    json_payload="${json_payload}\"proxy_hostnames\": $proxies_array,"
+    json_payload="${json_payload}\"description\": \"{{description}}\""
+    json_payload="${json_payload}}"
+    
+    # Add methods if specified and not "*"
+    if [ -n "{{methods}}" ] && [ "{{methods}}" != "*" ]; then
+        methods_array=$(echo "{{methods}}" | sed 's/,/","/g' | sed 's/^/["/;s/$/"]/')
+        json_payload=$(echo "$json_payload" | jq ". + {methods: $methods_array}")
+    fi
+    
+    json_payload=$(echo "$json_payload" | jq -c '.')
+    
+    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/routes/" \
+        -H "Authorization: Bearer $token_value" \
+        -H "Content-Type: application/json" \
+        -d "$json_payload")
+    
+    http_code=$(echo "$response" | tail -n1)
+    body=$(echo "$response" | head -n -1)
+    
+    if [[ "$http_code" =~ ^2 ]]; then
+        echo "✓ Created proxy-specific route for: {{proxies}}"
+        echo "$body" | jq '.' 2>/dev/null || echo "$body"
+    else
+        echo "Error creating proxy-specific route: HTTP $http_code" >&2
+        echo "$body" | jq '.' 2>/dev/null || echo "$body" >&2
+        exit 1
+    fi
+
+# List routes filtered by scope
+route-list-by-scope scope="all":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    
+    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    
+    # Get all routes (with trailing slash to avoid redirect)
+    response=$(curl -sf "${BASE_URL}/api/v1/routes/" 2>/dev/null || true)
+    
+    if [ -n "$response" ]; then
+        if [ "{{scope}}" = "all" ]; then
+            echo "$response" | jq '.'
+        elif [ "{{scope}}" = "global" ]; then
+            echo "$response" | jq '[.[] | select(.scope == "global")]'
+        elif [ "{{scope}}" = "proxy" ]; then
+            echo "$response" | jq '[.[] | select(.scope == "proxy")]'
+        else
+            echo "Error: Invalid scope '{{scope}}'. Use 'all', 'global', or 'proxy'" >&2
+            exit 1
+        fi
+    else
+        echo "Error: API not available" >&2
         exit 1
     fi
 

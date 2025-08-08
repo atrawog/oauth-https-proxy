@@ -20,7 +20,7 @@ from hypercorn.config import Config as HypercornConfig
 from ..middleware.proxy_protocol_handler import create_proxy_protocol_server
 
 from ..proxy.models import ProxyTarget
-from ..proxy.routes import Route, RouteTargetType
+from ..proxy.routes import Route, RouteTargetType, RouteScope
 from ..proxy.app import create_proxy_app
 from .models import DomainService
 from ..shared.logging import get_logger, configure_logging
@@ -223,21 +223,34 @@ class UnifiedDispatcher:
         )
         
     def get_applicable_routes(self, proxy_config: Optional[ProxyTarget]) -> List[Route]:
-        """Get routes applicable to a specific proxy based on its configuration."""
+        """Get routes applicable to a specific proxy based on its configuration and scope."""
         if not proxy_config:
-            # No proxy config means use all enabled routes (backwards compatibility)
-            return self.routes
+            # No proxy config means use all global routes (backwards compatibility)
+            return [r for r in self.routes if r.scope == RouteScope.GLOBAL]
         
-        # Apply route filtering based on route_mode
+        # Filter routes by scope first
+        applicable_routes = []
+        for route in self.routes:
+            if route.scope == RouteScope.GLOBAL:
+                # Global routes apply to all proxies
+                applicable_routes.append(route)
+            elif route.scope == RouteScope.PROXY and proxy_config.hostname in route.proxy_hostnames:
+                # Proxy-specific routes only apply to listed proxies
+                applicable_routes.append(route)
+        
+        # Sort by priority (higher first) - proxy-specific routes can override global ones
+        applicable_routes.sort(key=lambda r: r.priority, reverse=True)
+        
+        # Apply existing route filtering based on route_mode
         if proxy_config.route_mode == "none":
             # No routes apply
             return []
         elif proxy_config.route_mode == "selective":
             # Only enabled routes apply
-            return [r for r in self.routes if r.route_id in proxy_config.enabled_routes]
+            return [r for r in applicable_routes if r.route_id in proxy_config.enabled_routes]
         else:  # route_mode == "all" (default)
             # All routes except disabled ones
-            return [r for r in self.routes if r.route_id not in proxy_config.disabled_routes]
+            return [r for r in applicable_routes if r.route_id not in proxy_config.disabled_routes]
     
     def register_domain(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
