@@ -196,6 +196,7 @@ environments:
       - pypi: ./mcp-echo-streamablehttp-server-stateful
       - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-validator
+      - pypi: ./oauth-https-proxy-client
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/bzip2-1.0.8-hfdf4475_7.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2025.7.14-hbd8a1cb_0.conda
@@ -372,6 +373,7 @@ environments:
       - pypi: ./mcp-echo-streamablehttp-server-stateful
       - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-validator
+      - pypi: ./oauth-https-proxy-client
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-h99b78c6_7.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2025.7.14-hbd8a1cb_0.conda
@@ -547,6 +549,7 @@ environments:
       - pypi: ./mcp-echo-streamablehttp-server-stateful
       - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-validator
+      - pypi: ./oauth-https-proxy-client
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/win-64/bzip2-1.0.8-h2466b09_7.conda
       - conda: https://conda.anaconda.org/conda-forge/noarch/ca-certificates-2025.7.14-h4c7d964_0.conda
@@ -724,6 +727,7 @@ environments:
       - pypi: ./mcp-echo-streamablehttp-server-stateful
       - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-validator
+      - pypi: ./oauth-https-proxy-client
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
   sha256: fe51de6107f9edc7aa4f786a70f4a883943bc9d39b3bb7307c04c41410990726
@@ -2641,6 +2645,46 @@ packages:
   version: 0.2.22
   sha256: a78a13f5bf5901f5de50580a74058a10734d3e836144cb090f0304ec5deb3df7
   requires_python: '>=3.8'
+- pypi: ./oauth-https-proxy-client
+  name: oauth-https-proxy-client
+  version: 0.1.0
+  sha256: d044aa721fd4d01fe8f88c8eed578ad7aacf9cdd275038d582cb395f6407ea88
+  requires_dist:
+  - click>=8.1.0
+  - httpx>=0.24.0
+  - rich>=13.0.0
+  - python-dotenv>=1.0.0
+  - pyyaml>=6.0
+  - tabulate>=0.9.0
+  - pydantic>=2.0.0
+  - websockets>=11.0
+  - python-dateutil>=2.8.0
+  - typing-extensions>=4.0.0 ; python_full_version < '3.10'
+  - pytest>=7.0.0 ; extra == 'dev'
+  - pytest-cov>=4.0.0 ; extra == 'dev'
+  - pytest-asyncio>=0.21.0 ; extra == 'dev'
+  - pytest-httpx>=0.22.0 ; extra == 'dev'
+  - pytest-mock>=3.10.0 ; extra == 'dev'
+  - black>=23.0.0 ; extra == 'dev'
+  - ruff>=0.1.0 ; extra == 'dev'
+  - mypy>=1.0.0 ; extra == 'dev'
+  - pre-commit>=3.0.0 ; extra == 'dev'
+  - tox>=4.0.0 ; extra == 'dev'
+  - build>=0.10.0 ; extra == 'dev'
+  - twine>=4.0.0 ; extra == 'dev'
+  - sphinx>=6.0.0 ; extra == 'docs'
+  - sphinx-rtd-theme>=1.2.0 ; extra == 'docs'
+  - sphinx-click>=4.4.0 ; extra == 'docs'
+  - autodoc-pydantic>=2.0.0 ; extra == 'docs'
+  - myst-parser>=1.0.0 ; extra == 'docs'
+  - pytest>=7.0.0 ; extra == 'test'
+  - pytest-cov>=4.0.0 ; extra == 'test'
+  - pytest-asyncio>=0.21.0 ; extra == 'test'
+  - pytest-httpx>=0.22.0 ; extra == 'test'
+  - responses>=0.23.0 ; extra == 'test'
+  - faker>=18.0.0 ; extra == 'test'
+  requires_python: '>=3.8'
+  editable: true
 - conda: https://conda.anaconda.org/conda-forge/linux-64/openssl-3.5.1-h7b32b05_0.conda
   sha256: 942347492164190559e995930adcdf84e2fea05307ec8012c02a505f5be87462
   md5: c87df2ab1448ba69169652ab9547082d

@@ -1,0 +1,107 @@
+"""MCP resource management commands."""
+
+import click
+from rich.console import Console
+
+console = Console()
+
+
+@click.group('resource')
+def resource_group():
+    """Manage MCP resources."""
+    pass
+
+
+@resource_group.command('list')
+@click.pass_obj
+def list_resources(ctx):
+    """List all MCP resources."""
+    try:
+        client = ctx.ensure_client()
+        resources = client.get_sync('/api/v1/resources/')
+        ctx.output(resources, title="MCP Resources")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@resource_group.command('register')
+@click.argument('uri')
+@click.argument('proxy-hostname')
+@click.argument('name')
+@click.option('--scopes', default='mcp:read,mcp:write', help='Comma-separated scopes')
+@click.pass_obj
+def register_resource(ctx, uri, proxy_hostname, name, scopes):
+    """Register a new MCP resource."""
+    try:
+        client = ctx.ensure_client()
+        
+        data = {
+            'uri': uri,
+            'name': name,
+            'proxy_target': proxy_hostname,
+            'scopes': scopes.split(','),
+        }
+        
+        result = client.post_sync('/api/v1/resources/', data)
+        
+        console.print(f"[green]MCP resource registered successfully![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@resource_group.command('show')
+@click.argument('uri')
+@click.pass_obj
+def show_resource(ctx, uri):
+    """Show MCP resource details."""
+    try:
+        client = ctx.ensure_client()
+        
+        # URL encode the URI
+        from urllib.parse import quote
+        encoded_uri = quote(uri, safe='')
+        
+        resource = client.get_sync(f'/api/v1/resources/{encoded_uri}')
+        ctx.output(resource, title=f"MCP Resource: {uri}")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@resource_group.command('validate-token')
+@click.argument('uri')
+@click.argument('token')
+@click.pass_obj
+def validate_token(ctx, uri, token):
+    """Validate a token for a specific resource."""
+    try:
+        client = ctx.ensure_client()
+        
+        from urllib.parse import quote
+        encoded_uri = quote(uri, safe='')
+        
+        data = {'token': token}
+        result = client.post_sync(f'/api/v1/resources/{encoded_uri}/validate-token', data)
+        
+        if result.get('valid'):
+            console.print(f"[green]✓ Token is valid for resource: {uri}[/green]")
+        else:
+            console.print(f"[red]✗ Token is invalid for resource: {uri}[/red]")
+        
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@resource_group.command('auto-register')
+@click.pass_obj
+def auto_register_resources(ctx):
+    """Auto-discover and register MCP resources from proxy configurations."""
+    try:
+        client = ctx.ensure_client()
+        result = client.post_sync('/api/v1/resources/auto-register')
+        
+        console.print(f"[green]Auto-registration complete![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)

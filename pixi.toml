@@ -35,9 +35,15 @@ python-on-whales = ">=0.68.0"
 structlog = ">=24.1.0"
 python-json-logger = ">=2.0.7"
 colorama = ">=0.4.6"
+click = ">=8.1.0"
+rich = ">=13.0.0"
+python-dotenv = ">=1.0.0"
+pyyaml = ">=6.0"
+python-dateutil = ">=2.8.0"
 mcp-echo-streamablehttp-server-stateful = { path = "./mcp-echo-streamablehttp-server-stateful", editable = true }
 mcp-echo-streamablehttp-server-stateless = { path = "./mcp-echo-streamablehttp-server-stateless", editable = true }
 mcp-http-validator = { path = "./mcp-http-validator", editable = true }
+oauth-https-proxy-client = { path = "./oauth-https-proxy-client", editable = true }
 
 [tasks]
 test = "pytest tests/ -v"
