@@ -143,21 +143,21 @@ just app-logs-test                            # Test logging system
 
 ### Token Commands
 ```bash
-just token-generate <n> [cert-email]     # Create token with optional cert email
-just token-show <n>                      # Retrieve full token
+just token-generate <name> [cert-email]  # Create token with optional cert email
+just token-show <name>                   # Retrieve full token
 just token-list                          # List all tokens
-just token-delete <n>                    # Delete token + owned resources
-just token-show-certs [n]                # Show certificates by token
-just token-email-update <n> <email>      # Update token cert email
+just token-delete <name>                 # Delete token + owned resources
+just token-show-certs [name]             # Show certificates by token
+just token-email-update <name> <email>   # Update token cert email
 ```
 
 ## Service Architecture
 
 ### Docker Services
-- **api**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API (exposed on ports 80, 443, 9000)
+- **api**: HTTP/HTTPS gateway with integrated OAuth server, certificate manager, and API (exposed on ports 80, 443, 9000, 10001)
 - **redis**: State storage for all services (including PROXY protocol client info)
 
-**Note**: The "api" service handles everything - proxy, OAuth, certificates, and API endpoints. There is no separate "proxy" or "auth" service.
+**Note**: The "api" service handles everything - proxy, OAuth, certificates, and API endpoints. There is no separate "proxy" or "auth" service. Port 10001 provides PROXY protocol support for external load balancers.
 
 ### PROXY Protocol Architecture
 The system supports HAProxy PROXY protocol v1 for preserving real client IPs:
@@ -336,12 +336,45 @@ just test-multi-domain           # Test multi-domain certificates
   "hostname": "api.example.com",
   "target_url": "http://backend:8080",
   "cert_name": "proxy-api-example-com",
+  "owner_token_hash": "sha256:...",
+  "created_by": "token-name",
+  "created_at": "2024-01-15T10:00:00Z",
   "enabled": true,
   "enable_http": true,
   "enable_https": true,
   "preserve_host_header": true,
   "custom_headers": {"X-Custom": "value"},
-  "owner_token_hash": "sha256:..."
+  "custom_response_headers": {"X-Response": "value"},
+  
+  // Authentication configuration
+  "auth_enabled": false,
+  "auth_proxy": null,
+  "auth_mode": "forward",
+  "auth_required_users": null,  // Per-proxy GitHub user allowlist
+  "auth_required_emails": null,
+  "auth_required_groups": null,
+  "auth_allowed_scopes": null,
+  "auth_allowed_audiences": null,
+  "auth_pass_headers": true,
+  "auth_cookie_name": "unified_auth_token",
+  "auth_header_prefix": "X-Auth-",
+  "auth_excluded_paths": null,
+  
+  // Route control
+  "route_mode": "all",
+  "enabled_routes": [],
+  "disabled_routes": [],
+  
+  // MCP resource metadata (optional)
+  "resource_endpoint": null,
+  "resource_scopes": null,
+  "resource_stateful": false,
+  "resource_versions": null,
+  "resource_server_info": null,
+  "resource_override_backend": false,
+  "resource_bearer_methods": null,
+  "resource_documentation_suffix": null,
+  "resource_custom_metadata": null
 }
 ```
 
@@ -384,13 +417,25 @@ When multiple routes match a request, they are evaluated by:
   "auth_enabled": true,
   "auth_proxy": "auth.example.com",
   "auth_mode": "forward",  // forward|redirect|passthrough
-  "auth_required_users": ["alice", "bob"],
+  "auth_required_users": ["alice", "bob"],  // Per-proxy GitHub user allowlist (null=global default, ["*"]=all users)
   "auth_required_emails": ["*@example.com"],
   "auth_allowed_scopes": ["mcp:read", "mcp:write"],  // Optional: restrict token scopes
   "auth_allowed_audiences": ["https://api.example.com"],  // Optional: restrict token audiences
   "auth_pass_headers": true
 }
 ```
+
+#### Per-Proxy User Allowlists
+The `auth_required_users` field controls which GitHub users can authenticate for each proxy:
+- `null` - Use global default from `OAUTH_ALLOWED_GITHUB_USERS` environment variable
+- `["*"]` - Allow all GitHub users to authenticate
+- `["user1", "user2"]` - Allow only specific GitHub users
+
+This provides granular control over authentication at the proxy level. The field is checked at two points:
+1. **During OAuth callback** - GitHub users not in the list are rejected during authentication
+2. **During proxy access** - Token validation ensures the authenticated user is in the allowed list
+
+This dual-check ensures consistent access control throughout the authentication flow.
 
 ### MCP Metadata Configuration
 Enable MCP protocol metadata endpoints for proxies:
@@ -427,7 +472,7 @@ When enabled, the proxy automatically serves:
 ### Proxy Commands
 ```bash
 # Basic proxy operations
-just proxy-create <hostname> <target-url> <token> [staging] [preserve-host] [enable-http] [enable-https]
+just proxy-create <hostname> <target-url> <token> [email] [staging] [preserve-host] [enable-http] [enable-https]
 just proxy-create-group <group> <hostnames> <target-url> <token> [staging] [preserve-host]
 just proxy-update <hostname> <token> [options]
 just proxy-delete <hostname> <token> [delete-cert] [force]
@@ -444,8 +489,16 @@ just proxy-cert-attach <hostname> <cert-name> <token>
 # OAuth proxy authentication
 just proxy-auth-enable <hostname> <token> <auth-proxy> <mode> [allowed-scopes] [allowed-audiences]
 just proxy-auth-disable <hostname> <token>
-just proxy-auth-config <hostname> <token> users="" emails="" groups="" allowed-scopes="" allowed-audiences=""
+just proxy-auth-config <hostname> <token> [users] [emails] [groups] [allowed-scopes] [allowed-audiences]
 just proxy-auth-show <hostname>
+
+# Examples of per-proxy user configuration:
+# Allow specific GitHub users:
+just proxy-auth-config api.example.com $TOKEN "alice,bob,charlie"
+# Allow all GitHub users:
+just proxy-auth-config api.example.com $TOKEN "*"
+# Use global default (OAUTH_ALLOWED_GITHUB_USERS):
+just proxy-auth-config api.example.com $TOKEN ""
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)
 # Note: proxy-mcp-* commands have been renamed to proxy-resource-* for clarity
@@ -477,8 +530,8 @@ just test-auth-flow <hostname>
 # Basic route operations
 just route-list                                      # List all routes in table format
 just route-show <route-id>                          # Show route details in JSON
-just route-create <path> <target-type> <target-value> <token> [priority] [methods] [is-regex] [description]
-just route-delete <route-id> <token>                # Delete a route
+just route-create <path> <target-type> <target-value> [token] [priority] [methods] [is-regex] [description]
+just route-delete <route-id> [token]                # Delete a route
 
 # Scope-based route operations
 just route-create-global <path> <target-type> <target-value> [token] [priority] [methods] [is-regex] [description]  # Create global route
@@ -487,7 +540,7 @@ just route-list-by-scope [scope]                    # List routes filtered by sc
 
 # Service migration utilities
 just migrate-instances-to-services                  # Migrate old instance configs to services
-just migrate-service-names                          # Migrate old service names
+just migrate-service-names [token]                  # Migrate old service names (defaults to ADMIN_TOKEN)
 
 # Testing
 just test-proxy-routes                              # Test proxy route functionality
@@ -535,7 +588,7 @@ The system automatically registers these internal services:
   "networks": ["proxy_network"],
   "labels": {"custom": "label"},
   "expose_ports": true,  // Enable port exposure
-  "port_configs": [  // NEW: Multi-port configuration
+  "port_configs": [  // Multi-port configuration
     {
       "name": "http",
       "host": 8080,
@@ -567,23 +620,26 @@ The system automatically registers these internal services:
 - `POST /api/v1/services/{name}/proxy` - Create proxy for service
 - `POST /api/v1/services/cleanup` - Clean up orphaned services
 
-#### Port Management Endpoints (NEW)
+#### Port Management Endpoints
 - `GET /api/v1/services/{name}/ports` - List all ports for a service
 - `POST /api/v1/services/{name}/ports` - Add a port to existing service
 - `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove a port from service
+- `PUT /api/v1/services/{name}/ports/{port_name}` - Update port configuration
 
-#### Port Allocation Endpoints (NEW)
+#### Port Allocation Endpoints
 - `GET /api/v1/ports/` - List all allocated ports (requires trailing slash)
 - `GET /api/v1/ports/available` - Get available port ranges
+- `POST /api/v1/ports/check` - Check if port is available
 - `POST /api/v1/ports/tokens` - Create port access token
 - `GET /api/v1/ports/tokens` - List port access tokens
-- `DELETE /api/v1/ports/tokens/{name}` - Revoke port access token
+- `DELETE /api/v1/ports/tokens/{token_name}` - Revoke port access token
+- `POST /api/v1/ports/tokens/validate` - Validate port access token
 
 ### Service Commands
 ```bash
 # Docker service management
 just service-create <name> <image> [dockerfile] [port] [token] [memory] [cpu] [auto-proxy]
-just service-create-exposed <name> <image> <port> <bind-address> [token] [memory] [cpu]  # NEW: Create with exposed port
+just service-create-exposed <name> <image> <port> <bind-address> [token] [memory] [cpu]  # Create with exposed port
 just service-list [owned-only] [token]  # List Docker services
 just service-show <name>
 just service-delete <name> [token] [force] [delete-proxy]
@@ -610,25 +666,18 @@ just service-stats <name>
 just service-proxy-create <name> [hostname] [enable-https] [token]
 just service-cleanup
 
-# Port management (NEW)
-just service-port-add <service> <name> <host> <container> [bind] [token] [source-token]
-just service-port-remove <service> <port-name> [token]
-just service-port-list <service>
-just service-port-update <service> <port-name> [options] [token]
-
-# Port allocation management (NEW)
-just port-list
-just port-available
-just port-token-create <name> [services] [ports] [expiry]
-just port-token-list
-just port-token-revoke <name>
+# Port management
+just service-port-add <name> <port> [bind-address] [source-token] [token]
+just service-port-remove <name> <port-name> [token]
+just service-port-list <name>
+just service-port-check <port> [bind-address]
 
 # Testing
 just test-docker-services
 just test-docker-api
 ```
 
-## Port Management Architecture (NEW)
+## Port Management Architecture
 
 ### Overview
 The port management system provides comprehensive control over port allocation and access:
@@ -700,7 +749,7 @@ OAuth is integrated directly into the proxy service:
 - `OAUTH_REFRESH_TOKEN_LIFETIME` - Refresh token lifetime in seconds (default: 31536000 = 1 year)
 - `OAUTH_SESSION_TIMEOUT` - OAuth session timeout in seconds (default: 300 = 5 minutes)
 - `OAUTH_CLIENT_LIFETIME` - OAuth client registration lifetime in seconds (default: 7776000 = 90 days)
-- `OAUTH_ALLOWED_GITHUB_USERS` - Allowed GitHub users (* = all users)
+- `OAUTH_ALLOWED_GITHUB_USERS` - Global default for allowed GitHub users (* = all users, comma-separated list for specific users)
 - `OAUTH_MCP_PROTOCOL_VERSION` - MCP protocol version (default: 2025-06-18)
 
 ### JWT Configuration
@@ -720,7 +769,15 @@ OAuth is integrated directly into the proxy service:
 1. Proxy sends original request to `/verify`
 2. OAuth validates token/cookie
 3. Returns user info or 401
-4. Proxy adds headers: `X-Auth-User-Id`, `X-Auth-User-Name`, etc.
+4. Proxy validates user against `auth_required_users` (if configured)
+5. Proxy adds headers: `X-Auth-User-Id`, `X-Auth-User-Name`, etc.
+
+#### OAuth Authorization Flow with Per-Proxy Users
+1. Proxy redirects to `/authorize` with `proxy_hostname` parameter
+2. OAuth callback checks proxy-specific `auth_required_users`:
+   - If proxy has `auth_required_users` set, use that list
+   - Otherwise, fall back to global `OAUTH_ALLOWED_GITHUB_USERS`
+3. GitHub users are validated during OAuth callback, not just at proxy access
 
 ### MCP Specification Compliance
 
@@ -1033,6 +1090,7 @@ resource:{uri}              # MCP resource configuration
 18. **PROXY Protocol**: TCP-level handler preserves client IPs for both HTTP and HTTPS
 19. **Redis Side Channel**: Connection-based client info storage with 60s TTL
 20. **Unified IP Handling**: Same mechanism works for HTTP header injection and HTTPS
+21. **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist via `auth_required_users`, overriding the global `OAUTH_ALLOWED_GITHUB_USERS` setting
 
 ## MCP 2025-06-18 Compliance Summary
 

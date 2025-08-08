@@ -259,6 +259,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         code_challenge: Optional[str] = Query(None),
         code_challenge_method: Optional[str] = Query("S256"),
         resource: Optional[list[str]] = Query(None),  # RFC 8707 Resource Indicators
+        proxy_hostname: Optional[str] = Query(None),  # Proxy hostname for per-proxy GitHub user allowlists
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """Portal to authentication realm - initiates GitHub OAuth flow"""
@@ -530,6 +531,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method,
             "resources": resource if resource else [],  # RFC 8707 Resource Indicators
+            "proxy_hostname": proxy_hostname,  # Store proxy hostname for per-proxy GitHub user checks
         }
 
         await redis_client.setex(
@@ -684,18 +686,56 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             oauth_github_email=user_info.get("email")
         )
 
-        # Check if user is allowed
-        allowed_users = (
-            settings.allowed_github_users.split(",") if settings.allowed_github_users else []
-        )
-        # If ALLOWED_GITHUB_USERS is set to '*', allow any authenticated GitHub user
+        # Check if user is allowed - first check proxy-specific, then fall back to global
+        proxy_hostname = auth_data.get("proxy_hostname")
+        allowed_users = []
+        
+        # Check if we have a proxy-specific user allowlist
+        if proxy_hostname:
+            from ....storage.redis_storage import RedisStorage
+            storage = RedisStorage(redis_client)
+            proxy_target = storage.get_proxy_target(proxy_hostname)
+            
+            if proxy_target and proxy_target.auth_required_users is not None:
+                # Use proxy-specific list from auth_required_users
+                allowed_users = proxy_target.auth_required_users
+                logger.info(
+                    "Using proxy-specific required users for GitHub authentication",
+                    ip=client_ip,
+                    proxy_hostname=proxy_hostname,
+                    allowed_users=allowed_users
+                )
+            else:
+                # Fall back to global list
+                allowed_users = (
+                    settings.allowed_github_users.split(",") if settings.allowed_github_users else []
+                )
+                logger.info(
+                    "Using global GitHub allowed users (no proxy-specific required users)",
+                    ip=client_ip,
+                    proxy_hostname=proxy_hostname,
+                    allowed_users=allowed_users
+                )
+        else:
+            # No proxy specified, use global list
+            allowed_users = (
+                settings.allowed_github_users.split(",") if settings.allowed_github_users else []
+            )
+            logger.info(
+                "Using global GitHub allowed users (no proxy specified)",
+                ip=client_ip,
+                allowed_users=allowed_users
+            )
+        
+        # If allowed_users is set and doesn't contain '*', check if user is allowed
         if allowed_users and "*" not in allowed_users and user_info["login"] not in allowed_users:
             logger.warning(
                 "GitHub user not in allowed list",
                     ip=client_ip,
                 client_id=auth_data.get('client_id'),
                 github_username=user_info.get("login"),
-                allowed_users=allowed_users
+                allowed_users=allowed_users,
+                proxy_hostname=proxy_hostname
             )
             return RedirectResponse(
                 url=f"{auth_data['redirect_uri']}?error=access_denied&state={auth_data['state']}",  # TODO: Break long line

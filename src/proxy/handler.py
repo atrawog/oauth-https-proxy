@@ -974,9 +974,9 @@ class EnhancedProxyHandler:
                 )
                 
                 if target.auth_mode == "redirect":
-                    # Redirect to auth proxy login
+                    # Redirect to auth proxy login with proxy hostname for per-proxy GitHub user checking
                     return_url = str(request.url)
-                    auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}"
+                    auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}&proxy_hostname={quote(target.hostname)}"
                     logger.info(f"Redirecting to auth login: {auth_login_url}", ip=client_ip, hostname=target.hostname)
                     headers = {}
                     headers = self._add_custom_response_headers(headers, target)

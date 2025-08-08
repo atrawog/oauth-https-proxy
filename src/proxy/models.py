@@ -24,7 +24,7 @@ class ProxyTarget(BaseModel):
     auth_enabled: bool = False
     auth_proxy: Optional[str] = None
     auth_mode: str = "forward"  # forward, redirect, or passthrough
-    auth_required_users: Optional[List[str]] = None
+    auth_required_users: Optional[List[str]] = None  # Required users (None=use global default, ["*"]=all users, ["user1", "user2"]=specific GitHub users)
     auth_required_emails: Optional[List[str]] = None
     auth_required_groups: Optional[List[str]] = None
     auth_allowed_scopes: Optional[List[str]] = None  # Allowed token scopes (if None, any scope is allowed)
@@ -203,7 +203,7 @@ class ProxyAuthConfig(BaseModel):
     enabled: bool = True
     auth_proxy: str
     mode: str = "forward"  # forward, redirect, or passthrough
-    required_users: Optional[List[str]] = None
+    required_users: Optional[List[str]] = None  # Required users (None=use global, ["*"]=all users, ["user1", "user2"]=specific GitHub users)
     required_emails: Optional[List[str]] = None
     required_groups: Optional[List[str]] = None
     allowed_scopes: Optional[List[str]] = None  # Allowed token scopes
