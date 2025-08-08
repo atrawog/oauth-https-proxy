@@ -49,7 +49,7 @@ services:
       - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.41}
       - DOCKER_BUILDKIT=1
       # Test environment variables for internal access
-      - TEST_BASE_URL_INTERNAL=http://localhost
+      - TEST_API_URL_INTERNAL=http://localhost
       - RUNNING_IN_DOCKER=1
     env_file:
       - .env

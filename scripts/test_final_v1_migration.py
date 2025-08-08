@@ -4,7 +4,7 @@
 import os
 import requests
 
-BASE_URL = os.environ.get('BASE_URL', 'http://localhost:80')
+API_URL = os.environ.get('API_URL', 'http://localhost:80')
 TOKEN = os.environ.get('ADMIN_TOKEN', 'acm_rYq7mL2Gzh95YgpIiGxjfig4t4swu37UaWrUgLhbDQY')
 
 print("Final API v1 Migration Test")
@@ -27,7 +27,7 @@ all_pass = True
 for name, method, path in tests:
     try:
         if method == "GET":
-            response = requests.get(f"{BASE_URL}{path}", headers=headers if "api/v1" in path else {})
+            response = requests.get(f"{API_URL}{path}", headers=headers if "api/v1" in path else {})
         
         if response.status_code == 200:
             print(f"✓ {name:<20} {path:<45} OK")
@@ -44,7 +44,7 @@ old_paths = ["/tokens/", "/certificates/", "/proxy/targets/", "/routes/"]
 
 for path in old_paths:
     try:
-        response = requests.get(f"{BASE_URL}{path}", headers=headers)
+        response = requests.get(f"{API_URL}{path}", headers=headers)
         if response.status_code in [404, 502]:
             print(f"✓ {path:<30} Removed ({response.status_code})")
         else:

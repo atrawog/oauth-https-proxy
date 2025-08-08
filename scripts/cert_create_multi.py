@@ -12,9 +12,9 @@ def create_multi_domain_certificate(cert_name: str, domains: str, email: str, to
         print("Error: All parameters are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -43,7 +43,7 @@ def create_multi_domain_certificate(cert_name: str, domains: str, email: str, to
         print("")
         
         response = requests.post(
-            f"{base_url}/certificates/multi-domain",
+            f"{api_url}/certificates/multi-domain",
             json=data,
             headers=headers
         )
@@ -62,7 +62,7 @@ def create_multi_domain_certificate(cert_name: str, domains: str, email: str, to
                     time.sleep(2)
                     
                     status_response = requests.get(
-                        f"{base_url}/certificates/{cert_name}/status",
+                        f"{api_url}/certificates/{cert_name}/status",
                         headers=headers
                     )
                     

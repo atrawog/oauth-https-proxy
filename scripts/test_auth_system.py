@@ -6,7 +6,7 @@ import json
 from httpx import Client
 
 # Environment already loaded by just
-base_url = os.environ.get("BASE_URL", "http://localhost:80")
+api_url = os.environ.get("API_URL", "http://localhost:80")
 admin_token = os.environ.get("ADMIN_TOKEN")
 test_token = os.environ.get("TEST_TOKEN")
 
@@ -24,7 +24,7 @@ if not admin_token or not test_token:
 
 print(f"🔐 Testing Authentication System")
 print(f"=" * 60)
-print(f"Base URL: {base_url}")
+print(f"Base URL: {api_url}")
 print(f"Admin Token: {admin_token[:20]}..." if admin_token else "No admin token!")
 print(f"Test Token: {test_token[:20]}..." if test_token else "No test token!")
 print()
@@ -50,7 +50,7 @@ def test_endpoint(method, path, token=None):
     if token:
         headers["Authorization"] = f"Bearer {token}"
     
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         try:
             response = getattr(client, method.lower())(path, headers=headers)
             return response.status_code, response.text[:100] if response.text else "Empty"
@@ -95,7 +95,7 @@ if admin_token:
     print("-" * 60)
     
     # Get all certificates (admin should see all)
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         response = client.get("/certificates", headers={"Authorization": f"Bearer {admin_token}"})
         if response.status_code == 200:
             certs = response.json()
@@ -104,7 +104,7 @@ if admin_token:
             print(f"❌ Failed to list certificates: {response.status_code}")
     
     # Get token info
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         response = client.get("/token/info", headers={"Authorization": f"Bearer {admin_token}"})
         if response.status_code == 200:
             info = response.json()

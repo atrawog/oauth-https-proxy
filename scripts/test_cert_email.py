@@ -8,9 +8,9 @@ import subprocess
 import httpx
 
 # Load configuration from environment
-base_url = os.getenv('BASE_URL')
-if not base_url:
-    print("Error: BASE_URL not set")
+api_url = os.getenv('API_URL')
+if not api_url:
+    print("Error: API_URL not set")
     sys.exit(1)
 
 staging_url = os.getenv('ACME_STAGING_URL', 'https://acme-staging-v02.api.letsencrypt.org/directory')
@@ -89,7 +89,7 @@ def test_cert_email():
     headers = {"Authorization": f"Bearer {token1}"}
     
     response = httpx.post(
-        f"{base_url}/proxy/targets",
+        f"{api_url}/proxy/targets",
         json=proxy_data,
         headers=headers
     )
@@ -113,7 +113,7 @@ def test_cert_email():
     headers = {"Authorization": f"Bearer {token2}"}
     
     response = httpx.post(
-        f"{base_url}/proxy/targets",
+        f"{api_url}/proxy/targets",
         json=proxy_data,
         headers=headers
     )
@@ -136,7 +136,7 @@ def test_cert_email():
     headers = {"Authorization": f"Bearer {token1}"}
     
     response = httpx.post(
-        f"{base_url}/proxy/targets",
+        f"{api_url}/proxy/targets",
         json=proxy_data,
         headers=headers
     )

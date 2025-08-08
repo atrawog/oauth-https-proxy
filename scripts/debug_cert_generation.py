@@ -9,9 +9,9 @@ import json
 
 def debug_cert_generation():
     """Debug the certificate generation process."""
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return
     
     # Generate a test token
@@ -58,7 +58,7 @@ def debug_cert_generation():
     }
     
     response = requests.post(
-        f"{base_url}/certificates",
+        f"{api_url}/certificates",
         json=cert_data,
         headers=headers
     )
@@ -77,14 +77,14 @@ def debug_cert_generation():
         
         # Check generation status
         status_response = requests.get(
-            f"{base_url}/certificates/{cert_name}/status",
+            f"{api_url}/certificates/{cert_name}/status",
             headers=headers
         )
         print(f"   Attempt {i+1}: {status_response.json()}")
         
         # Also try to get the certificate
         cert_response = requests.get(
-            f"{base_url}/certificates/{cert_name}",
+            f"{api_url}/certificates/{cert_name}",
             headers=headers
         )
         if cert_response.status_code == 200:

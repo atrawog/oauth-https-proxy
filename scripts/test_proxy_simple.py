@@ -9,9 +9,9 @@ import json
 import subprocess
 
 # Load configuration from environment
-base_url = os.getenv('BASE_URL')
-if not base_url:
-    print("Error: BASE_URL not set")
+api_url = os.getenv('API_URL')
+if not api_url:
+    print("Error: API_URL not set")
     sys.exit(1)
 
 staging_url = os.getenv('ACME_STAGING_URL', 'https://acme-staging-v02.api.letsencrypt.org/directory')
@@ -49,7 +49,7 @@ def test_simple_proxy():
     proxy_hostname = "echo.localhost"
     proxy_data = {
         "hostname": proxy_hostname,
-        "target_url": base_url,  # Point to itself for testing
+        "target_url": api_url,  # Point to itself for testing
         "cert_email": "test@example.com",
         "acme_directory_url": staging_url,
         "preserve_host_header": False
@@ -59,7 +59,7 @@ def test_simple_proxy():
     
     try:
         response = httpx.post(
-            f"{base_url}/proxy/targets",
+            f"{api_url}/proxy/targets",
             json=proxy_data,
             headers=headers
         )
@@ -99,7 +99,7 @@ def test_simple_proxy():
         # Test disabled proxy
         print("\n4. Testing disabled proxy...")
         update_response = httpx.put(
-            f"{base_url}/proxy/targets/{proxy_hostname}",
+            f"{api_url}/proxy/targets/{proxy_hostname}",
             json={"enabled": False},
             headers=headers
         )
@@ -125,7 +125,7 @@ def test_simple_proxy():
         # Clean up
         print("\n5. Cleaning up...")
         response = httpx.delete(
-            f"{base_url}/proxy/targets/{proxy_hostname}?delete_certificate=true",
+            f"{api_url}/proxy/targets/{proxy_hostname}?delete_certificate=true",
             headers=headers
         )
         

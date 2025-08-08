@@ -5,14 +5,14 @@
 profiles:
   # Default profile (used when no --profile specified)
   default:
-    base_url: http://localhost:80
+    api_url: http://localhost:80
     token: ${ADMIN_TOKEN}  # Reference environment variable
     output_format: table
     log_level: INFO
     
   # Production environment
   production:
-    base_url: https://api.proxy.example.com
+    api_url: https://api.proxy.example.com
     token: ${PROD_TOKEN}
     output_format: json
     log_level: WARNING
@@ -20,7 +20,7 @@ profiles:
     
   # Development environment
   dev:
-    base_url: http://localhost:9000
+    api_url: http://localhost:9000
     token: dev_token_abc123
     output_format: table
     log_level: DEBUG
@@ -28,7 +28,7 @@ profiles:
     
   # Testing environment
   test:
-    base_url: ${TEST_BASE_URL}
+    api_url: ${TEST_API_URL}
     token: ${TEST_TOKEN}
     output_format: json
     log_level: DEBUG

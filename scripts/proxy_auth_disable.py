@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def disable_proxy_auth(hostname: str, token: str):
     """Disable authentication for a proxy target."""
-    base_url = os.getenv('BASE_URL', 'http://localhost')
+    api_url = os.getenv('API_URL', 'http://localhost')
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -23,7 +23,7 @@ async def disable_proxy_auth(hostname: str, token: str):
     async with httpx.AsyncClient() as client:
         # Send delete request to auth endpoint
         response = await client.delete(
-            f"{base_url}/proxy/targets/{hostname}/auth",
+            f"{api_url}/proxy/targets/{hostname}/auth",
             headers=headers
         )
         

@@ -16,9 +16,9 @@ def create_proxy_group(
     preserve_host: bool = True
 ) -> bool:
     """Create multiple proxy targets sharing a single certificate."""
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -46,7 +46,7 @@ def create_proxy_group(
     
     # Get token info for email
     try:
-        response = requests.get(f"{base_url}/token/info", headers=headers)
+        response = requests.get(f"{api_url}/token/info", headers=headers)
         if response.status_code != 200:
             print("✗ Failed to get token info")
             return False
@@ -67,7 +67,7 @@ def create_proxy_group(
     new_proxies = []
     
     for hostname in hostname_list:
-        response = requests.get(f"{base_url}/proxy/targets/{hostname}", headers=headers)
+        response = requests.get(f"{api_url}/proxy/targets/{hostname}", headers=headers)
         if response.status_code == 200:
             existing_proxies.append(hostname)
             print(f"  ⚠ {hostname} - Already exists")
@@ -94,7 +94,7 @@ def create_proxy_group(
     
     try:
         response = requests.post(
-            f"{base_url}/certificates/multi-domain",
+            f"{api_url}/certificates/multi-domain",
             json=cert_data,
             headers=headers
         )
@@ -108,7 +108,7 @@ def create_proxy_group(
             if response.status_code == 409 or "already exists" in str(error):
                 print(f"  ℹ Certificate '{cert_name}' already exists")
                 # Check if it covers all our domains
-                cert_response = requests.get(f"{base_url}/certificates/{cert_name}", headers=headers)
+                cert_response = requests.get(f"{api_url}/certificates/{cert_name}", headers=headers)
                 if cert_response.status_code == 200:
                     cert = cert_response.json()
                     cert_domains = set(cert.get('domains', []))
@@ -135,7 +135,7 @@ def create_proxy_group(
     for attempt in range(max_attempts):
         time.sleep(2)
         
-        response = requests.get(f"{base_url}/certificates/{cert_name}/status", headers=headers)
+        response = requests.get(f"{api_url}/certificates/{cert_name}/status", headers=headers)
         if response.status_code == 200:
             status_data = response.json()
             status = status_data.get('status', 'unknown')
@@ -152,7 +152,7 @@ def create_proxy_group(
     
     if not cert_ready:
         # Check if certificate exists anyway (might be from before)
-        cert_response = requests.get(f"{base_url}/certificates/{cert_name}", headers=headers)
+        cert_response = requests.get(f"{api_url}/certificates/{cert_name}", headers=headers)
         if cert_response.status_code == 200:
             print("  ✓ Using existing certificate")
             cert_ready = True
@@ -182,7 +182,7 @@ def create_proxy_group(
         
         try:
             response = requests.post(
-                f"{base_url}/proxy/targets",
+                f"{api_url}/proxy/targets",
                 json=proxy_data,
                 headers=headers
             )
@@ -207,7 +207,7 @@ def create_proxy_group(
         
         try:
             response = requests.put(
-                f"{base_url}/proxy/targets/{hostname}",
+                f"{api_url}/proxy/targets/{hostname}",
                 json=update_data,
                 headers=headers
             )

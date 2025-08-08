@@ -19,7 +19,7 @@ with open(".env", "r") as f:
         elif line.startswith("TEST_TOKEN="):
             test_token = line.strip().split("=", 1)[1]
 
-base_url = "http://localhost:80"
+api_url = "http://localhost:80"
 
 print("🔐 Comprehensive Authentication System Test")
 print("=" * 60)
@@ -50,7 +50,7 @@ for category, endpoints in tests.items():
     print("-" * 60)
     
     for method, path, expected_codes in endpoints:
-        with Client(base_url=base_url) as client:
+        with Client(api_url=api_url) as client:
             response = getattr(client, method.lower())(path)
             status_ok = response.status_code in expected_codes
             status_icon = "✅" if status_ok else "❌"
@@ -63,7 +63,7 @@ if admin_token:
     
     headers = {"Authorization": f"Bearer {admin_token}"}
     
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         # Get token info
         resp = client.get("/token/info", headers=headers)
         if resp.status_code == 200:
@@ -95,7 +95,7 @@ if test_token:
     
     headers = {"Authorization": f"Bearer {test_token}"}
     
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         # Try to get token info
         resp = client.get("/token/info", headers=headers)
         if resp.status_code == 401:

@@ -11,7 +11,7 @@ def test_fetcher_mcp():
     session_id = str(uuid.uuid4())
     
     # Base URL
-    base_url = "http://fetcher-mcp:3000/mcp"
+    api_url = "http://fetcher-mcp:3000/mcp"
     
     # Headers with session ID
     headers = {
@@ -39,14 +39,14 @@ def test_fetcher_mcp():
     }
     
     print("Testing fetcher MCP endpoint...")
-    print(f"URL: {base_url}")
+    print(f"URL: {api_url}")
     print(f"Session ID: {session_id}")
     print()
     
     # Send initialize request
     print("1. Sending initialize request...")
     try:
-        resp = requests.post(base_url, json=init_request, headers=headers)
+        resp = requests.post(api_url, json=init_request, headers=headers)
         print(f"   Status: {resp.status_code}")
         print(f"   Response: {resp.text[:200]}...")
         
@@ -71,7 +71,7 @@ def test_fetcher_mcp():
                 "id": 2
             }
             
-            resp = requests.post(base_url, json=list_tools, headers=headers)
+            resp = requests.post(api_url, json=list_tools, headers=headers)
             print(f"   Status: {resp.status_code}")
             
             if resp.status_code == 200:

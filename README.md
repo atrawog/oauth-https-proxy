@@ -278,7 +278,7 @@ Key configuration in `.env`:
 # Domain Configuration
 BASE_DOMAIN=yourdomain.com          # Your base domain
 ADMIN_EMAIL=admin@yourdomain.com   # Email for certificates
-BASE_URL=http://localhost:9000      # Base URL for API endpoints
+API_URL=http://localhost:9000       # Base URL for API endpoints
 
 # Security
 REDIS_PASSWORD=<strong-password>    # Redis password (required)

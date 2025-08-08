@@ -12,13 +12,13 @@ def renew_certificate(cert_name: str, token: str, force: bool = False):
         print("Error: Certificate name and token are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
 
     
-    if not base_url:
+    if not api_url:
 
     
-        print("Error: BASE_URL must be set in .env")
+        print("Error: API_URL must be set in .env")
 
     
         return False
@@ -27,7 +27,7 @@ def renew_certificate(cert_name: str, token: str, force: bool = False):
     try:
         # First check the certificate
         response = requests.get(
-            f"{base_url}/certificates/{cert_name}",
+            f"{api_url}/certificates/{cert_name}",
             headers=headers
         )
         
@@ -59,7 +59,7 @@ def renew_certificate(cert_name: str, token: str, force: bool = False):
         print(f"  Domains: {', '.join(cert.get('domains', []))}")
         
         response = requests.post(
-            f"{base_url}/certificates/{cert_name}/renew",
+            f"{api_url}/certificates/{cert_name}/renew",
             headers=headers
         )
         

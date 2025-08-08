@@ -8,10 +8,10 @@ from dotenv import load_dotenv
 # Load environment variables
 load_dotenv()
 
-base_url = os.getenv("BASE_URL", "http://localhost")
+api_url = os.getenv("API_URL", "http://localhost")
 admin_token = os.getenv("ADMIN_TOKEN")
 
-print(f"Base URL: {base_url}")
+print(f"Base URL: {api_url}")
 print(f"Admin token: {admin_token[:20]}..." if admin_token else "No admin token")
 
 # Create a test token
@@ -20,7 +20,7 @@ token_email = "debug@test.com"
 
 print(f"\nCreating token '{token_name}'...")
 response = httpx.post(
-    f"{base_url}/tokens/",
+    f"{api_url}/tokens/",
     headers={"Authorization": f"Bearer {admin_token}"},
     json={"name": token_name, "cert_email": token_email}
 )
@@ -34,7 +34,7 @@ if response.status_code == 200:
     # Test the new token
     print(f"\nTesting new token authentication...")
     test_response = httpx.get(
-        f"{base_url}/tokens/info",
+        f"{api_url}/tokens/info",
         headers={"Authorization": f"Bearer {new_token}"}
     )
     print(f"Auth test status: {test_response.status_code}")
@@ -46,7 +46,7 @@ if response.status_code == 200:
     # List tokens
     print(f"\nListing all tokens...")
     list_response = httpx.get(
-        f"{base_url}/tokens/",
+        f"{api_url}/tokens/",
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     print(f"List status: {list_response.status_code}")
@@ -59,7 +59,7 @@ if response.status_code == 200:
     # Clean up
     print(f"\nCleaning up...")
     delete_response = httpx.delete(
-        f"{base_url}/tokens/{token_name}",
+        f"{api_url}/tokens/{token_name}",
         headers={"Authorization": f"Bearer {admin_token}"}
     )
     print(f"Delete status: {delete_response.status_code}")

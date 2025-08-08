@@ -8,9 +8,9 @@ import httpx
 import json
 
 # Load configuration from environment
-base_url = os.getenv('BASE_URL')
-if not base_url:
-    print("Error: BASE_URL not set")
+api_url = os.getenv('API_URL')
+if not api_url:
+    print("Error: API_URL not set")
     sys.exit(1)
 
 target_url = os.getenv('TEST_PROXY_TARGET_URL', 'https://example.com')
@@ -61,7 +61,7 @@ def test_proxy_basic():
     
     try:
         response = httpx.post(
-            f"{base_url}/proxy/targets",
+            f"{api_url}/proxy/targets",
             json=proxy_data,
             headers=headers
         )
@@ -77,7 +77,7 @@ def test_proxy_basic():
         
         # List proxy targets
         print("\n3. Listing proxy targets...")
-        response = httpx.get(f"{base_url}/proxy/targets", headers=headers)
+        response = httpx.get(f"{api_url}/proxy/targets", headers=headers)
         
         if response.status_code != 200:
             print(f"Failed to list proxy targets: {response.status_code}")
@@ -104,7 +104,7 @@ def test_proxy_basic():
         }
         
         response = httpx.put(
-            f"{base_url}/proxy/targets/{proxy_data['hostname']}",
+            f"{api_url}/proxy/targets/{proxy_data['hostname']}",
             json=update_data,
             headers=headers
         )
@@ -118,7 +118,7 @@ def test_proxy_basic():
         # Delete proxy target
         print("\n5. Deleting proxy target...")
         response = httpx.delete(
-            f"{base_url}/proxy/targets/{proxy_data['hostname']}?delete_certificate=true",
+            f"{api_url}/proxy/targets/{proxy_data['hostname']}?delete_certificate=true",
             headers=headers
         )
         

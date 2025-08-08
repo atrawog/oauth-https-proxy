@@ -7,15 +7,15 @@ import requests
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from scripts.test_utils import get_api_base_url
+from scripts.test_utils import get_api_api_url
 
 
 def create_route(path: str, target_type: str, target_value: str, token: str, 
                  priority: str = "50", methods: str = "", is_regex: str = "false", 
                  description: str = ""):
     """Create a new route."""
-    base_url = get_api_base_url()
-    if not base_url:
+    api_url = get_api_api_url()
+    if not api_url:
         print("Error: Unable to determine API base URL")
         return False
     
@@ -47,7 +47,7 @@ def create_route(path: str, target_type: str, target_value: str, token: str,
     }
     
     try:
-        response = requests.post(f"{base_url}/api/v1/routes/", json=data, headers=headers, timeout=10)
+        response = requests.post(f"{api_url}/api/v1/routes/", json=data, headers=headers, timeout=10)
         response.raise_for_status()
         
         route = response.json()

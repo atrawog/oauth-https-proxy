@@ -14,8 +14,8 @@ def fix_file(filepath):
     
     # Fix os.getenv with defaults
     patterns = [
-        (r"os\.getenv\('BASE_URL', 'http://localhost:80'\)", 
-         "os.getenv('BASE_URL')"),
+        (r"os\.getenv\('API_URL', 'http://localhost:80'\)", 
+         "os.getenv('API_URL')"),
         (r"os\.getenv\('REDIS_URL', 'redis://localhost:6379/0'\)", 
          "os.getenv('REDIS_URL')"),
         (r"os\.getenv\('HTTP_PORT', '80'\)", 
@@ -32,14 +32,14 @@ def fix_file(filepath):
         content = re.sub(pattern, replacement, content)
     
     # Add check for required env vars after os.getenv calls
-    if "os.getenv('BASE_URL')" in content and "if not base_url:" not in content:
-        # Find where base_url is assigned
-        match = re.search(r"(\s*)base_url = os\.getenv\('BASE_URL'\)", content)
+    if "os.getenv('API_URL')" in content and "if not api_url:" not in content:
+        # Find where api_url is assigned
+        match = re.search(r"(\s*)api_url = os\.getenv\('API_URL'\)", content)
         if match:
             indent = match.group(1)
-            check = f"\n{indent}if not base_url:\n{indent}    print(\"Error: BASE_URL must be set in .env\")\n{indent}    return False"
+            check = f"\n{indent}if not api_url:\n{indent}    print(\"Error: API_URL must be set in .env\")\n{indent}    return False"
             content = re.sub(
-                r"(base_url = os\.getenv\('BASE_URL'\))",
+                r"(api_url = os\.getenv\('API_URL'\))",
                 r"\1" + check,
                 content
             )

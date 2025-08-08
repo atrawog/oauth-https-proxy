@@ -13,7 +13,7 @@ sys.path.insert(0, '/app')
 from src.storage import RedisStorage
 
 # Configuration
-BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:80")
+API_URL = os.getenv("TEST_API_URL", "http://localhost:80")
 
 # Initialize storage
 storage = RedisStorage(os.getenv("REDIS_URL"))
@@ -41,7 +41,7 @@ def test_email_settings(token_name: str):
     # Test 1: Get token info
     print("\n1. Testing /token/info endpoint...")
     try:
-        response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+        response = requests.get(f"{API_URL}/token/info", headers=headers)
         if response.status_code == 200:
             info = response.json()
             print(f"✅ Token info retrieved:")
@@ -58,7 +58,7 @@ def test_email_settings(token_name: str):
     print(f"\n2. Testing email update to: {new_email}")
     try:
         response = requests.put(
-            f"{BASE_URL}/token/email",
+            f"{API_URL}/token/email",
             headers=headers,
             json={"cert_email": new_email}
         )
@@ -73,7 +73,7 @@ def test_email_settings(token_name: str):
     # Test 3: Verify update
     print("\n3. Verifying email update...")
     try:
-        response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+        response = requests.get(f"{API_URL}/token/info", headers=headers)
         if response.status_code == 200:
             info = response.json()
             if info.get('cert_email') == new_email:
@@ -90,7 +90,7 @@ def test_email_settings(token_name: str):
     hostname = f"test-{int(time.time())}.example.com"
     try:
         response = requests.post(
-            f"{BASE_URL}/api/v1/proxy/targets",
+            f"{API_URL}/api/v1/proxy/targets",
             headers=headers,
             json={
                 "hostname": hostname,
@@ -106,7 +106,7 @@ def test_email_settings(token_name: str):
             # Cleanup
             print("\n   Cleaning up proxy...")
             delete_response = requests.delete(
-                f"{BASE_URL}/api/v1/proxy/targets/{hostname}",
+                f"{API_URL}/api/v1/proxy/targets/{hostname}",
                 headers=headers,
                 params={"delete_certificate": "true"}
             )

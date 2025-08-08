@@ -16,7 +16,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 async def configure_proxy_auth(hostname: str, token: str, users: Optional[List[str]], 
                               emails: Optional[List[str]], groups: Optional[List[str]]):
     """Configure authentication requirements for a proxy target."""
-    base_url = os.getenv('BASE_URL', 'http://localhost')
+    api_url = os.getenv('API_URL', 'http://localhost')
     
     headers = {
         "Authorization": f"Bearer {token}",
@@ -26,7 +26,7 @@ async def configure_proxy_auth(hostname: str, token: str, users: Optional[List[s
     async with httpx.AsyncClient() as client:
         # First get current auth config
         response = await client.get(
-            f"{base_url}/proxy/targets/{hostname}/auth",
+            f"{api_url}/proxy/targets/{hostname}/auth",
             headers=headers
         )
         
@@ -64,7 +64,7 @@ async def configure_proxy_auth(hostname: str, token: str, users: Optional[List[s
         
         # Send updated configuration
         response = await client.post(
-            f"{base_url}/proxy/targets/{hostname}/auth",
+            f"{api_url}/proxy/targets/{hostname}/auth",
             json=config,
             headers=headers
         )

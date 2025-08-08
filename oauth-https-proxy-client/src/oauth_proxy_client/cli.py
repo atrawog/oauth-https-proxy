@@ -107,7 +107,7 @@ class Context:
 @click.group()
 @click.option(
     '--base-url',
-    envvar='BASE_URL',
+    envvar='API_URL',
     default='http://localhost:80',
     help='API base URL'
 )
@@ -149,14 +149,14 @@ class Context:
 )
 @click.version_option(version='0.1.0', prog_name='oauth-https-proxy-client')
 @click.pass_context
-def cli(ctx, base_url, token, output_format, profile, config_file, timeout, debug):
+def cli(ctx, api_url, token, output_format, profile, config_file, timeout, debug):
     """OAuth HTTPS Proxy Client - Manage your proxy infrastructure.
     
     This CLI provides comprehensive management of OAuth HTTPS proxy services,
     including certificates, routing, services, and authentication.
     
     Environment variables:
-        BASE_URL: API endpoint (default: http://localhost:80)
+        API_URL: API endpoint (default: http://localhost:80)
         ADMIN_TOKEN or TOKEN: Authentication token
         LOG_LEVEL: Logging level (DEBUG, INFO, WARNING, ERROR)
     
@@ -191,8 +191,8 @@ def cli(ctx, base_url, token, output_format, profile, config_file, timeout, debu
             context.config = Config.from_env()
     
     # Override with command-line options
-    if base_url:
-        context.config.base_url = base_url
+    if api_url:
+        context.config.api_url = api_url
     if token:
         context.config.token = token
     if timeout:

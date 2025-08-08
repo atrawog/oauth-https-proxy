@@ -15,8 +15,8 @@ def main():
         "ACME_STAGING_URL",
         "TEST_DOMAIN",
         "TEST_EMAIL",
-        "TEST_BASE_URL",
-        "BASE_URL"
+        "TEST_API_URL",
+        "API_URL"
     ]
     
     all_set = True

@@ -27,12 +27,12 @@ class Config:
     """
     
     # Primary Configuration (matching justfile)
-    base_url: str = field(default_factory=lambda: os.getenv('BASE_URL', 'http://localhost:80'))
+    api_url: str = field(default_factory=lambda: os.getenv('API_URL', 'http://localhost:80'))
     token: Optional[str] = field(default=None)
     
     # Testing Configuration
     test_token: Optional[str] = field(default_factory=lambda: os.getenv('TEST_TOKEN'))
-    test_base_url: str = field(default_factory=lambda: os.getenv('TEST_BASE_URL', 'https://test.atradev.org'))
+    test_api_url: str = field(default_factory=lambda: os.getenv('TEST_API_URL', 'https://test.atradev.org'))
     test_domain_base: str = field(default_factory=lambda: os.getenv('TEST_DOMAIN_BASE', 'atradev.org'))
     
     # Timeout Configuration (matching proxy behavior)
@@ -91,7 +91,7 @@ class Config:
             self.token = (
                 os.getenv('TOKEN') or 
                 os.getenv('ADMIN_TOKEN') or
-                (self.test_token if self.base_url == self.test_base_url else None)
+                (self.test_token if self.api_url == self.test_api_url else None)
             )
         
         # Load configuration file if specified
@@ -199,15 +199,15 @@ class Config:
         if not self.token:
             warnings.append("No authentication token configured (set TOKEN or ADMIN_TOKEN)")
         
-        if not self.base_url:
-            warnings.append("No base URL configured (set BASE_URL)")
+        if not self.api_url:
+            warnings.append("No base URL configured (set API_URL)")
         
         # Validate URL format
-        if self.base_url and not (
-            self.base_url.startswith('http://') or 
-            self.base_url.startswith('https://')
+        if self.api_url and not (
+            self.api_url.startswith('http://') or 
+            self.api_url.startswith('https://')
         ):
-            warnings.append(f"Invalid base URL format: {self.base_url}")
+            warnings.append(f"Invalid base URL format: {self.api_url}")
         
         return warnings
     
@@ -218,9 +218,9 @@ class Config:
             Dictionary representation of configuration
         """
         return {
-            'base_url': self.base_url,
+            'api_url': self.api_url,
             'token': '***' if self.token else None,  # Mask token
-            'test_base_url': self.test_base_url,
+            'test_api_url': self.test_api_url,
             'test_domain_base': self.test_domain_base,
             'request_timeout': self.request_timeout,
             'connect_timeout': self.connect_timeout,
@@ -257,10 +257,10 @@ class Config:
     
     def use_test_config(self):
         """Switch to test configuration."""
-        self.base_url = self.test_base_url
+        self.api_url = self.test_api_url
         if self.test_token:
             self.token = self.test_token
     
     def __repr__(self) -> str:
         """String representation of config."""
-        return f"Config(profile={self.profile}, base_url={self.base_url})"
+        return f"Config(profile={self.profile}, api_url={self.api_url})"

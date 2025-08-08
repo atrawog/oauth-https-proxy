@@ -12,7 +12,7 @@ class Config:
     HTTP_PORT: int = int(os.getenv('HTTP_PORT', '80'))
     HTTPS_PORT: int = int(os.getenv('HTTPS_PORT', '443'))
     SERVER_HOST: str = os.getenv('SERVER_HOST', '0.0.0.0')
-    BASE_URL: str = os.getenv('BASE_URL', 'http://localhost:80')
+    API_URL: str = os.getenv('API_URL', 'http://localhost:80')
     
     # Redis Configuration
     REDIS_URL: str = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
@@ -86,7 +86,7 @@ class Config:
     TEST_DOMAIN: Optional[str] = os.getenv('TEST_DOMAIN')
     TEST_EMAIL: Optional[str] = os.getenv('TEST_EMAIL')
     TEST_DOMAIN_BASE: Optional[str] = os.getenv('TEST_DOMAIN_BASE')
-    TEST_BASE_URL: str = os.getenv('TEST_BASE_URL', 'http://localhost:80')
+    TEST_API_URL: str = os.getenv('TEST_API_URL', 'http://localhost:80')
     TEST_PROXY_TARGET_URL: str = os.getenv('TEST_PROXY_TARGET_URL', 'https://example.com')
     TEST_TOKEN: Optional[str] = os.getenv('TEST_TOKEN')
     

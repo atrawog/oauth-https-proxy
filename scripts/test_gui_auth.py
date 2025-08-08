@@ -7,7 +7,7 @@ import requests
 import json
 
 # API endpoint
-BASE_URL = os.environ.get("TEST_BASE_URL", "http://localhost")
+API_URL = os.environ.get("TEST_API_URL", "http://localhost")
 
 # Tokens to test
 ADMIN_TOKEN = "acm_PikI3FoqDXghOEHdP9lf9wcf0zlEdK2AV9DvPinF-Us"
@@ -21,7 +21,7 @@ def test_token_visibility(token_name, token):
     
     # Test /certificates
     try:
-        resp = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
+        resp = requests.get(f"{API_URL}/api/v1/certificates", headers=headers)
         resp.raise_for_status()
         certs = resp.json()
         print(f"Certificates visible: {len(certs)}")
@@ -32,7 +32,7 @@ def test_token_visibility(token_name, token):
     
     # Test /proxy/targets
     try:
-        resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
+        resp = requests.get(f"{API_URL}/api/v1/proxy/targets", headers=headers)
         resp.raise_for_status()
         proxies = resp.json()
         print(f"Proxy targets visible: {len(proxies)}")
@@ -43,7 +43,7 @@ def test_token_visibility(token_name, token):
     
     # Test /routes
     try:
-        resp = requests.get(f"{BASE_URL}/api/v1/routes", headers=headers)
+        resp = requests.get(f"{API_URL}/api/v1/routes", headers=headers)
         resp.raise_for_status()
         routes = resp.json()
         print(f"Routes visible: {len(routes)}")

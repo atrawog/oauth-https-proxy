@@ -26,9 +26,9 @@ def check_domain_match(hostname: str, cert_domains: list) -> str:
 
 def show_certificate_coverage(cert_name: str, token: str = None):
     """Show which proxy targets can use a certificate."""
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {}
@@ -40,7 +40,7 @@ def show_certificate_coverage(cert_name: str, token: str = None):
         print(f"Checking certificate: {cert_name}")
         
         cert_response = requests.get(
-            f"{base_url}/certificates/{cert_name}",
+            f"{api_url}/certificates/{cert_name}",
             headers=headers
         )
         
@@ -61,7 +61,7 @@ def show_certificate_coverage(cert_name: str, token: str = None):
         
         # Get all proxy targets
         proxy_response = requests.get(
-            f"{base_url}/proxy/targets",
+            f"{api_url}/proxy/targets",
             headers=headers
         )
         

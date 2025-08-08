@@ -27,13 +27,13 @@ def main():
     token = sys.argv[1] if len(sys.argv) > 1 else None
     
     # Create client
-    base_url = os.getenv("TEST_BASE_URL")
-    assert base_url, "TEST_BASE_URL not set"
+    api_url = os.getenv("TEST_API_URL")
+    assert api_url, "TEST_API_URL not set"
     
     cert_name = 'test-manual'
     cert_created = False
     
-    with httpx.Client(base_url=base_url) as client:
+    with httpx.Client(api_url=api_url) as client:
         # Add auth if token provided
         if token:
             client.headers["Authorization"] = f"Bearer {token}"

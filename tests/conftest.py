@@ -12,12 +12,12 @@ from typing import Generator
 if os.path.exists('/.dockerenv') or os.getenv('RUNNING_IN_DOCKER'):
     # Inside container - use internal proxy hostname
     # The proxy service is accessible as 'proxy' on the Docker network
-    TEST_BASE_URL = os.getenv("TEST_BASE_URL_INTERNAL", "http://proxy")
-    print(f"Running tests inside Docker, using internal URL: {TEST_BASE_URL}")
+    TEST_API_URL = os.getenv("TEST_API_URL_INTERNAL", "http://proxy")
+    print(f"Running tests inside Docker, using internal URL: {TEST_API_URL}")
 else:
     # Outside container - use configured URL
-    TEST_BASE_URL = os.getenv("TEST_BASE_URL")  # From .env via just
-    print(f"Running tests outside Docker, using external URL: {TEST_BASE_URL}")
+    TEST_API_URL = os.getenv("TEST_API_URL")  # From .env via just
+    print(f"Running tests outside Docker, using external URL: {TEST_API_URL}")
 
 REDIS_URL = os.getenv("REDIS_URL")  # From .env via just - use same Redis as app!
 ACME_STAGING_URL = os.getenv("ACME_STAGING_URL")  # From .env via just
@@ -55,7 +55,7 @@ def http_client() -> Generator[httpx.Client, None, None]:
     verify_ssl = False
     
     # For internal Docker access, we need to handle both the base URL and proxy targets
-    with httpx.Client(base_url=TEST_BASE_URL, timeout=30.0, verify=verify_ssl) as client:
+    with httpx.Client(api_url=TEST_API_URL, timeout=30.0, verify=verify_ssl) as client:
         # Wait for service to be ready
         max_retries = 30
         for i in range(max_retries):

@@ -4,14 +4,14 @@
 import requests
 import os
 
-BASE_URL = "http://localhost"
+API_URL = "http://localhost"
 
 def test_gui_login_and_display():
     """Test GUI login and what it displays."""
     
     # Test 1: Check if GUI is accessible
     print("1. Testing GUI accessibility...")
-    response = requests.get(BASE_URL)
+    response = requests.get(API_URL)
     print(f"   - Status: {response.status_code}")
     print(f"   - Title present: {'MCP Proxy Manager' in response.text}")
     print(f"   - Login form present: {'Bearer Token:' in response.text}")
@@ -22,7 +22,7 @@ def test_gui_login_and_display():
     headers = {"Authorization": f"Bearer {admin_token}"}
     
     # Get token info
-    response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+    response = requests.get(f"{API_URL}/token/info", headers=headers)
     print(f"   - Token info status: {response.status_code}")
     if response.status_code == 200:
         info = response.json()
@@ -30,21 +30,21 @@ def test_gui_login_and_display():
         print(f"   - Token email: {info.get('cert_email')}")
     
     # Get certificates
-    response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
+    response = requests.get(f"{API_URL}/api/v1/certificates", headers=headers)
     print(f"\n   - Certificates endpoint status: {response.status_code}")
     if response.status_code == 200:
         certs = response.json()
         print(f"   - Number of certificates: {len(certs)}")
         
     # Get proxies
-    response = requests.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
+    response = requests.get(f"{API_URL}/api/v1/proxy/targets", headers=headers)
     print(f"\n   - Proxies endpoint status: {response.status_code}")
     if response.status_code == 200:
         proxies = response.json()
         print(f"   - Number of proxies: {len(proxies)}")
         
     # Get routes
-    response = requests.get(f"{BASE_URL}/api/v1/routes", headers=headers)
+    response = requests.get(f"{API_URL}/api/v1/routes", headers=headers)
     print(f"\n   - Routes endpoint status: {response.status_code}")
     if response.status_code == 200:
         routes = response.json()
@@ -52,7 +52,7 @@ def test_gui_login_and_display():
         
     # Test 3: Check ownership banner elements
     print(f"\n3. Checking GUI ownership elements...")
-    response = requests.get(BASE_URL)
+    response = requests.get(API_URL)
     print(f"   - Ownership banner HTML present: {'ownership-banner' in response.text}")
     print(f"   - Ownership message span present: {'ownership-message' in response.text}")
     print(f"   - Info banner CSS present: {'info-banner' in response.text}")
@@ -63,14 +63,14 @@ def test_gui_login_and_display():
     headers = {"Authorization": f"Bearer {test_token}"}
     
     # Get token info
-    response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+    response = requests.get(f"{API_URL}/token/info", headers=headers)
     print(f"   - Token info status: {response.status_code}")
     if response.status_code == 200:
         info = response.json()
         print(f"   - Token name: {info.get('name')}")
         
     # Get certificates
-    response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
+    response = requests.get(f"{API_URL}/api/v1/certificates", headers=headers)
     print(f"\n   - Certificates endpoint status: {response.status_code}")
     if response.status_code == 200:
         certs = response.json()

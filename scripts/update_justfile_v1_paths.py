@@ -13,31 +13,31 @@ replacements_made = 0
 # Define all endpoint replacements with more specific patterns
 replacements = [
     # Token endpoints - match the exact patterns from justfile
-    (r'"\$\{BASE_URL\}/tokens/generate"', '"${BASE_URL}/api/v1/tokens/generate"'),
-    (r'"\$\{BASE_URL\}/tokens/formatted"', '"${BASE_URL}/api/v1/tokens/formatted"'),
-    (r'"\$\{BASE_URL\}/tokens/email"', '"${BASE_URL}/api/v1/tokens/email"'),
-    (r'"\$\{BASE_URL\}/tokens/info"', '"${BASE_URL}/api/v1/tokens/info"'),
+    (r'"\$\{API_URL\}/tokens/generate"', '"${API_URL}/api/v1/tokens/generate"'),
+    (r'"\$\{API_URL\}/tokens/formatted"', '"${API_URL}/api/v1/tokens/formatted"'),
+    (r'"\$\{API_URL\}/tokens/email"', '"${API_URL}/api/v1/tokens/email"'),
+    (r'"\$\{API_URL\}/tokens/info"', '"${API_URL}/api/v1/tokens/info"'),
     
     # Certificate endpoints
-    (r'"\$\{BASE_URL\}/certificates/"', '"${BASE_URL}/api/v1/certificates/"'),
-    (r'"\$\{BASE_URL\}/certificates/\{\{name\}\}"', '"${BASE_URL}/api/v1/certificates/{{name}}"'),
+    (r'"\$\{API_URL\}/certificates/"', '"${API_URL}/api/v1/certificates/"'),
+    (r'"\$\{API_URL\}/certificates/\{\{name\}\}"', '"${API_URL}/api/v1/certificates/{{name}}"'),
     
     # Proxy endpoints
-    (r'"\$\{BASE_URL\}/proxy/targets/"', '"${BASE_URL}/api/v1/proxy/targets/"'),
-    (r'"\$\{BASE_URL\}/proxy/targets/formatted"', '"${BASE_URL}/api/v1/proxy/targets/formatted"'),
-    (r'"\$\{BASE_URL\}/proxy/targets/\{\{hostname\}\}', '"${BASE_URL}/api/v1/proxy/targets/{{hostname}}'),
+    (r'"\$\{API_URL\}/proxy/targets/"', '"${API_URL}/api/v1/proxy/targets/"'),
+    (r'"\$\{API_URL\}/proxy/targets/formatted"', '"${API_URL}/api/v1/proxy/targets/formatted"'),
+    (r'"\$\{API_URL\}/proxy/targets/\{\{hostname\}\}', '"${API_URL}/api/v1/proxy/targets/{{hostname}}'),
     
     # Route endpoints
-    (r'"\$\{BASE_URL\}/routes/formatted"', '"${BASE_URL}/api/v1/routes/formatted"'),
+    (r'"\$\{API_URL\}/routes/formatted"', '"${API_URL}/api/v1/routes/formatted"'),
     (r'"http://localhost:9000/routes/"', '"http://localhost:9000/api/v1/routes/"'),
     
     # Instance endpoints
-    (r'"\$\{BASE_URL\}/instances/"', '"${BASE_URL}/api/v1/instances/"'),
-    (r'"\$\{BASE_URL\}/instances/\{\{name\}\}"', '"${BASE_URL}/api/v1/instances/{{name}}"'),
-    (r'"\$\{BASE_URL\}/instances"', '"${BASE_URL}/api/v1/instances"'),
+    (r'"\$\{API_URL\}/instances/"', '"${API_URL}/api/v1/instances/"'),
+    (r'"\$\{API_URL\}/instances/\{\{name\}\}"', '"${API_URL}/api/v1/instances/{{name}}"'),
+    (r'"\$\{API_URL\}/instances"', '"${API_URL}/api/v1/instances"'),
     
     # OAuth admin endpoints
-    (r'"\$\{BASE_URL\}/oauth/admin/setup-routes"', '"${BASE_URL}/api/v1/oauth/admin/setup-routes"'),
+    (r'"\$\{API_URL\}/oauth/admin/setup-routes"', '"${API_URL}/api/v1/oauth/admin/setup-routes"'),
     
     # Hardcoded localhost URLs in mcp-echo-setup
     (r'http://localhost/proxy/targets/auth\.\$\{BASE_DOMAIN\}', 'http://localhost/api/v1/proxy/targets/auth.${BASE_DOMAIN}'),

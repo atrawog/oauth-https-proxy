@@ -15,8 +15,8 @@ def main():
     route_id = sys.argv[2]
     token = sys.argv[3]
     
-    base_url = os.getenv('TEST_BASE_URL', 'http://localhost:80')
-    url = f"{base_url}/proxy/targets/{hostname}/routes/{route_id}/disable"
+    api_url = os.getenv('TEST_API_URL', 'http://localhost:80')
+    url = f"{api_url}/proxy/targets/{hostname}/routes/{route_id}/disable"
     
     headers = {
         'Authorization': f'Bearer {token}'
@@ -30,7 +30,7 @@ def main():
         print(f"Route '{route_id}' disabled for {hostname}")
         
         # Show current route status
-        routes_url = f"{base_url}/proxy/targets/{hostname}/routes"
+        routes_url = f"{api_url}/proxy/targets/{hostname}/routes"
         routes_resp = requests.get(routes_url)
         if routes_resp.ok:
             routes_data = routes_resp.json()

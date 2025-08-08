@@ -8,8 +8,8 @@ import os
 def main():
     """Test certificate generation."""
     # Get configuration from .env
-    base_url = os.getenv("TEST_BASE_URL")
-    assert base_url)
+    api_url = os.getenv("TEST_API_URL")
+    assert api_url)
     
     print("Requesting certificate for test.atradev.org...")
     response = client.post('/certificates', json={

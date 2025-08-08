@@ -8,13 +8,13 @@ print("=== DEBUGGING GUI ISSUE ===\n")
 
 # Get ADMIN token from environment or use known value
 ADMIN_TOKEN = "acm_PikI3FoqDXghOEHdP9lf9wcf0zlEdK2AV9DvPinF-Us"
-BASE_URL = "http://localhost"
+API_URL = "http://localhost"
 
 print("1. Testing ADMIN token directly:")
 headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
 
 # Test token info
-response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+response = requests.get(f"{API_URL}/token/info", headers=headers)
 print(f"   Token info status: {response.status_code}")
 if response.status_code == 200:
     info = response.json()
@@ -22,7 +22,7 @@ if response.status_code == 200:
     
 # Test certificates endpoint
 print("\n2. Testing /certificates endpoint with ADMIN token:")
-response = requests.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
+response = requests.get(f"{API_URL}/api/v1/certificates", headers=headers)
 print(f"   Status: {response.status_code}")
 if response.status_code == 200:
     certs = response.json()
@@ -35,7 +35,7 @@ if response.status_code == 200:
 
 # Test proxies endpoint
 print("\n3. Testing /proxy/targets endpoint with ADMIN token:")
-response = requests.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
+response = requests.get(f"{API_URL}/api/v1/proxy/targets", headers=headers)
 print(f"   Status: {response.status_code}")
 if response.status_code == 200:
     proxies = response.json()
@@ -47,7 +47,7 @@ if response.status_code == 200:
 
 # Test routes endpoint
 print("\n4. Testing /routes endpoint with ADMIN token:")
-response = requests.get(f"{BASE_URL}/api/v1/routes", headers=headers)
+response = requests.get(f"{API_URL}/api/v1/routes", headers=headers)
 print(f"   Status: {response.status_code}")
 if response.status_code == 200:
     routes = response.json()

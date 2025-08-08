@@ -7,11 +7,11 @@ import sys
 
 def test_public_access():
     """Test that certificate read operations work without authentication."""
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
 
-    if not base_url:
+    if not api_url:
 
-        print("Error: BASE_URL must be set in .env")
+        print("Error: API_URL must be set in .env")
 
         return False
     
@@ -20,7 +20,7 @@ def test_public_access():
     # Test 1: List all certificates without auth
     print("1. Testing GET /certificates (list all)...")
     try:
-        response = requests.get(f"{base_url}/certificates")
+        response = requests.get(f"{api_url}/certificates")
         if response.status_code == 200:
             certs = response.json()
             print(f"   ✓ Success: Found {len(certs)} certificates")
@@ -43,7 +43,7 @@ def test_public_access():
         if cert_name:
             print(f"\n2. Testing GET /certificates/{cert_name} (get specific)...")
             try:
-                response = requests.get(f"{base_url}/certificates/{cert_name}")
+                response = requests.get(f"{api_url}/certificates/{cert_name}")
                 if response.status_code == 200:
                     cert = response.json()
                     print(f"   ✓ Success: Retrieved certificate '{cert_name}'")
@@ -58,7 +58,7 @@ def test_public_access():
             # Test 3: Check certificate status without auth
             print(f"\n3. Testing GET /certificates/{cert_name}/status...")
             try:
-                response = requests.get(f"{base_url}/certificates/{cert_name}/status")
+                response = requests.get(f"{api_url}/certificates/{cert_name}/status")
                 if response.status_code == 200:
                     status = response.json()
                     print(f"   ✓ Success: Status = {status.get('status', 'unknown')}")
@@ -76,7 +76,7 @@ def test_public_access():
     print("   - POST /certificates (should fail)...")
     try:
         response = requests.post(
-            f"{base_url}/certificates",
+            f"{api_url}/certificates",
             json={
                 "domain": "test.example.com",
                 "email": "test@example.com",

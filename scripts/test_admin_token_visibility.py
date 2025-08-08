@@ -8,7 +8,7 @@ from tabulate import tabulate
 
 def test_route_visibility():
     """Test route visibility for admin token."""
-    base_url = os.getenv('BASE_URL', 'http://localhost')
+    api_url = os.getenv('API_URL', 'http://localhost')
     admin_token = os.getenv('ADMIN_TOKEN')
     
     if not admin_token:
@@ -20,7 +20,7 @@ def test_route_visibility():
     # Test routes endpoint
     print("\n=== Testing /routes endpoint with admin token ===")
     try:
-        response = requests.get(f"{base_url}/routes", headers=headers)
+        response = requests.get(f"{api_url}/routes", headers=headers)
         response.raise_for_status()
         routes = response.json()
         
@@ -50,7 +50,7 @@ def test_route_visibility():
     # Test certificates endpoint
     print("\n=== Testing /certificates endpoint with admin token ===")
     try:
-        response = requests.get(f"{base_url}/certificates", headers=headers)
+        response = requests.get(f"{api_url}/certificates", headers=headers)
         response.raise_for_status()
         certs = response.json()
         
@@ -76,7 +76,7 @@ def test_route_visibility():
     # Test proxy targets endpoint
     print("\n=== Testing /proxy/targets endpoint with admin token ===")
     try:
-        response = requests.get(f"{base_url}/proxy/targets", headers=headers)
+        response = requests.get(f"{api_url}/proxy/targets", headers=headers)
         response.raise_for_status()
         targets = response.json()
         

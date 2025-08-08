@@ -5,7 +5,7 @@ import requests
 
 def demo_login():
     """Show that tokens work for web GUI login."""
-    base_url = "http://localhost:80"
+    api_url = "http://localhost:80"
     
     # Test with the admin token
     token = "acm_GKoa0Ox2IBYhLXxcf_ZFXlTpK-jLbWKJOBRzjCNsIDU"
@@ -15,7 +15,7 @@ def demo_login():
     
     # 1. Access protected endpoint
     print("1. Testing token authentication...")
-    response = requests.get(f"{base_url}/certificates", headers=headers)
+    response = requests.get(f"{api_url}/certificates", headers=headers)
     
     if response.status_code == 200:
         print(f"✓ Successfully authenticated with token: admin-token")
@@ -27,7 +27,7 @@ def demo_login():
     
     # 2. Show web GUI is accessible
     print("\n2. Web GUI access:")
-    print(f"✓ Open browser to: {base_url}")
+    print(f"✓ Open browser to: {api_url}")
     print(f"✓ Login with token: {token}")
     print(f"✓ Token name: admin-token")
     

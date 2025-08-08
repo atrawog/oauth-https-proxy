@@ -4,7 +4,7 @@ import os
 import requests
 import json
 
-base_url = os.getenv('BASE_URL', 'http://localhost')
+api_url = os.getenv('API_URL', 'http://localhost')
 admin_token = os.getenv('ADMIN_TOKEN')
 
 if not admin_token:
@@ -17,7 +17,7 @@ print("Testing Admin Token Route Visibility")
 print("=" * 50)
 
 # Get all routes via API
-response = requests.get(f"{base_url}/routes", headers=headers)
+response = requests.get(f"{api_url}/routes", headers=headers)
 routes = response.json()
 
 print(f"\nTotal routes returned by API: {len(routes)}")

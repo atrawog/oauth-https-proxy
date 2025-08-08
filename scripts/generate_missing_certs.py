@@ -12,19 +12,19 @@ load_dotenv()
 
 def generate_missing_certificates(use_staging=True):
     """Generate certificates for all proxies that have HTTPS enabled but no certificate."""
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
     admin_token = os.getenv('ADMIN_TOKEN')
     admin_email = os.getenv('ADMIN_EMAIL', 'atrawog@gmail.com')
     
-    if not all([base_url, admin_token]):
-        print("Error: BASE_URL and ADMIN_TOKEN must be set in .env")
+    if not all([api_url, admin_token]):
+        print("Error: API_URL and ADMIN_TOKEN must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {admin_token}"}
     
     # Get all proxy targets
     print("Fetching proxy targets...")
-    response = requests.get(f"{base_url}/proxy/targets", headers=headers)
+    response = requests.get(f"{api_url}/proxy/targets", headers=headers)
     if response.status_code != 200:
         print(f"Failed to get proxy targets: {response.status_code}")
         return False
@@ -67,7 +67,7 @@ def generate_missing_certificates(use_staging=True):
         }
         
         response = requests.post(
-            f"{base_url}/certificates",
+            f"{api_url}/certificates",
             json=cert_data,
             headers=headers
         )
@@ -104,7 +104,7 @@ def generate_missing_certificates(use_staging=True):
             
             # Check status
             response = requests.get(
-                f"{base_url}/certificates/{cert_info['cert_name']}/status",
+                f"{api_url}/certificates/{cert_info['cert_name']}/status",
                 headers=headers
             )
             

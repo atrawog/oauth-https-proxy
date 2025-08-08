@@ -12,14 +12,14 @@ if [ -z "$ADMIN_TOKEN" ]; then
     exit 1
 fi
 
-BASE_URL="${BASE_URL:-http://localhost:9000}"
+API_URL="${API_URL:-http://localhost:9000}"
 
 echo "=== OAuth Flow Logs for IP: $IP (last $HOURS hour(s)) ==="
 echo
 
 # Query logs
 response=$(curl -sL -H "Authorization: Bearer $ADMIN_TOKEN" \
-    "${BASE_URL}/api/v1/logs/ip/${IP}?hours=${HOURS}&limit=${LIMIT}")
+    "${API_URL}/api/v1/logs/ip/${IP}?hours=${HOURS}&limit=${LIMIT}")
 
 # Display with enhanced formatting
 echo "$response" | jq -r '

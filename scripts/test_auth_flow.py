@@ -82,9 +82,9 @@ async def test_auth_flow(hostname: str):
         print("\n3. Checking auth configuration...")
         try:
             # Get proxy target info through API
-            base_url = os.getenv('BASE_URL', 'http://localhost')
+            api_url = os.getenv('API_URL', 'http://localhost')
             response = await client.get(
-                f"{base_url}/proxy/targets/{hostname}/auth"
+                f"{api_url}/proxy/targets/{hostname}/auth"
             )
             
             if response.status_code == 200:

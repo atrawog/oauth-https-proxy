@@ -16,7 +16,7 @@ from src.shared.models import ProxyAuthConfig
 
 async def enable_proxy_auth(hostname: str, token: str, auth_proxy: str, mode: str):
     """Enable authentication for a proxy target."""
-    base_url = os.getenv('BASE_URL', 'http://localhost')
+    api_url = os.getenv('API_URL', 'http://localhost')
     
     # Configure auth
     config = {
@@ -36,7 +36,7 @@ async def enable_proxy_auth(hostname: str, token: str, auth_proxy: str, mode: st
     async with httpx.AsyncClient() as client:
         # Send auth configuration
         response = await client.post(
-            f"{base_url}/proxy/targets/{hostname}/auth",
+            f"{api_url}/proxy/targets/{hostname}/auth",
             json=config,
             headers=headers
         )

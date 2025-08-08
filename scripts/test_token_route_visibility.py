@@ -8,14 +8,14 @@ from tabulate import tabulate
 
 def test_route_visibility(token):
     """Test route visibility for a specific token."""
-    base_url = os.getenv('BASE_URL', 'http://localhost')
+    api_url = os.getenv('API_URL', 'http://localhost')
     
     headers = {"Authorization": f"Bearer {token}"}
     
     # Test routes endpoint
     print(f"\n=== Testing /routes endpoint with token ===")
     try:
-        response = requests.get(f"{base_url}/routes", headers=headers)
+        response = requests.get(f"{api_url}/routes", headers=headers)
         response.raise_for_status()
         routes = response.json()
         

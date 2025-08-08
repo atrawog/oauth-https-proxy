@@ -13,7 +13,7 @@ from scripts.test_utils import get_admin_token
 
 # Test configuration
 # Use the GUI proxy which provides access to the API
-BASE_URL = "https://gui.atradev.org"
+API_URL = "https://gui.atradev.org"
 ADMIN_TOKEN = get_admin_token()
 
 
@@ -28,13 +28,13 @@ def test_endpoint(method: str, path: str, auth_required: bool, description: str)
     # First test WITHOUT authentication
     try:
         if method == "GET":
-            response = client.get(f"{BASE_URL}{path}")
+            response = client.get(f"{API_URL}{path}")
         elif method == "POST":
-            response = client.post(f"{BASE_URL}{path}", json={})
+            response = client.post(f"{API_URL}{path}", json={})
         elif method == "PUT":
-            response = client.put(f"{BASE_URL}{path}", json={})
+            response = client.put(f"{API_URL}{path}", json={})
         elif method == "DELETE":
-            response = client.delete(f"{BASE_URL}{path}")
+            response = client.delete(f"{API_URL}{path}")
         else:
             return False, f"Unknown method: {method}"
         
@@ -44,13 +44,13 @@ def test_endpoint(method: str, path: str, auth_required: bool, description: str)
                 # Now test WITH authentication
                 headers = {"Authorization": f"Bearer {ADMIN_TOKEN}"}
                 if method == "GET":
-                    auth_response = client.get(f"{BASE_URL}{path}", headers=headers)
+                    auth_response = client.get(f"{API_URL}{path}", headers=headers)
                 elif method == "POST":
-                    auth_response = client.post(f"{BASE_URL}{path}", json={}, headers=headers)
+                    auth_response = client.post(f"{API_URL}{path}", json={}, headers=headers)
                 elif method == "PUT":
-                    auth_response = client.put(f"{BASE_URL}{path}", json={}, headers=headers)
+                    auth_response = client.put(f"{API_URL}{path}", json={}, headers=headers)
                 elif method == "DELETE":
-                    auth_response = client.delete(f"{BASE_URL}{path}", headers=headers)
+                    auth_response = client.delete(f"{API_URL}{path}", headers=headers)
                 
                 # Should not get 401/403 with valid auth (might get 404, 422, etc)
                 if auth_response.status_code not in [401, 403]:
@@ -161,7 +161,7 @@ def main():
     
     print("🔒 Testing Endpoint Security")
     print("=" * 80)
-    print(f"Base URL: {BASE_URL}")
+    print(f"Base URL: {API_URL}")
     print(f"Total endpoints to test: {len(endpoints)}")
     print("=" * 80)
     print()

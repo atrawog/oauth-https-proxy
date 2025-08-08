@@ -23,8 +23,8 @@ class MCPComplianceTester:
     """Test MCP authorization specification compliance."""
     
     def __init__(self):
-        self.base_url = "http://localhost"
-        self.auth_url = None  # Will be determined from proxy
+        self.api_url = "http://localhost"
+        self.api_url = None  # Will be determined from proxy
         self.client = httpx.Client()
         self.admin_token = get_admin_token()
         self.test_results = []
@@ -73,7 +73,7 @@ class MCPComplianceTester:
         for uri, proxy, name in resources:
             try:
                 response = self.client.post(
-                    f"{self.base_url}/resources",
+                    f"{self.api_url}/resources",
                     headers=headers,
                     json={
                         "resource_uri": uri,
@@ -88,7 +88,7 @@ class MCPComplianceTester:
                 print(f"  Failed to register resource {uri}: {e}")
         
         # Store auth URL
-        self.auth_url = "https://auth.example.com"
+        self.api_url = "https://auth.example.com"
         
     def test_oauth_metadata(self) -> bool:
         """Test OAuth authorization server metadata."""
@@ -96,7 +96,7 @@ class MCPComplianceTester:
         
         try:
             response = self.client.get(
-                f"{self.auth_url}/.well-known/oauth-authorization-server",
+                f"{self.api_url}/.well-known/oauth-authorization-server",
                 verify=False
             )
             
@@ -183,7 +183,7 @@ class MCPComplianceTester:
         # Register a test client
         try:
             response = self.client.post(
-                f"{self.auth_url}/register",
+                f"{self.api_url}/register",
                 json={
                     "redirect_uris": ["https://test.example.com/callback"],
                     "client_name": "MCP Compliance Test Client",
@@ -209,9 +209,9 @@ class MCPComplianceTester:
                 "resource": ["https://mcp1.example.com", "https://mcp2.example.com"]
             }
             
-            auth_url = f"{self.auth_url}/authorize?{urlencode(auth_params, doseq=True)}"
+            api_url = f"{self.api_url}/authorize?{urlencode(auth_params, doseq=True)}"
             
-            response = self.client.get(auth_url, verify=False, follow_redirects=False)
+            response = self.client.get(api_url, verify=False, follow_redirects=False)
             
             # Should redirect to GitHub (since we're testing the flow)
             if response.status_code == 302:
@@ -289,7 +289,7 @@ class MCPComplianceTester:
         try:
             # Check that resource registry is working
             headers = {"Authorization": f"Bearer {self.admin_token}"}
-            response = self.client.get(f"{self.base_url}/resources", headers=headers)
+            response = self.client.get(f"{self.api_url}/resources", headers=headers)
             
             if response.status_code == 200:
                 resources = response.json().get("resources", [])
@@ -320,7 +320,7 @@ class MCPComplianceTester:
         try:
             # Create resource
             response = self.client.post(
-                f"{self.base_url}/resources",
+                f"{self.api_url}/resources",
                 headers=headers,
                 json={
                     "resource_uri": test_resource,
@@ -339,7 +339,7 @@ class MCPComplianceTester:
             
             # Get resource
             response = self.client.get(
-                f"{self.base_url}/resources/{test_resource.replace('https://', '')}",
+                f"{self.api_url}/resources/{test_resource.replace('https://', '')}",
                 headers=headers
             )
             
@@ -356,7 +356,7 @@ class MCPComplianceTester:
             
             # Update resource
             response = self.client.put(
-                f"{self.base_url}/resources/{test_resource.replace('https://', '')}",
+                f"{self.api_url}/resources/{test_resource.replace('https://', '')}",
                 headers=headers,
                 json={"metadata": {"test": True, "updated": True}}
             )
@@ -369,7 +369,7 @@ class MCPComplianceTester:
             
             # Validate token
             response = self.client.post(
-                f"{self.base_url}/resources/{test_resource.replace('https://', '')}/validate-token",
+                f"{self.api_url}/resources/{test_resource.replace('https://', '')}/validate-token",
                 headers=headers,
                 json={
                     "token_audience": [test_resource, "https://other.example.com"],
@@ -390,7 +390,7 @@ class MCPComplianceTester:
             
             # Delete resource
             response = self.client.delete(
-                f"{self.base_url}/resources/{test_resource.replace('https://', '')}",
+                f"{self.api_url}/resources/{test_resource.replace('https://', '')}",
                 headers=headers
             )
             

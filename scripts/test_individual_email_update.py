@@ -4,7 +4,7 @@
 import sys
 import requests
 
-BASE_URL = "http://localhost:80"
+API_URL = "http://localhost:80"
 
 if len(sys.argv) < 2:
     print("Usage: test_individual_email_update.py <token>")
@@ -16,7 +16,7 @@ print(f"\nTesting email update for token: {token[:40]}...")
 headers = {"Authorization": f"Bearer {token}"}
 
 # First get current info
-response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+response = requests.get(f"{API_URL}/token/info", headers=headers)
 if response.status_code == 200:
     info = response.json()
     print(f"Current info:")
@@ -31,7 +31,7 @@ new_email = f"updated-{info.get('name')}@example.com"
 print(f"\nUpdating email to: {new_email}")
 
 response = requests.put(
-    f"{BASE_URL}/token/email",
+    f"{API_URL}/token/email",
     headers=headers,
     json={"cert_email": new_email}
 )
@@ -41,7 +41,7 @@ print(f"Response: {response.text}")
 
 if response.status_code == 200:
     # Verify update
-    response2 = requests.get(f"{BASE_URL}/token/info", headers=headers)
+    response2 = requests.get(f"{API_URL}/token/info", headers=headers)
     if response2.status_code == 200:
         info2 = response2.json()
         print(f"\nAfter update:")

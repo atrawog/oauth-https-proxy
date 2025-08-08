@@ -12,9 +12,9 @@ def delete_proxy_target(hostname: str, token: str, delete_certificate: bool = Fa
         print("Error: Hostname and token are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -22,7 +22,7 @@ def delete_proxy_target(hostname: str, token: str, delete_certificate: bool = Fa
     try:
         # First get the proxy target to show details
         response = requests.get(
-            f"{base_url}/proxy/targets/{hostname}",
+            f"{api_url}/proxy/targets/{hostname}",
             headers=headers
         )
         
@@ -60,7 +60,7 @@ def delete_proxy_target(hostname: str, token: str, delete_certificate: bool = Fa
             params['delete_certificate'] = 'true'
         
         response = requests.delete(
-            f"{base_url}/proxy/targets/{hostname}",
+            f"{api_url}/proxy/targets/{hostname}",
             headers=headers,
             params=params
         )

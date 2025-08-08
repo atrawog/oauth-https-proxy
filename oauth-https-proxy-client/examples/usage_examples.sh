@@ -2,7 +2,7 @@
 # OAuth HTTPS Proxy Client - Usage Examples
 
 # Set up environment (copy .env.example to .env and update)
-export BASE_URL=http://localhost:80
+export API_URL=http://localhost:80
 export ADMIN_TOKEN=your_token_here
 
 # Or use configuration file

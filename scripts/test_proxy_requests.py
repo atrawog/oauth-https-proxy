@@ -9,9 +9,9 @@ import json
 import subprocess
 
 # Load configuration from environment
-base_url = os.getenv('BASE_URL')
-if not base_url:
-    print("Error: BASE_URL not set")
+api_url = os.getenv('API_URL')
+if not api_url:
+    print("Error: API_URL not set")
     sys.exit(1)
 
 target_url = os.getenv('TEST_PROXY_TARGET_URL', 'https://example.com')
@@ -62,7 +62,7 @@ def test_proxy_requests():
     
     try:
         response = httpx.post(
-            f"{base_url}/proxy/targets",
+            f"{api_url}/proxy/targets",
             json=proxy_data,
             headers=headers
         )
@@ -164,7 +164,7 @@ def test_proxy_requests():
         # Clean up
         print("\n5. Cleaning up...")
         response = httpx.delete(
-            f"{base_url}/proxy/targets/{proxy_hostname}?delete_certificate=true",
+            f"{api_url}/proxy/targets/{proxy_hostname}?delete_certificate=true",
             headers=headers
         )
         

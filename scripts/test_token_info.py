@@ -5,11 +5,11 @@ import requests
 import os
 
 token = "acm_e5AGpHJd2qxWocqBn6lXDBV_6AvD02R-A6AhdmSK8uA"
-base_url = os.getenv("BASE_URL", "http://localhost:8000")
+api_url = os.getenv("API_URL", "http://localhost:8000")
 
 # Test token info endpoint
 response = requests.get(
-    f"{base_url}/token/info",
+    f"{api_url}/token/info",
     headers={"Authorization": f"Bearer {token}"}
 )
 

@@ -8,13 +8,13 @@ import time
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from scripts.test_utils import get_api_base_url, get_admin_token
+from scripts.test_utils import get_api_api_url, get_admin_token
 
 
 def bulk_delete_routes(patterns):
     """Delete all routes matching given patterns."""
-    base_url = get_api_base_url()
-    if not base_url:
+    api_url = get_api_api_url()
+    if not api_url:
         print("Error: Unable to determine API base URL")
         return False
     
@@ -29,7 +29,7 @@ def bulk_delete_routes(patterns):
     # First, get all routes
     try:
         with httpx.Client() as client:
-            response = client.get(f"{base_url}/api/v1/routes/", headers=headers, timeout=10)
+            response = client.get(f"{api_url}/api/v1/routes/", headers=headers, timeout=10)
             response.raise_for_status()
             routes = response.json()
     except httpx.HTTPError as e:
@@ -58,7 +58,7 @@ def bulk_delete_routes(patterns):
     for route_id in routes_to_delete:
         try:
             with httpx.Client() as client:
-                response = client.delete(f"{base_url}/api/v1/routes/{route_id}", headers=headers, timeout=10)
+                response = client.delete(f"{api_url}/api/v1/routes/{route_id}", headers=headers, timeout=10)
                 response.raise_for_status()
                 deleted += 1
                 print(f"✓ Deleted: {route_id}")

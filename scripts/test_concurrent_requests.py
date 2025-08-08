@@ -18,11 +18,11 @@ async def make_request(client, url, request_id):
         return request_id, None, elapsed, str(e)
 
 async def main():
-    base_url = os.getenv("TEST_BASE_URL")
+    api_url = os.getenv("TEST_API_URL")
     
     # Test concurrent health checks
     print("Testing concurrent requests to /health...")
-    async with httpx.AsyncClient(base_url=base_url) as client:
+    async with httpx.AsyncClient(api_url=api_url) as client:
         tasks = []
         for i in range(10):
             tasks.append(make_request(client, "/health", i))
@@ -37,7 +37,7 @@ async def main():
     
     # Test concurrent challenge requests (404s)
     print("\nTesting concurrent requests to challenge endpoint...")
-    async with httpx.AsyncClient(base_url=base_url) as client:
+    async with httpx.AsyncClient(api_url=api_url) as client:
         tasks = []
         for i in range(10):
             tasks.append(make_request(client, f"/.well-known/acme-challenge/test-{i}", i))

@@ -8,14 +8,14 @@ import time
 import sys
 
 # Get base URL from .env
-base_url = os.getenv("TEST_BASE_URL")
-assert base_url, "TEST_BASE_URL not set"
+api_url = os.getenv("TEST_API_URL")
+assert api_url, "TEST_API_URL not set"
 
 # Get auth token if provided
 token = sys.argv[1] if len(sys.argv) > 1 else None
 
 # Create client with auth if token provided
-client = httpx.Client(base_url=base_url)
+client = httpx.Client(api_url=api_url)
 if token:
     client.headers["Authorization"] = f"Bearer {token}"
 

@@ -3,7 +3,7 @@
 
 # Variables
 container_name := "mcp-http-proxy-api-1"
-default_base_url := "http://localhost:80"
+default_api_url := "http://localhost:80"
 staging_cert_email := env_var_or_default("TEST_EMAIL", env_var_or_default("ACME_EMAIL", "test@example.com"))
 
 # Load environment from .env
@@ -73,9 +73,9 @@ health:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
-    response=$(curl -sL "${BASE_URL}/health")
+    response=$(curl -sL "${API_URL}/health")
     echo "$response" | jq '.'
 
 # ============================================================================
@@ -147,7 +147,7 @@ app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build query parameters
     params="hours={{hours}}&limit={{limit}}"
@@ -157,7 +157,7 @@ app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN
     
     # Get recent logs
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/search?${params}")
+        "${API_URL}/api/v1/logs/search?${params}")
     
     # Format output - handle timestamp as Unix epoch
     echo "$response" | jq -r '
@@ -187,11 +187,11 @@ app-logs-recent limit="10" token="${ADMIN_TOKEN}":
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get recent logs (last 5 minutes)
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/search?hours=1&limit={{limit}}")
+        "${API_URL}/api/v1/logs/search?hours=1&limit={{limit}}")
     
     # Compact format - simple time display
     echo "$response" | jq -r '
@@ -218,7 +218,7 @@ app-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     echo "=== Following logs (Ctrl+C to stop) ==="
     echo "Refresh interval: {{interval}}s"
@@ -240,7 +240,7 @@ app-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}
         
         # Fetch logs
         response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-            "${BASE_URL}/api/v1/logs/search?${params}" 2>/dev/null || true)
+            "${API_URL}/api/v1/logs/search?${params}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
             # Process and display only new logs
@@ -271,7 +271,7 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build query parameters
     query="hours={{hours}}&limit={{limit}}"
@@ -280,7 +280,7 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
     
     # Query logs
     response=$(curl -sL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/logs/ip/{{ip}}?${query}")
+        "${API_URL}/api/v1/logs/ip/{{ip}}?${query}")
     
     # Format logs in single-line format with enhanced OAuth debugging
     echo "$response" | jq -r '
@@ -349,7 +349,7 @@ app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${A
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build query parameters
     query="hours={{hours}}&limit={{limit}}"
@@ -358,7 +358,7 @@ app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${A
     
     # Query logs
     response=$(curl -sL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/logs/client/{{client-id}}?${query}")
+        "${API_URL}/api/v1/logs/client/{{client-id}}?${query}")
     
     echo "$response" | jq -r '
         .logs[] | 
@@ -378,11 +378,11 @@ app-logs-oauth-debug ip hours="24" limit="100" token="${ADMIN_TOKEN}":
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Query logs
     response=$(curl -sL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/logs/ip/{{ip}}?hours={{hours}}&limit={{limit}}")
+        "${API_URL}/api/v1/logs/ip/{{ip}}?hours={{hours}}&limit={{limit}}")
     
     # Format logs with full OAuth debug details
     echo "$response" | jq -r '
@@ -498,11 +498,11 @@ app-logs-oauth-summary ip hours="24" limit="100" token="${ADMIN_TOKEN}":
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Query logs
     response=$(curl -sL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/logs/ip/{{ip}}?hours={{hours}}&limit={{limit}}")
+        "${API_URL}/api/v1/logs/ip/{{ip}}?hours={{hours}}&limit={{limit}}")
     
     # Format logs showing OAuth flow summary
     echo "$response" | jq -r '
@@ -572,7 +572,7 @@ app-logs-search query="" hours="24" event="" level="" hostname="" limit="100" to
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build query parameters
     params="hours={{hours}}&limit={{limit}}"
@@ -583,7 +583,7 @@ app-logs-search query="" hours="24" event="" level="" hostname="" limit="100" to
     
     # Search logs
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/search?${params}")
+        "${API_URL}/api/v1/logs/search?${params}")
     
     echo "$response" | jq -r '
         "Found \(.total) logs (showing \(.logs | length))",
@@ -604,11 +604,11 @@ app-logs-errors hours="1" include-warnings="false" limit="50" token="${ADMIN_TOK
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Query recent errors
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/errors?hours={{hours}}&include_warnings={{include-warnings}}&limit={{limit}}")
+        "${API_URL}/api/v1/logs/errors?hours={{hours}}&include_warnings={{include-warnings}}&limit={{limit}}")
     
     echo "$response" | jq -r '
         "=== Recent Errors" + (if .query_params.include_warnings then " and Warnings" else "" end) + " ===",
@@ -635,11 +635,11 @@ app-logs-event-stats hours="24" token="${ADMIN_TOKEN}":
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get event statistics
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/events?hours={{hours}}")
+        "${API_URL}/api/v1/logs/events?hours={{hours}}")
     
     echo "=== Event Statistics (last {{hours}} hours) ==="
     echo "$response" | jq -r '
@@ -659,7 +659,7 @@ app-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build search query
     query="event:oauth"
@@ -673,7 +673,7 @@ app-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
     
     # Search logs
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/search?q=${query}&hours={{hours}}&limit=1000")
+        "${API_URL}/api/v1/logs/search?q=${query}&hours={{hours}}&limit=1000")
     
     # Group by correlation ID and show flows
     echo "$response" | jq -r '
@@ -703,11 +703,11 @@ app-logs-by-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
         exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Search logs for hostname
     response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${BASE_URL}/api/v1/logs/search?hostname={{hostname}}&hours={{hours}}&limit={{limit}}")
+        "${API_URL}/api/v1/logs/search?hostname={{hostname}}&hours={{hours}}&limit={{limit}}")
     
     echo "$response" | jq -r '
         "=== Logs for {{hostname}} ===",
@@ -728,8 +728,8 @@ app-logs-test token="${ADMIN_TOKEN}":
     
     # 1. Make a test request to generate logs
     echo "1. Making test request to /health..."
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
-    curl -sL "${BASE_URL}/health" > /dev/null
+    API_URL="${API_URL:-{{default_api_url}}}"
+    curl -sL "${API_URL}/health" > /dev/null
     
     # 2. Wait for logs to be processed
     echo "2. Waiting for logs to be processed..."
@@ -830,7 +830,7 @@ token-generate name email="":
     fi
     
     # Try API first if available
-    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${API_URL:-}" ]; then
         # Get admin token
         if [ -n "${ADMIN_TOKEN:-}" ]; then
             auth_token="${ADMIN_TOKEN}"
@@ -841,7 +841,7 @@ token-generate name email="":
         
         if [ -n "$auth_token" ]; then
             # Try API call
-            response=$(curl -sf -X POST "${BASE_URL}/api/v1/tokens/generate" \
+            response=$(curl -sf -X POST "${API_URL}/api/v1/tokens/generate" \
                 -H "Authorization: Bearer $auth_token" \
                 -H "Content-Type: application/json" \
                 -d "{\"name\": \"{{name}}\", \"cert_email\": \"$cert_email\"}" 2>/dev/null || true)
@@ -863,7 +863,7 @@ token-generate name email="":
     fi
     
     # No API available, exit with error
-    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    echo "Error: API not available. Please ensure API_URL is set and proxy is running." >&2
     exit 1
 
 # Show token value
@@ -876,7 +876,7 @@ token-show name:
         exit 0
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get admin token for API access
     auth_token="${ADMIN_TOKEN:-}"
@@ -886,7 +886,7 @@ token-show name:
     fi
     
     # Use API to reveal token
-    response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{name}}/reveal" \
+    response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{name}}/reveal" \
         -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
@@ -906,7 +906,7 @@ token-list:
     set -euo pipefail
     
     # Try API first if available
-    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${API_URL:-}" ]; then
         # Get admin token
         if [ -n "${ADMIN_TOKEN:-}" ]; then
             auth_token="${ADMIN_TOKEN}"
@@ -917,7 +917,7 @@ token-list:
         
         if [ -n "$auth_token" ]; then
             # Try API call
-            response=$(curl -sf -H "Authorization: Bearer $auth_token" "${BASE_URL}/api/v1/tokens/formatted" 2>/dev/null || true)
+            response=$(curl -sf -H "Authorization: Bearer $auth_token" "${API_URL}/api/v1/tokens/formatted" 2>/dev/null || true)
             if [ -n "$response" ]; then
                 echo "$response"
                 exit 0
@@ -926,7 +926,7 @@ token-list:
     fi
     
     # No API available, exit with error
-    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    echo "Error: API not available. Please ensure API_URL is set and proxy is running." >&2
     exit 1
 
 # Delete token and owned resources
@@ -939,7 +939,7 @@ token-delete name:
     echo
     [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get admin token
     auth_token="${ADMIN_TOKEN:-}"
@@ -949,7 +949,7 @@ token-delete name:
     fi
     
     # Delete token via API
-    response=$(curl -sf -X DELETE "${BASE_URL}/api/v1/tokens/{{name}}" \
+    response=$(curl -sf -X DELETE "${API_URL}/api/v1/tokens/{{name}}" \
         -H "Authorization: Bearer $auth_token" 2>&1)
     
     if [ $? -eq 0 ]; then
@@ -984,8 +984,8 @@ token-email-update name email token="":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1000,10 +1000,10 @@ token-email-update name email token="":
         fi
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     data=$(jq -n --arg email "{{email}}" '{email: $email}')
     
-    response=$(curl -s -w '\n%{http_code}' -X PUT "${BASE_URL}/api/v1/tokens/email" \
+    response=$(curl -s -w '\n%{http_code}' -X PUT "${API_URL}/api/v1/tokens/email" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -1037,7 +1037,7 @@ generate-admin-token:
     fi
     
     # Use API to generate admin token
-    response=$(curl -sf -X POST "${BASE_URL}/api/v1/tokens/generate" \
+    response=$(curl -sf -X POST "${API_URL}/api/v1/tokens/generate" \
         -H "Content-Type: application/json" \
         -d "{\"name\": \"ADMIN\", \"cert_email\": \"$admin_email\"}" 2>/dev/null || true)
     
@@ -1084,8 +1084,8 @@ cert-create name domain email="" token="" staging="false":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1100,12 +1100,12 @@ cert-create name domain email="" token="" staging="false":
         fi
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get certificate email if not provided
     if [ -z "{{email}}" ]; then
         # Try to get from token first
-        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/tokens/info")
+        response=$(curl -s -H "Authorization: Bearer $token_value" "${API_URL}/api/v1/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
         # Fall back to ACME_EMAIL or ADMIN_EMAIL if token has no email
@@ -1134,7 +1134,7 @@ cert-create name domain email="" token="" staging="false":
         }')
     
     # Create certificate
-    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/certificates/" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${API_URL}/api/v1/certificates/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -1155,7 +1155,7 @@ cert-list token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -1174,8 +1174,8 @@ cert-list token="":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1191,7 +1191,7 @@ cert-list token="":
     fi
     
     # Get certificates with auth
-    response=$(curl -sL "${BASE_URL}/api/v1/certificates/" -H "Authorization: Bearer $token_value")
+    response=$(curl -sL "${API_URL}/api/v1/certificates/" -H "Authorization: Bearer $token_value")
     
     # Format as table
     echo "=== Certificates ==="
@@ -1210,7 +1210,7 @@ cert-show name token="" pem="false":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -1229,8 +1229,8 @@ cert-show name token="" pem="false":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1246,7 +1246,7 @@ cert-show name token="" pem="false":
     fi
     
     # Get certificate with auth
-    response=$(curl -s "${BASE_URL}/api/v1/certificates/{{name}}" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${API_URL}/api/v1/certificates/{{name}}" -H "Authorization: Bearer $token_value")
     
     # Show formatted or PEM
     if [ "{{pem}}" = "true" ]; then
@@ -1279,8 +1279,8 @@ cert-delete name token="" force="false":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1302,10 +1302,10 @@ cert-delete name token="" force="false":
         [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Delete certificate
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/certificates/{{name}}" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${API_URL}/api/v1/certificates/{{name}}" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -1345,8 +1345,8 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1361,14 +1361,14 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
         fi
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get certificate email - use parameter first, then token, then ADMIN_EMAIL
     if [ -n "{{email}}" ]; then
         cert_email="{{email}}"
     else
         # Try to get from token
-        response=$(curl -s -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/tokens/info")
+        response=$(curl -s -H "Authorization: Bearer $token_value" "${API_URL}/api/v1/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
         # Fall back to ADMIN_EMAIL if token has no email
@@ -1401,7 +1401,7 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
         }')
     
     # Create proxy
-    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${API_URL}/api/v1/proxy/targets/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -1422,7 +1422,7 @@ proxy-list token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -1441,8 +1441,8 @@ proxy-list token="":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1466,9 +1466,9 @@ proxy-list token="":
             exit 0
         fi
         
-        # Fall back to BASE_URL if set
-        if [ -n "${BASE_URL:-}" ]; then
-            response=$(curl -sf -H "Authorization: Bearer $token_value" "${BASE_URL}/api/v1/proxy/targets/formatted" 2>/dev/null || true)
+        # Fall back to API_URL if set
+        if [ -n "${API_URL:-}" ]; then
+            response=$(curl -sf -H "Authorization: Bearer $token_value" "${API_URL}/api/v1/proxy/targets/formatted" 2>/dev/null || true)
             if [ -n "$response" ]; then
                 echo "$response"
                 exit 0
@@ -1477,7 +1477,7 @@ proxy-list token="":
     fi
     
     # No API available, show error
-    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    echo "Error: API not available. Please ensure API_URL is set and proxy is running." >&2
     exit 1
 
 # Show proxy details
@@ -1485,9 +1485,9 @@ proxy-show hostname:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
-    response=$(curl -s -X GET "${BASE_URL}/api/v1/proxy/targets/{{hostname}}")
+    response=$(curl -s -X GET "${API_URL}/api/v1/proxy/targets/{{hostname}}")
     
     # Check if proxy was found
     if echo "$response" | grep -q '"detail".*not found'; then
@@ -1520,8 +1520,8 @@ proxy-delete hostname token="" delete-cert="false" force="false":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1543,7 +1543,7 @@ proxy-delete hostname token="" delete-cert="false" force="false":
         [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build query params
     query=""
@@ -1552,7 +1552,7 @@ proxy-delete hostname token="" delete-cert="false" force="false":
     fi
     
     # Delete proxy
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/proxy/targets/{{hostname}}$query" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${API_URL}/api/v1/proxy/targets/{{hostname}}$query" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -1571,7 +1571,7 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward" allowed-scopes=
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -1616,7 +1616,7 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward" allowed-scopes=
     fi
     
     # Create auth config
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$json_payload")
@@ -1638,7 +1638,7 @@ proxy-auth-disable hostname token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -1652,7 +1652,7 @@ proxy-auth-disable hostname token="":
     fi
     
     # Delete auth config
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${API_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -1671,7 +1671,7 @@ proxy-auth-show hostname:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth")
+    response=$(curl -s -w '\n%{http_code}' "${API_URL}/api/v1/proxy/targets/{{hostname}}/auth")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1689,7 +1689,7 @@ proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes=
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -1703,7 +1703,7 @@ proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes=
     fi
     
     # Get current auth configuration
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth")
+    response=$(curl -s -w '\n%{http_code}' "${API_URL}/api/v1/proxy/targets/{{hostname}}/auth")
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
     
@@ -1758,7 +1758,7 @@ proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes=
     fi
     
     # Update auth config
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/proxy/targets/{{hostname}}/auth" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$json_payload")
@@ -1828,7 +1828,7 @@ proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write"
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d "$body" \
-        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/resource")
+        "${API_URL}/api/v1/proxy/targets/{{hostname}}/resource")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1862,7 +1862,7 @@ proxy-resource-clear hostname token="":
     
     response=$(curl -s -w '\n%{http_code}' -X DELETE \
         -H "Authorization: Bearer $TOKEN" \
-        "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/resource")
+        "${API_URL}/api/v1/proxy/targets/{{hostname}}/resource")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1880,7 +1880,7 @@ proxy-resource-show hostname:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/proxy/targets/{{hostname}}/resource")
+    response=$(curl -s -w '\n%{http_code}' "${API_URL}/api/v1/proxy/targets/{{hostname}}/resource")
     
     http_code=$(echo "$response" | tail -n1)
     body=$(echo "$response" | head -n -1)
@@ -1952,8 +1952,8 @@ service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -1968,7 +1968,7 @@ service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1
         fi
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build request data
     data=$(jq -n \
@@ -1987,7 +1987,7 @@ service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1
           + (if $port != "" then {external_port: ($port | tonumber)} else {} end)')
     
     # Create service
-    response=$(curl -sL -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services?auto_proxy={{auto-proxy}}" \
+    response=$(curl -sL -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services?auto_proxy={{auto-proxy}}" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$data")
@@ -2008,7 +2008,7 @@ service-list owned-only="false" token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
@@ -2023,8 +2023,8 @@ service-list owned-only="false" token="":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -2040,7 +2040,7 @@ service-list owned-only="false" token="":
     fi
     
     response=$(curl -sfL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/services?owned_only={{owned-only}}")
+        "${API_URL}/api/v1/services?owned_only={{owned-only}}")
     
     echo "$response" | jq -r '.services[] | "\(.service_name)\t\(.status)\t\(.allocated_port)\t\(.created_at)"' | \
         column -t -s $'\t' -N "SERVICE,STATUS,PORT,CREATED"
@@ -2050,11 +2050,11 @@ service-show name:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${ADMIN_TOKEN:-}"
     
     response=$(curl -sfL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/services/{{name}}")
+        "${API_URL}/api/v1/services/{{name}}")
     
     echo "$response" | jq '.'
 
@@ -2076,8 +2076,8 @@ service-delete name token="" force="false" delete-proxy="true":
         token_value="{{token}}"
     else
         # Use API to get token value
-        BASE_URL="${BASE_URL:-{{default_base_url}}}"
-        response=$(curl -sf -X GET "${BASE_URL}/api/v1/tokens/{{token}}/reveal" \
+        API_URL="${API_URL:-{{default_api_url}}}"
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
@@ -2099,11 +2099,11 @@ service-delete name token="" force="false" delete-proxy="true":
         [[ $REPLY =~ ^[Yy]$ ]] || exit 1
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Delete service
     response=$(curl -s -w '\n%{http_code}' -X DELETE \
-        "${BASE_URL}/api/v1/services/{{name}}?force={{force}}&delete_proxy={{delete-proxy}}" \
+        "${API_URL}/api/v1/services/{{name}}?force={{force}}&delete_proxy={{delete-proxy}}" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2133,10 +2133,10 @@ service-start name token="":
         token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     response=$(curl -s -w '\n%{http_code}' -X POST \
-        "${BASE_URL}/api/v1/services/{{name}}/start" \
+        "${API_URL}/api/v1/services/{{name}}/start" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2166,10 +2166,10 @@ service-stop name token="":
         token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     response=$(curl -s -w '\n%{http_code}' -X POST \
-        "${BASE_URL}/api/v1/services/{{name}}/stop" \
+        "${API_URL}/api/v1/services/{{name}}/stop" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2199,10 +2199,10 @@ service-restart name token="":
         token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     response=$(curl -s -w '\n%{http_code}' -X POST \
-        "${BASE_URL}/api/v1/services/{{name}}/restart" \
+        "${API_URL}/api/v1/services/{{name}}/restart" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2221,11 +2221,11 @@ service-logs name lines="100" timestamps="false":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${ADMIN_TOKEN:-}"
     
     response=$(curl -sf -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/services/{{name}}/logs?lines={{lines}}&timestamps={{timestamps}}")
+        "${API_URL}/api/v1/services/{{name}}/logs?lines={{lines}}&timestamps={{timestamps}}")
     
     echo "$response" | jq -r '.logs[]'
 
@@ -2234,11 +2234,11 @@ service-stats name:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${ADMIN_TOKEN:-}"
     
     response=$(curl -sfL -H "Authorization: Bearer $token_value" \
-        "${BASE_URL}/api/v1/services/{{name}}/stats")
+        "${API_URL}/api/v1/services/{{name}}/stats")
     
     echo "$response" | jq '.'
 
@@ -2258,13 +2258,13 @@ service-proxy-create name hostname="" enable-https="false" token="":
         token_value=$(docker exec {{container_name}} pixi run python scripts/show_token.py "{{token}}" 2>/dev/null | grep "^Token: " | cut -d' ' -f2 || true)
     fi
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build request data
     if [ -n "{{hostname}}" ]; then
-        url="${BASE_URL}/api/v1/services/{{name}}/proxy?enable_https={{enable-https}}&hostname={{hostname}}"
+        url="${API_URL}/api/v1/services/{{name}}/proxy?enable_https={{enable-https}}&hostname={{hostname}}"
     else
-        url="${BASE_URL}/api/v1/services/{{name}}/proxy?enable_https={{enable-https}}"
+        url="${API_URL}/api/v1/services/{{name}}/proxy?enable_https={{enable-https}}"
     fi
     
     response=$(curl -s -w '\n%{http_code}' -X POST "$url" \
@@ -2287,10 +2287,10 @@ service-cleanup:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${ADMIN_TOKEN:-}"
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/cleanup" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services/cleanup" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2313,7 +2313,7 @@ service-port-add name port bind-address="127.0.0.1" source-token="" token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${TOKEN:-{{token}}}"
     
     if [ -z "$token_value" ]; then
@@ -2343,7 +2343,7 @@ service-port-add name port bind-address="127.0.0.1" source-token="" token="":
         '{name: $name, host: $host, container: $container, bind: $bind, protocol: "tcp"} |
         if $token != "" then . + {token: $token} else . end')
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/{{name}}/ports" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services/{{name}}/ports" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$payload")
@@ -2365,7 +2365,7 @@ service-port-remove name port-name token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${TOKEN:-{{token}}}"
     
     if [ -z "$token_value" ]; then
@@ -2373,7 +2373,7 @@ service-port-remove name port-name token="":
         exit 1
     fi
     
-    response=$(curl -s -w '\n%{http_code}' -X DELETE "${BASE_URL}/api/v1/services/{{name}}/ports/{{port-name}}" \
+    response=$(curl -s -w '\n%{http_code}' -X DELETE "${API_URL}/api/v1/services/{{name}}/ports/{{port-name}}" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2392,10 +2392,10 @@ service-port-list name:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
     
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}/api/v1/services/{{name}}/ports" \
+    response=$(curl -s -w '\n%{http_code}' "${API_URL}/api/v1/services/{{name}}/ports" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2415,7 +2415,7 @@ service-ports-global available-only="false":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
     
     if [ "{{available-only}}" = "true" ]; then
@@ -2426,7 +2426,7 @@ service-ports-global available-only="false":
         echo "Allocated ports:"
     fi
     
-    response=$(curl -s -w '\n%{http_code}' "${BASE_URL}${endpoint}" \
+    response=$(curl -s -w '\n%{http_code}' "${API_URL}${endpoint}" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2449,10 +2449,10 @@ service-port-check port bind-address="127.0.0.1":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/ports/check?port={{port}}&bind_address={{bind-address}}" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services/ports/check?port={{port}}&bind_address={{bind-address}}" \
         -H "Authorization: Bearer $token_value")
     
     http_code=$(echo "$response" | tail -n1)
@@ -2477,7 +2477,7 @@ service-create-exposed name image port bind-address="127.0.0.1" token="" memory=
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     token_value="${TOKEN:-{{token}}}"
     
     if [ -z "$token_value" ]; then
@@ -2521,7 +2521,7 @@ service-create-exposed name image port bind-address="127.0.0.1" token="" memory=
             bind_address: "{{bind-address}}"
         }')
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/services/" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$payload")
@@ -2602,10 +2602,10 @@ stats:
     
     echo "=== System Statistics ==="
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get health status
-    health=$(curl -s "${BASE_URL}/health")
+    health=$(curl -s "${API_URL}/health")
     
     echo "Certificates: $(echo "$health" | jq -r '.certificates_loaded')"
     echo "Redis: $(echo "$health" | jq -r '.redis')"
@@ -2649,7 +2649,7 @@ cleanup-orphaned:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get admin token
     auth_token="${ADMIN_TOKEN:-}"
@@ -2662,15 +2662,15 @@ cleanup-orphaned:
     
     # Call cleanup endpoints
     # Clean up orphaned certificates
-    curl -sf -X POST "${BASE_URL}/api/v1/certificates/cleanup" \
+    curl -sf -X POST "${API_URL}/api/v1/certificates/cleanup" \
         -H "Authorization: Bearer $auth_token" || echo "Certificate cleanup failed"
     
     # Clean up orphaned proxies
-    curl -sf -X POST "${BASE_URL}/api/v1/proxy/cleanup" \
+    curl -sf -X POST "${API_URL}/api/v1/proxy/cleanup" \
         -H "Authorization: Bearer $auth_token" || echo "Proxy cleanup failed"
     
     # Clean up orphaned Docker services
-    curl -sf -X POST "${BASE_URL}/api/v1/services/cleanup" \
+    curl -sf -X POST "${API_URL}/api/v1/services/cleanup" \
         -H "Authorization: Bearer $auth_token" || echo "Docker services cleanup failed"
     
     echo "Cleanup completed"
@@ -2779,9 +2779,9 @@ oauth-routes-setup domain token="":
     fi
     
     # Try API first if available
-    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${API_URL:-}" ]; then
         # Try API call
-        response=$(curl -sf -X POST "${BASE_URL}/api/v1/oauth/admin/setup-routes" \
+        response=$(curl -sf -X POST "${API_URL}/api/v1/oauth/admin/setup-routes" \
             -H "Authorization: Bearer $token_value" \
             -H "Content-Type: application/json" \
             -d "{\"oauth_domain\": \"{{domain}}\", \"force\": false}" 2>/dev/null || true)
@@ -2903,7 +2903,7 @@ oauth-clients-list active-only="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     auth_token="${ADMIN_TOKEN:-}"
     
     if [ -z "$auth_token" ]; then
@@ -2917,7 +2917,7 @@ oauth-clients-list active-only="":
         query="?active_only=true"
     fi
     
-    response=$(curl -sf -X GET "${BASE_URL}/api/v1/oauth/clients${query}" \
+    response=$(curl -sf -X GET "${API_URL}/api/v1/oauth/clients${query}" \
         -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
@@ -2932,7 +2932,7 @@ oauth-sessions-list:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     auth_token="${ADMIN_TOKEN:-}"
     
     if [ -z "$auth_token" ]; then
@@ -2940,7 +2940,7 @@ oauth-sessions-list:
         exit 1
     fi
     
-    response=$(curl -sf -X GET "${BASE_URL}/api/v1/oauth/sessions" \
+    response=$(curl -sf -X GET "${API_URL}/api/v1/oauth/sessions" \
         -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
@@ -2956,7 +2956,7 @@ resource-list:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     auth_token="${ADMIN_TOKEN:-}"
     
     if [ -z "$auth_token" ]; then
@@ -2964,7 +2964,7 @@ resource-list:
         exit 1
     fi
     
-    response=$(curl -sf -X GET "${BASE_URL}/api/v1/resources/" \
+    response=$(curl -sf -X GET "${API_URL}/api/v1/resources/" \
         -H "Authorization: Bearer $auth_token" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
@@ -2985,7 +2985,7 @@ service-list-external:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get admin token
     token_value="${ADMIN_TOKEN:-}"
@@ -2995,7 +2995,7 @@ service-list-external:
     fi
     
     echo "=== External Services ==="
-    response=$(curl -s "${BASE_URL}/api/v1/services/external" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${API_URL}/api/v1/services/external" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -3013,7 +3013,7 @@ service-show-external name:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get admin token
     token_value="${ADMIN_TOKEN:-}"
@@ -3023,7 +3023,7 @@ service-show-external name:
     fi
     
     # Try to find in external services
-    response=$(curl -s "${BASE_URL}/api/v1/services/external" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${API_URL}/api/v1/services/external" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -3043,7 +3043,7 @@ service-show-external name:
 # Register an external service (replaces instance-register)
 service-register name target-url token="" description="":
     #!/usr/bin/env bash
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     TOKEN="{{token}}"
     if [ -z "$TOKEN" ]; then
         TOKEN="$ADMIN_TOKEN"
@@ -3053,7 +3053,7 @@ service-register name target-url token="" description="":
         exit 1
     fi
     
-    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${BASE_URL}/api/v1/services/external" \
+    RESPONSE=$(curl -sL -w "\n%{http_code}" -X POST "${API_URL}/api/v1/services/external" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
@@ -3076,7 +3076,7 @@ service-register name target-url token="" description="":
 # Update an external service
 service-update-external name target-url token="" description="":
     #!/usr/bin/env bash
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     TOKEN="{{token}}"
     if [ -z "$TOKEN" ]; then
         TOKEN="$ADMIN_TOKEN"
@@ -3088,11 +3088,11 @@ service-update-external name target-url token="" description="":
     
     # Since external services are immutable, we need to delete and recreate
     # First delete the old one
-    curl -s -X DELETE "${BASE_URL}/api/v1/services/external/{{name}}" \
+    curl -s -X DELETE "${API_URL}/api/v1/services/external/{{name}}" \
         -H "Authorization: Bearer $TOKEN" || true
     
     # Now create the new one
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${BASE_URL}/api/v1/services/external" \
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${API_URL}/api/v1/services/external" \
         -H "Authorization: Bearer $TOKEN" \
         -H "Content-Type: application/json" \
         -d '{
@@ -3115,7 +3115,7 @@ service-update-external name target-url token="" description="":
 # Delete an external service
 service-unregister name token="":
     #!/usr/bin/env bash
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     TOKEN="{{token}}"
     if [ -z "$TOKEN" ]; then
         TOKEN="$ADMIN_TOKEN"
@@ -3125,7 +3125,7 @@ service-unregister name token="":
         exit 1
     fi
     
-    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${BASE_URL}/api/v1/services/external/{{name}}" \
+    RESPONSE=$(curl -s -w "\n%{http_code}" -X DELETE "${API_URL}/api/v1/services/external/{{name}}" \
         -H "Authorization: Bearer $TOKEN")
     
     HTTP_CODE=$(echo "$RESPONSE" | tail -1)
@@ -3147,7 +3147,7 @@ service-list-all type="":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get admin token
     token_value="${ADMIN_TOKEN:-}"
@@ -3163,7 +3163,7 @@ service-list-all type="":
     fi
     
     echo "=== All Services ==="
-    response=$(curl -s "${BASE_URL}/api/v1/services/unified${query}" -H "Authorization: Bearer $token_value")
+    response=$(curl -s "${API_URL}/api/v1/services/unified${query}" -H "Authorization: Bearer $token_value")
     
     # Check if response is an error
     if echo "$response" | jq -e '.detail' &>/dev/null; then
@@ -3229,9 +3229,9 @@ route-list:
     set -euo pipefail
     
     # Try API first if available
-    if [ "${USE_API:-true}" = "true" ] && [ -n "${BASE_URL:-}" ]; then
+    if [ "${USE_API:-true}" = "true" ] && [ -n "${API_URL:-}" ]; then
         # Routes endpoint doesn't require authentication
-        response=$(curl -sf "${BASE_URL}/api/v1/routes/formatted" 2>/dev/null || true)
+        response=$(curl -sf "${API_URL}/api/v1/routes/formatted" 2>/dev/null || true)
         if [ -n "$response" ]; then
             echo "$response"
             exit 0
@@ -3239,7 +3239,7 @@ route-list:
     fi
     
     # No API available, show error
-    echo "Error: API not available. Please ensure BASE_URL is set and proxy is running." >&2
+    echo "Error: API not available. Please ensure API_URL is set and proxy is running." >&2
     exit 1
 
 # Show route details
@@ -3247,9 +3247,9 @@ route-show route-id:
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
-    response=$(curl -sf -X GET "${BASE_URL}/api/v1/routes/{{route-id}}" 2>/dev/null || true)
+    response=$(curl -sf -X GET "${API_URL}/api/v1/routes/{{route-id}}" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
         echo "$response" | jq '.' 2>/dev/null || echo "$response"
@@ -3281,7 +3281,7 @@ route-create path target-type target-value token="" priority="50" methods="*" is
     fi
     
     # Create route via API
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build the JSON payload
     json_payload='{'
@@ -3304,10 +3304,10 @@ route-create path target-type target-value token="" priority="50" methods="*" is
     # Debug output
     if [ "${DEBUG:-}" = "1" ]; then
         echo "DEBUG: JSON payload: $json_payload" >&2
-        echo "DEBUG: API URL: ${BASE_URL}/api/v1/routes/" >&2
+        echo "DEBUG: API URL: ${API_URL}/api/v1/routes/" >&2
     fi
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/routes/" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/routes/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$json_payload")
@@ -3346,9 +3346,9 @@ route-delete route-id token="":
     fi
     
     # Delete route via API
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
-    response=$(curl -sf -X DELETE "${BASE_URL}/api/v1/routes/{{route-id}}" \
+    response=$(curl -sf -X DELETE "${API_URL}/api/v1/routes/{{route-id}}" \
         -H "Authorization: Bearer $token_value" 2>&1)
     
     if [ $? -eq 0 ]; then
@@ -3381,7 +3381,7 @@ route-create-global path target-type target-value token="" priority="50" methods
     fi
     
     # Create route via API
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Build the JSON payload with scope=global
     json_payload='{'
@@ -3403,7 +3403,7 @@ route-create-global path target-type target-value token="" priority="50" methods
     
     json_payload=$(echo "$json_payload" | jq -c '.')
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/routes/" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/routes/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$json_payload")
@@ -3443,7 +3443,7 @@ route-create-proxy path target-type target-value proxies token="" priority="500"
     fi
     
     # Create route via API
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Convert comma-separated proxies to JSON array
     proxies_array=$(echo "{{proxies}}" | sed 's/,/","/g' | sed 's/^/["/;s/$/"]/')
@@ -3468,7 +3468,7 @@ route-create-proxy path target-type target-value proxies token="" priority="500"
     
     json_payload=$(echo "$json_payload" | jq -c '.')
     
-    response=$(curl -s -w '\n%{http_code}' -X POST "${BASE_URL}/api/v1/routes/" \
+    response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/routes/" \
         -H "Authorization: Bearer $token_value" \
         -H "Content-Type: application/json" \
         -d "$json_payload")
@@ -3490,10 +3490,10 @@ route-list-by-scope scope="all":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    BASE_URL="${BASE_URL:-{{default_base_url}}}"
+    API_URL="${API_URL:-{{default_api_url}}}"
     
     # Get all routes (with trailing slash to avoid redirect)
-    response=$(curl -sf "${BASE_URL}/api/v1/routes/" 2>/dev/null || true)
+    response=$(curl -sf "${API_URL}/api/v1/routes/" 2>/dev/null || true)
     
     if [ -n "$response" ]; then
         if [ "{{scope}}" = "all" ]; then

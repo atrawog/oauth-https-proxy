@@ -9,12 +9,12 @@ from tabulate import tabulate
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from test_utils import get_api_base_url
+from test_utils import get_api_api_url
 
 def list_proxy_targets(token: str = None):
     """List all proxy targets (optionally filtered by token)."""
-    base_url = get_api_base_url()
-    if not base_url:
+    api_url = get_api_api_url()
+    if not api_url:
         print("Error: Unable to determine API base URL")
         return False
     
@@ -24,7 +24,7 @@ def list_proxy_targets(token: str = None):
     
     try:
         response = requests.get(
-            f"{base_url}/proxy/targets/",
+            f"{api_url}/proxy/targets/",
             headers=headers
         )
         

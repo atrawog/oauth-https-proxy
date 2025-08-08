@@ -11,9 +11,9 @@ def disable_proxy_target(hostname: str, token: str):
         print("Error: Hostname and token are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -21,7 +21,7 @@ def disable_proxy_target(hostname: str, token: str):
     try:
         # Update the proxy target to disable it
         response = requests.put(
-            f"{base_url}/proxy/targets/{hostname}",
+            f"{api_url}/proxy/targets/{hostname}",
             json={"enabled": False},
             headers=headers
         )

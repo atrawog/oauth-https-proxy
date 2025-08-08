@@ -24,10 +24,10 @@ def main():
     enabled_routes = [r.strip() for r in enabled_str.split(',') if r.strip()] if enabled_str else []
     disabled_routes = [r.strip() for r in disabled_str.split(',') if r.strip()] if disabled_str else []
     
-    base_url = os.getenv('TEST_BASE_URL', 'http://localhost:80')
+    api_url = os.getenv('TEST_API_URL', 'http://localhost:80')
     
     # First get current proxy configuration
-    routes_url = f"{base_url}/proxy/targets/{hostname}/routes"
+    routes_url = f"{api_url}/proxy/targets/{hostname}/routes"
     try:
         resp = requests.get(routes_url)
         resp.raise_for_status()
@@ -67,7 +67,7 @@ def main():
         print(f"Setting disabled routes for {hostname}: {', '.join(disabled_routes) if disabled_routes else 'None'}")
     
     # Update the proxy
-    url = f"{base_url}/proxy/targets/{hostname}/routes"
+    url = f"{api_url}/proxy/targets/{hostname}/routes"
     try:
         resp = requests.put(url, headers=headers, json=data)
         resp.raise_for_status()

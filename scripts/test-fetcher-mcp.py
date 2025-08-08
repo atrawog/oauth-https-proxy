@@ -8,7 +8,7 @@ from time import sleep
 def test_fetcher_mcp():
     """Test fetcher MCP with proper session management."""
     
-    base_url = "http://fetcher.atradev.org"
+    api_url = "http://fetcher.atradev.org"
     
     # 1. Initialize session
     print("1. Initializing MCP session...")
@@ -29,7 +29,7 @@ def test_fetcher_mcp():
     }
     
     # For StreamableHTTP, first request initializes session
-    response = requests.post(f"{base_url}/mcp", 
+    response = requests.post(f"{api_url}/mcp", 
                            headers=headers,
                            json=init_request)
     
@@ -59,7 +59,7 @@ def test_fetcher_mcp():
             "id": 2
         }
         
-        response = requests.post(f"{base_url}/mcp",
+        response = requests.post(f"{api_url}/mcp",
                                headers=headers,
                                json=list_request)
         
@@ -69,7 +69,7 @@ def test_fetcher_mcp():
     
     # 3. Alternative: Try SSE endpoint
     print("\n3. Testing SSE endpoint...")
-    sse_response = requests.get(f"{base_url}/sse", stream=True)
+    sse_response = requests.get(f"{api_url}/sse", stream=True)
     print(f"SSE endpoint status: {sse_response.status_code}")
 
 if __name__ == "__main__":

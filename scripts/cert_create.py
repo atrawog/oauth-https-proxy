@@ -11,13 +11,13 @@ def create_certificate(cert_name: str, domain: str, email: str, token: str, stag
         print("Error: All parameters are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
 
     
-    if not base_url:
+    if not api_url:
 
     
-        print("Error: BASE_URL must be set in .env")
+        print("Error: API_URL must be set in .env")
 
     
         return False
@@ -35,7 +35,7 @@ def create_certificate(cert_name: str, domain: str, email: str, token: str, stag
     
     try:
         response = requests.post(
-            f"{base_url}/certificates",
+            f"{api_url}/certificates",
             json=data,
             headers=headers
         )

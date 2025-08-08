@@ -12,16 +12,16 @@ from websockets.exceptions import WebSocketException
 import httpx
 
 # Load configuration from environment
-base_url = os.getenv('BASE_URL')
-if not base_url:
-    print("Error: BASE_URL not set")
+api_url = os.getenv('API_URL')
+if not api_url:
+    print("Error: API_URL not set")
     sys.exit(1)
 
 staging_url = os.getenv('ACME_STAGING_URL', 'https://acme-staging-v02.api.letsencrypt.org/directory')
 
 # Extract host and port from base URL
 # Convert http://localhost:80 to ws://localhost:80
-ws_url = base_url.replace("http://", "ws://").replace("https://", "wss://")
+ws_url = api_url.replace("http://", "ws://").replace("https://", "wss://")
 
 
 async def test_websocket_echo():
@@ -158,7 +158,7 @@ async def main():
     
     try:
         response = httpx.post(
-            f"{base_url}/proxy/targets",
+            f"{api_url}/proxy/targets",
             json=proxy_data,
             headers=headers
         )
@@ -193,7 +193,7 @@ async def main():
         # Clean up
         print("\n3. Cleaning up...")
         response = httpx.delete(
-            f"{base_url}/proxy/targets/{proxy_data['hostname']}?delete_certificate=true",
+            f"{api_url}/proxy/targets/{proxy_data['hostname']}?delete_certificate=true",
             headers=headers
         )
         

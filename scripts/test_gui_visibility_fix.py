@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-BASE_URL = os.getenv("BASE_URL", "http://localhost:80")
+API_URL = os.getenv("API_URL", "http://localhost:80")
 
 async def test_gui_with_token(token_name: str, token_value: str):
     """Test what the GUI shows for a specific token."""
@@ -21,7 +21,7 @@ async def test_gui_with_token(token_name: str, token_value: str):
         # Test token info endpoint
         print(f"\n1. Token Info:")
         try:
-            response = await client.get(f"{BASE_URL}/token/info", headers=headers)
+            response = await client.get(f"{API_URL}/token/info", headers=headers)
             if response.status_code == 200:
                 info = response.json()
                 print(f"   - Name: {info.get('name', 'N/A')}")
@@ -35,7 +35,7 @@ async def test_gui_with_token(token_name: str, token_value: str):
         # Test certificates visibility
         print(f"\n2. Certificates visible:")
         try:
-            response = await client.get(f"{BASE_URL}/api/v1/certificates", headers=headers)
+            response = await client.get(f"{API_URL}/api/v1/certificates", headers=headers)
             if response.status_code == 200:
                 certs = response.json()
                 print(f"   - Count: {len(certs)}")
@@ -52,7 +52,7 @@ async def test_gui_with_token(token_name: str, token_value: str):
         # Test proxies visibility
         print(f"\n3. Proxy targets visible:")
         try:
-            response = await client.get(f"{BASE_URL}/api/v1/proxy/targets", headers=headers)
+            response = await client.get(f"{API_URL}/api/v1/proxy/targets", headers=headers)
             if response.status_code == 200:
                 proxies = response.json()
                 print(f"   - Count: {len(proxies)}")
@@ -69,7 +69,7 @@ async def test_gui_with_token(token_name: str, token_value: str):
         # Test routes visibility
         print(f"\n4. Routes visible:")
         try:
-            response = await client.get(f"{BASE_URL}/api/v1/routes", headers=headers)
+            response = await client.get(f"{API_URL}/api/v1/routes", headers=headers)
             if response.status_code == 200:
                 routes = response.json()
                 print(f"   - Count: {len(routes)}")

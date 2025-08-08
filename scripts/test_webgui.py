@@ -7,14 +7,14 @@ import sys
 import json
 from urllib.parse import urljoin
 
-def test_webgui(base_url="http://localhost:8080", token=None):
+def test_webgui(api_url="http://localhost:8080", token=None):
     """Test the web GUI functionality."""
-    print(f"Testing Web GUI at {base_url}")
+    print(f"Testing Web GUI at {api_url}")
     
     # Test 1: Check if GUI is served
     print("\n1. Testing GUI availability...")
     try:
-        response = requests.get(base_url)
+        response = requests.get(api_url)
         assert response.status_code == 200
         assert "ACME Certificate Manager" in response.text
         assert "Bearer Token" in response.text
@@ -28,7 +28,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
     static_files = ["/static/app.js", "/static/styles.css"]
     for file in static_files:
         try:
-            response = requests.get(urljoin(base_url, file))
+            response = requests.get(urljoin(api_url, file))
             assert response.status_code == 200
             print(f"✓ {file} loaded successfully")
         except Exception as e:
@@ -48,7 +48,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
     
     # List certificates
     try:
-        response = requests.get(urljoin(base_url, "/certificates"), headers=headers)
+        response = requests.get(urljoin(api_url, "/certificates"), headers=headers)
         assert response.status_code == 200
         certs = response.json()
         print(f"✓ Listed {len(certs)} certificates")
@@ -68,7 +68,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
     cert_created = False
     try:
         response = requests.post(
-            urljoin(base_url, "/certificates"),
+            urljoin(api_url, "/certificates"),
             json=test_cert,
             headers=headers
         )
@@ -80,7 +80,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
             # Check status
             time.sleep(2)
             status_response = requests.get(
-                urljoin(base_url, f"/certificates/{test_cert['cert_name']}/status"),
+                urljoin(api_url, f"/certificates/{test_cert['cert_name']}/status"),
                 headers=headers
             )
             if status_response.status_code == 200:
@@ -95,7 +95,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
     # Test 5: Test unauthorized access
     print("\n5. Testing unauthorized access...")
     try:
-        response = requests.get(urljoin(base_url, "/certificates"))
+        response = requests.get(urljoin(api_url, "/certificates"))
         assert response.status_code == 401
         print("✓ Unauthorized access properly rejected")
     except AssertionError:
@@ -110,7 +110,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
         print("\n🧹 Cleaning up test certificate...")
         try:
             delete_response = requests.delete(
-                urljoin(base_url, f"/certificates/{test_cert['cert_name']}"),
+                urljoin(api_url, f"/certificates/{test_cert['cert_name']}"),
                 headers=headers
             )
             if delete_response.status_code == 200:
@@ -124,7 +124,7 @@ def test_webgui(base_url="http://localhost:8080", token=None):
     
     print("\n✅ All Web GUI tests passed!")
     print("\nYou can now access the GUI at:")
-    print(f"  {base_url}")
+    print(f"  {api_url}")
     print(f"\nUse this token to login:")
     print(f"  {token}")
     
@@ -132,8 +132,8 @@ def test_webgui(base_url="http://localhost:8080", token=None):
 
 
 if __name__ == "__main__":
-    base_url = "http://localhost:80"
+    api_url = "http://localhost:80"
     token = sys.argv[1] if len(sys.argv) > 1 else None
     
-    if not test_webgui(base_url, token):
+    if not test_webgui(api_url, token):
         sys.exit(1)

@@ -14,10 +14,10 @@ def main():
         sys.exit(1)
     
     hostname = sys.argv[1]
-    base_url = os.getenv('TEST_BASE_URL', 'http://localhost:80')
+    api_url = os.getenv('TEST_API_URL', 'http://localhost:80')
     
     # No authentication needed for read operations
-    url = f"{base_url}/proxy/targets/{hostname}/routes"
+    url = f"{api_url}/proxy/targets/{hostname}/routes"
     
     try:
         resp = requests.get(url)

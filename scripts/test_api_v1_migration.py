@@ -7,7 +7,7 @@ import requests
 from typing import List, Tuple
 
 # Get configuration from environment
-BASE_URL = os.environ.get('BASE_URL', 'http://localhost:80')
+API_URL = os.environ.get('API_URL', 'http://localhost:80')
 TOKEN = os.environ.get('ADMIN_TOKEN', 'acme')
 
 # Test endpoints - old path and new path
@@ -30,7 +30,7 @@ def test_endpoint(path: str, method: str, requires_auth: bool) -> Tuple[bool, st
         if requires_auth:
             headers["Authorization"] = f"Bearer {TOKEN}"
         
-        url = f"{BASE_URL}{path}"
+        url = f"{API_URL}{path}"
         
         if method == "GET":
             response = requests.get(url, headers=headers)
@@ -53,7 +53,7 @@ def test_endpoint(path: str, method: str, requires_auth: bool) -> Tuple[bool, st
 def main():
     """Run all tests."""
     print(f"Testing API v1 migration...")
-    print(f"Base URL: {BASE_URL}")
+    print(f"Base URL: {API_URL}")
     print(f"Using token: {'Yes' if TOKEN else 'No'}")
     print("-" * 80)
     

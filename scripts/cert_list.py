@@ -9,11 +9,11 @@ from tabulate import tabulate
 
 def list_certificates(token: str = None):
     """List all certificates (optionally filtered by token)."""
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
 
-    if not base_url:
+    if not api_url:
 
-        print("Error: BASE_URL must be set in .env")
+        print("Error: API_URL must be set in .env")
 
         return False
     headers = {}
@@ -22,7 +22,7 @@ def list_certificates(token: str = None):
     
     try:
         response = requests.get(
-            f"{base_url}/certificates",
+            f"{api_url}/certificates",
             headers=headers
         )
         
@@ -31,7 +31,7 @@ def list_certificates(token: str = None):
             
             # Check for in-progress certificates from Redis
             # Get all proxy targets to find certificates being generated
-            proxy_response = requests.get(f"{base_url}/proxy/targets", headers=headers)
+            proxy_response = requests.get(f"{api_url}/proxy/targets", headers=headers)
             in_progress_certs = []
             
             if proxy_response.status_code == 200:
@@ -40,7 +40,7 @@ def list_certificates(token: str = None):
                     cert_name = proxy.get('cert_name')
                     if cert_name and not any(c['cert_name'] == cert_name for c in certificates):
                         # Check if certificate generation is in progress
-                        status_response = requests.get(f"{base_url}/certificates/{cert_name}/status")
+                        status_response = requests.get(f"{api_url}/certificates/{cert_name}/status")
                         if status_response.status_code == 200:
                             status = status_response.json()
                             if status.get('status') == 'in_progress':

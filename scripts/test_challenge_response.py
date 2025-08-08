@@ -19,8 +19,8 @@ def main():
     assert storage.store_challenge(test_token, test_auth)
     
     # Test retrieval speed via API
-    base_url = os.getenv("TEST_BASE_URL")
-    client = httpx.Client(base_url=base_url)
+    api_url = os.getenv("TEST_API_URL")
+    client = httpx.Client(api_url=api_url)
     
     print("\nTesting challenge endpoint response time...")
     times = []

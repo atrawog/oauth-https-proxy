@@ -45,7 +45,7 @@ class ProxyClient:
         """
         if self._client is None:
             self._client = httpx.AsyncClient(
-                base_url=self.config.base_url,
+                api_url=self.config.api_url,
                 headers=self.config.get_headers(),
                 timeout=httpx.Timeout(
                     connect=self.config.connect_timeout,
@@ -67,7 +67,7 @@ class ProxyClient:
         """
         if self._sync_client is None:
             self._sync_client = httpx.Client(
-                base_url=self.config.base_url,
+                api_url=self.config.api_url,
                 headers=self.config.get_headers(),
                 timeout=httpx.Timeout(
                     connect=self.config.connect_timeout,
@@ -190,7 +190,7 @@ class ProxyClient:
                 path += '/'
         
         # Build full URL
-        url = urljoin(self.config.base_url, path)
+        url = urljoin(self.config.api_url, path)
         
         # Merge headers
         request_headers = self.config.get_headers()
@@ -267,7 +267,7 @@ class ProxyClient:
                 path += '/'
         
         # Build full URL
-        url = urljoin(self.config.base_url, path)
+        url = urljoin(self.config.api_url, path)
         
         # Merge headers
         request_headers = self.config.get_headers()
@@ -426,7 +426,7 @@ class ProxyClient:
             For actual WebSocket support, use the websockets library separately.
         """
         # WebSocket URL (convert http to ws)
-        ws_url = self.config.base_url.replace('http://', 'ws://').replace('https://', 'wss://')
+        ws_url = self.config.api_url.replace('http://', 'ws://').replace('https://', 'wss://')
         ws_url = urljoin(ws_url, path)
         
         # Return configured client (actual WebSocket handled by websockets library)

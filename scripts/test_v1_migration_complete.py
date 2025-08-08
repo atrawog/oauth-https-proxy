@@ -4,14 +4,14 @@
 import os
 import requests
 
-BASE_URL = os.environ.get('BASE_URL', 'http://localhost:80')
+API_URL = os.environ.get('API_URL', 'http://localhost:80')
 TOKEN = os.environ.get('ADMIN_TOKEN', 'acm_rYq7mL2Gzh95YgpIiGxjfig4t4swu37UaWrUgLhbDQY')
 
 def test_endpoint(path, expected_status=None):
     """Test an endpoint and return status code."""
     try:
         headers = {"Authorization": f"Bearer {TOKEN}"}
-        response = requests.get(f"{BASE_URL}{path}", headers=headers)
+        response = requests.get(f"{API_URL}{path}", headers=headers)
         return response.status_code, response.text[:100] if response.text else ""
     except Exception as e:
         return 0, str(e)

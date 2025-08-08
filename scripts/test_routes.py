@@ -9,11 +9,11 @@ import time
 
 def test_routes():
     """Test route CRUD operations."""
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
     test_token = os.getenv('TEST_TOKEN')
     
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     if not test_token:
@@ -29,7 +29,7 @@ def test_routes():
     # Test 1: List routes
     print("1. Listing routes...")
     try:
-        response = requests.get(f"{base_url}/routes", timeout=10)
+        response = requests.get(f"{api_url}/routes", timeout=10)
         response.raise_for_status()
         routes = response.json()
         print(f"   ✓ Found {len(routes)} routes")
@@ -56,7 +56,7 @@ def test_routes():
     }
     
     try:
-        response = requests.post(f"{base_url}/routes", json=test_route_data, headers=headers, timeout=10)
+        response = requests.post(f"{api_url}/routes", json=test_route_data, headers=headers, timeout=10)
         response.raise_for_status()
         created_route = response.json()
         route_id = created_route['route_id']
@@ -69,7 +69,7 @@ def test_routes():
     # Test 3: Get route details
     print(f"\n3. Getting route details for {route_id}...")
     try:
-        response = requests.get(f"{base_url}/routes/{route_id}", timeout=10)
+        response = requests.get(f"{api_url}/routes/{route_id}", timeout=10)
         response.raise_for_status()
         route = response.json()
         print(f"   ✓ Retrieved route: {route['path_pattern']} -> {route['target_type']}:{route['target_value']}")
@@ -86,7 +86,7 @@ def test_routes():
     }
     
     try:
-        response = requests.put(f"{base_url}/routes/{route_id}", json=update_data, headers=headers, timeout=10)
+        response = requests.put(f"{api_url}/routes/{route_id}", json=update_data, headers=headers, timeout=10)
         response.raise_for_status()
         updated_route = response.json()
         print(f"   ✓ Updated priority to {updated_route['priority']}")
@@ -108,7 +108,7 @@ def test_routes():
     }
     
     try:
-        response = requests.post(f"{base_url}/routes", json=regex_route_data, headers=headers, timeout=10)
+        response = requests.post(f"{api_url}/routes", json=regex_route_data, headers=headers, timeout=10)
         response.raise_for_status()
         regex_route = response.json()
         regex_route_id = regex_route['route_id']
@@ -120,7 +120,7 @@ def test_routes():
     # Test 6: Disable route
     print(f"\n6. Disabling route {route_id}...")
     try:
-        response = requests.put(f"{base_url}/routes/{route_id}", 
+        response = requests.put(f"{api_url}/routes/{route_id}", 
                                 json={"enabled": False}, headers=headers, timeout=10)
         response.raise_for_status()
         print(f"   ✓ Route disabled")
@@ -132,7 +132,7 @@ def test_routes():
     print(f"\n7. Cleaning up test routes...")
     for rid in [route_id, regex_route_id]:
         try:
-            response = requests.delete(f"{base_url}/routes/{rid}", headers=headers, timeout=10)
+            response = requests.delete(f"{api_url}/routes/{rid}", headers=headers, timeout=10)
             response.raise_for_status()
             print(f"   ✓ Deleted route: {rid}")
         except Exception as e:
@@ -142,7 +142,7 @@ def test_routes():
     # Test 8: Verify default routes cannot be deleted
     print("\n8. Verifying default route protection...")
     try:
-        response = requests.delete(f"{base_url}/routes/acme-challenge", headers=headers, timeout=10)
+        response = requests.delete(f"{api_url}/routes/acme-challenge", headers=headers, timeout=10)
         if response.status_code == 403:
             print(f"   ✓ Default route correctly protected")
         else:

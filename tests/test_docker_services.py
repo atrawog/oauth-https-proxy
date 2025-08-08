@@ -347,7 +347,7 @@ class TestDockerServiceAPI:
     """Test Docker service API endpoints."""
     
     @pytest.mark.asyncio
-    async def test_create_service_via_api(self, base_url, admin_token):
+    async def test_create_service_via_api(self, api_url, admin_token):
         """Test creating a service through the API."""
         headers = {"Authorization": f"Bearer {admin_token}"}
         
@@ -359,7 +359,7 @@ class TestDockerServiceAPI:
         }
         
         response = requests.post(
-            f"{base_url}/api/v1/services",
+            f"{api_url}/api/v1/services",
             json=data,
             headers=headers
         )
@@ -371,17 +371,17 @@ class TestDockerServiceAPI:
         
         # Cleanup
         requests.delete(
-            f"{base_url}/api/v1/services/test-api-nginx?force=true",
+            f"{api_url}/api/v1/services/test-api-nginx?force=true",
             headers=headers
         )
     
     @pytest.mark.asyncio
-    async def test_list_services_via_api(self, base_url, admin_token):
+    async def test_list_services_via_api(self, api_url, admin_token):
         """Test listing services through the API."""
         headers = {"Authorization": f"Bearer {admin_token}"}
         
         response = requests.get(
-            f"{base_url}/api/v1/services",
+            f"{api_url}/api/v1/services",
             headers=headers
         )
         

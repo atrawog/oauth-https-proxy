@@ -11,13 +11,13 @@ def delete_certificate(cert_name: str, token: str, force: bool = False):
         print("Error: Certificate name and token are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
 
     
-    if not base_url:
+    if not api_url:
 
     
-        print("Error: BASE_URL must be set in .env")
+        print("Error: API_URL must be set in .env")
 
     
         return False
@@ -26,7 +26,7 @@ def delete_certificate(cert_name: str, token: str, force: bool = False):
     try:
         # First get the certificate to see its domains
         response = requests.get(
-            f"{base_url}/certificates/{cert_name}",
+            f"{api_url}/certificates/{cert_name}",
             headers=headers
         )
         
@@ -65,7 +65,7 @@ def delete_certificate(cert_name: str, token: str, force: bool = False):
         # Remove each domain (the last one will delete the certificate)
         for i, domain in enumerate(domains):
             response = requests.delete(
-                f"{base_url}/certificates/{cert_name}/domains/{domain}",
+                f"{api_url}/certificates/{cert_name}/domains/{domain}",
                 headers=headers
             )
             

@@ -7,7 +7,7 @@ import requests
 
 
 def main():
-    base_url = os.getenv('TEST_BASE_URL', 'http://localhost:80')
+    api_url = os.getenv('TEST_API_URL', 'http://localhost:80')
     
     print("Testing Web GUI Route Management")
     print("="*50)
@@ -15,7 +15,7 @@ def main():
     # 1. Check if GUI is accessible
     print("\n1. Testing GUI accessibility...")
     try:
-        resp = requests.get(f"{base_url}/static/index.html")
+        resp = requests.get(f"{api_url}/static/index.html")
         if resp.ok:
             print("✓ GUI is accessible at /static/index.html")
         else:
@@ -30,7 +30,7 @@ def main():
     assets = ['/static/styles.css', '/static/app.js']
     for asset in assets:
         try:
-            resp = requests.get(f"{base_url}{asset}")
+            resp = requests.get(f"{api_url}{asset}")
             if resp.ok:
                 print(f"✓ {asset} loaded successfully")
             else:

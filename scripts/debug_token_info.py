@@ -6,7 +6,7 @@ import sys
 import requests
 
 # Configuration
-BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:80")
+API_URL = os.getenv("TEST_API_URL", "http://localhost:80")
 
 def debug_token_info(token):
     """Debug the /token/info endpoint."""
@@ -15,14 +15,14 @@ def debug_token_info(token):
     print(f"{'='*60}\n")
     
     print(f"Token: {token[:20]}..." if len(token) > 20 else f"Token: {token}")
-    print(f"URL: {BASE_URL}/token/info")
+    print(f"URL: {API_URL}/token/info")
     
     headers = {"Authorization": f"Bearer {token}"}
     print(f"\nHeaders: {headers}")
     
     try:
         print("\nMaking request...")
-        response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+        response = requests.get(f"{API_URL}/token/info", headers=headers)
         
         print(f"Status Code: {response.status_code}")
         print(f"Response Headers: {dict(response.headers)}")
@@ -38,7 +38,7 @@ def debug_token_info(token):
         print(f"\n{'='*40}")
         print("Testing without Bearer prefix...")
         headers2 = {"Authorization": token}
-        response2 = requests.get(f"{BASE_URL}/token/info", headers=headers2)
+        response2 = requests.get(f"{API_URL}/token/info", headers=headers2)
         print(f"Status Code: {response2.status_code}")
         if response2.status_code != 200:
             print(f"Response: {response2.text}")

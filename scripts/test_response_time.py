@@ -6,9 +6,9 @@ import httpx
 import os
 
 def main():
-    base_url = os.getenv("TEST_BASE_URL")
+    api_url = os.getenv("TEST_API_URL")
     
-    print(f"Testing response time to {base_url}")
+    print(f"Testing response time to {api_url}")
     
     # First, test a non-existent challenge (should 404 quickly)
     print("\n1. Testing 404 response time:")
@@ -16,7 +16,7 @@ def main():
     for i in range(5):
         start = time.time()
         try:
-            response = httpx.get(f"{base_url}/.well-known/acme-challenge/nonexistent", timeout=10)
+            response = httpx.get(f"{api_url}/.well-known/acme-challenge/nonexistent", timeout=10)
             elapsed = time.time() - start
             times.append(elapsed)
             print(f"   Request {i+1}: {response.status_code} in {elapsed*1000:.1f}ms")
@@ -33,7 +33,7 @@ def main():
     for i in range(5):
         start = time.time()
         try:
-            response = httpx.get(f"{base_url}/health", timeout=10)
+            response = httpx.get(f"{api_url}/health", timeout=10)
             elapsed = time.time() - start
             times.append(elapsed)
             print(f"   Request {i+1}: {response.status_code} in {elapsed*1000:.1f}ms")

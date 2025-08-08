@@ -8,18 +8,18 @@ from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from scripts.test_utils import get_api_base_url
+from scripts.test_utils import get_api_api_url
 
 
 def show_route(route_id: str):
     """Show route details."""
-    base_url = get_api_base_url()
-    if not base_url:
+    api_url = get_api_api_url()
+    if not api_url:
         print("Error: Unable to determine API base URL")
         return False
     
     try:
-        response = requests.get(f"{base_url}/api/v1/routes/{route_id}", timeout=10)
+        response = requests.get(f"{api_url}/api/v1/routes/{route_id}", timeout=10)
         response.raise_for_status()
         
         route = response.json()

@@ -10,7 +10,7 @@ from time import sleep
 sys.path.insert(0, '/app')
 
 # Get base URL from environment
-BASE_URL = os.getenv('BASE_URL', 'http://localhost:80')
+API_URL = os.getenv('API_URL', 'http://localhost:80')
 
 def test_web_gui():
     """Test the merged tabs functionality."""
@@ -18,7 +18,7 @@ def test_web_gui():
     
     # 1. Test home page loads
     print("\n1. Testing home page...")
-    response = requests.get(BASE_URL)
+    response = requests.get(API_URL)
     if response.status_code == 200:
         print("   ✓ Home page loads successfully")
         
@@ -46,7 +46,7 @@ def test_web_gui():
     print("\n2. Testing static files...")
     
     # Test CSS
-    css_response = requests.get(f"{BASE_URL}/static/styles.css")
+    css_response = requests.get(f"{API_URL}/static/styles.css")
     if css_response.status_code == 200:
         print("   ✓ CSS file loads")
         if '.tab-header' in css_response.text and '.form-container' in css_response.text:
@@ -57,7 +57,7 @@ def test_web_gui():
         print(f"   ✗ CSS file failed: {css_response.status_code}")
     
     # Test JavaScript
-    js_response = requests.get(f"{BASE_URL}/static/app.js")
+    js_response = requests.get(f"{API_URL}/static/app.js")
     if js_response.status_code == 200:
         print("   ✓ JavaScript file loads")
         if 'toggleCertificateForm' in js_response.text and 'toggleProxyForm' in js_response.text:

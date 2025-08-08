@@ -22,28 +22,28 @@ scripts_to_update = [
 # Define replacements
 replacements = [
     # Direct path replacements
-    (r'f"\{BASE_URL\}/certificates"', 'f"{BASE_URL}/api/v1/certificates"'),
-    (r'f"\{BASE_URL\}/certificates/', 'f"{BASE_URL}/api/v1/certificates/'),
-    (r'"\{BASE_URL\}/certificates"', '"{BASE_URL}/api/v1/certificates"'),
+    (r'f"\{API_URL\}/certificates"', 'f"{API_URL}/api/v1/certificates"'),
+    (r'f"\{API_URL\}/certificates/', 'f"{API_URL}/api/v1/certificates/'),
+    (r'"\{API_URL\}/certificates"', '"{API_URL}/api/v1/certificates"'),
     
-    (r'f"\{BASE_URL\}/proxy/targets"', 'f"{BASE_URL}/api/v1/proxy/targets"'),
-    (r'f"\{BASE_URL\}/proxy/targets/', 'f"{BASE_URL}/api/v1/proxy/targets/'),
-    (r'"\{BASE_URL\}/proxy/targets"', '"{BASE_URL}/api/v1/proxy/targets"'),
+    (r'f"\{API_URL\}/proxy/targets"', 'f"{API_URL}/api/v1/proxy/targets"'),
+    (r'f"\{API_URL\}/proxy/targets/', 'f"{API_URL}/api/v1/proxy/targets/'),
+    (r'"\{API_URL\}/proxy/targets"', '"{API_URL}/api/v1/proxy/targets"'),
     
-    (r'f"\{BASE_URL\}/tokens"', 'f"{BASE_URL}/api/v1/tokens"'),
-    (r'f"\{BASE_URL\}/tokens/', 'f"{BASE_URL}/api/v1/tokens/'),
+    (r'f"\{API_URL\}/tokens"', 'f"{API_URL}/api/v1/tokens"'),
+    (r'f"\{API_URL\}/tokens/', 'f"{API_URL}/api/v1/tokens/'),
     
-    (r'f"\{BASE_URL\}/routes"', 'f"{BASE_URL}/api/v1/routes"'),
-    (r'f"\{BASE_URL\}/routes/', 'f"{BASE_URL}/api/v1/routes/'),
-    (r'"\{BASE_URL\}/routes"', '"{BASE_URL}/api/v1/routes"'),
+    (r'f"\{API_URL\}/routes"', 'f"{API_URL}/api/v1/routes"'),
+    (r'f"\{API_URL\}/routes/', 'f"{API_URL}/api/v1/routes/'),
+    (r'"\{API_URL\}/routes"', '"{API_URL}/api/v1/routes"'),
     
-    (r'f"\{BASE_URL\}/instances"', 'f"{BASE_URL}/api/v1/instances"'),
-    (r'f"\{BASE_URL\}/instances/', 'f"{BASE_URL}/api/v1/instances/'),
+    (r'f"\{API_URL\}/instances"', 'f"{API_URL}/api/v1/instances"'),
+    (r'f"\{API_URL\}/instances/', 'f"{API_URL}/api/v1/instances/'),
     
-    (r'f"\{BASE_URL\}/resources"', 'f"{BASE_URL}/api/v1/resources"'),
-    (r'f"\{BASE_URL\}/resources/', 'f"{BASE_URL}/api/v1/resources/'),
+    (r'f"\{API_URL\}/resources"', 'f"{API_URL}/api/v1/resources"'),
+    (r'f"\{API_URL\}/resources/', 'f"{API_URL}/api/v1/resources/'),
     
-    (r'f"\{BASE_URL\}/oauth/', 'f"{BASE_URL}/api/v1/oauth/'),
+    (r'f"\{API_URL\}/oauth/', 'f"{API_URL}/api/v1/oauth/'),
 ]
 
 total_replacements = 0

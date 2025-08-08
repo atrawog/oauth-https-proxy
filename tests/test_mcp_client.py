@@ -41,10 +41,10 @@ class TestMCPClient:
     def test_mcp_server_metadata(self, echo_stateless_url: str):
         """Test that MCP server provides required metadata."""
         # Extract base URL from MCP endpoint
-        base_url = echo_stateless_url.replace("/mcp", "")
+        api_url = echo_stateless_url.replace("/mcp", "")
         
         response = httpx.get(
-            f"{base_url}/.well-known/oauth-protected-resource",
+            f"{api_url}/.well-known/oauth-protected-resource",
             verify=False,
             timeout=10
         )
@@ -78,7 +78,7 @@ class TestMCPClient:
     @pytest.mark.requires_auth
     def test_oauth_client_registration(self, base_domain: str):
         """Test OAuth client registration for MCP."""
-        auth_url = f"https://auth.{base_domain}/register"
+        api_url = f"https://auth.{base_domain}/register"
         
         registration_data = {
             "software_id": f"mcp-pytest-{secrets.token_hex(4)}",
@@ -91,7 +91,7 @@ class TestMCPClient:
         }
         
         response = httpx.post(
-            auth_url,
+            api_url,
             json=registration_data,
             verify=False,
             timeout=10

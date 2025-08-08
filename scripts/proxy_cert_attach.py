@@ -7,16 +7,16 @@ import requests
 
 def attach_certificate_to_proxy(hostname: str, cert_name: str, token: str):
     """Attach an existing certificate to a proxy target."""
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
     
     try:
         # Check if proxy exists
-        response = requests.get(f"{base_url}/proxy/targets/{hostname}", headers=headers)
+        response = requests.get(f"{api_url}/proxy/targets/{hostname}", headers=headers)
         if response.status_code == 404:
             print(f"✗ Proxy target {hostname} not found")
             return False
@@ -28,13 +28,13 @@ def attach_certificate_to_proxy(hostname: str, cert_name: str, token: str):
         proxy = response.json()
         
         # Check if certificate exists
-        response = requests.get(f"{base_url}/certificates/{cert_name}", headers=headers)
+        response = requests.get(f"{api_url}/certificates/{cert_name}", headers=headers)
         if response.status_code == 404:
             print(f"✗ Certificate {cert_name} not found")
             print("\nAvailable certificates:")
             
             # List available certificates
-            response = requests.get(f"{base_url}/certificates", headers=headers)
+            response = requests.get(f"{api_url}/certificates", headers=headers)
             if response.status_code == 200:
                 certs = response.json()
                 if certs:
@@ -91,7 +91,7 @@ def attach_certificate_to_proxy(hostname: str, cert_name: str, token: str):
         
         update_data = {"cert_name": cert_name}
         response = requests.put(
-            f"{base_url}/proxy/targets/{hostname}",
+            f"{api_url}/proxy/targets/{hostname}",
             json=update_data,
             headers=headers
         )

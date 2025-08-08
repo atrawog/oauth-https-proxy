@@ -180,7 +180,7 @@ services:
     build: .
     command: pixi run pytest tests/ -v
     environment:
-      TEST_BASE_URL: http://certmanager:80
+      TEST_API_URL: http://certmanager:80
       TEST_REDIS_URL: redis://redis:6379/1
 ```
 

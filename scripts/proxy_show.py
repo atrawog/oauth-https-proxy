@@ -9,7 +9,7 @@ from datetime import datetime
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from test_utils import get_api_base_url
+from test_utils import get_api_api_url
 
 def show_proxy_target(hostname: str):
     """Display proxy target details."""
@@ -17,14 +17,14 @@ def show_proxy_target(hostname: str):
         print("Error: Hostname is required")
         return False
     
-    base_url = get_api_base_url()
-    if not base_url:
+    api_url = get_api_api_url()
+    if not api_url:
         print("Error: Unable to determine API base URL")
         return False
     
     try:
         response = requests.get(
-            f"{base_url}/proxy/targets/{hostname}"
+            f"{api_url}/proxy/targets/{hostname}"
         )
         
         if response.status_code == 200:

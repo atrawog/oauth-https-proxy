@@ -13,7 +13,7 @@ sys.path.insert(0, '/app')
 from src.storage import RedisStorage
 
 # Configuration
-BASE_URL = os.getenv("TEST_BASE_URL", "http://localhost:80")
+API_URL = os.getenv("TEST_API_URL", "http://localhost:80")
 
 # Initialize storage
 storage = RedisStorage(os.getenv("REDIS_URL"))
@@ -108,7 +108,7 @@ def test_all_tokens():
         # Test the endpoint
         headers = {"Authorization": f"Bearer {token}"}
         try:
-            response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+            response = requests.get(f"{API_URL}/token/info", headers=headers)
             
             if response.status_code == 200:
                 data = response.json()
@@ -155,14 +155,14 @@ def test_all_tokens():
     # Test with invalid token
     print("\n   a) Testing with invalid token:")
     headers = {"Authorization": "Bearer invalid_token_12345"}
-    response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+    response = requests.get(f"{API_URL}/token/info", headers=headers)
     print(f"      Status: {response.status_code} (Expected: 401)")
     
     # Test without Bearer prefix
     if all_tokens:
         print("\n   b) Testing without Bearer prefix:")
         headers = {"Authorization": all_tokens[0]['token']}
-        response = requests.get(f"{BASE_URL}/token/info", headers=headers)
+        response = requests.get(f"{API_URL}/token/info", headers=headers)
         print(f"      Status: {response.status_code} (Expected: 403)")
     
     # Test email update for a token without email
@@ -174,14 +174,14 @@ def test_all_tokens():
         
         new_email = f"test-{tokens_without_email[0]['name']}@example.com"
         response = requests.put(
-            f"{BASE_URL}/token/email",
+            f"{API_URL}/token/email",
             headers=headers,
             json={"cert_email": new_email}
         )
         if response.status_code == 200:
             print(f"      ✅ Email update successful")
             # Verify it was saved
-            response2 = requests.get(f"{BASE_URL}/token/info", headers=headers)
+            response2 = requests.get(f"{API_URL}/token/info", headers=headers)
             if response2.status_code == 200:
                 data = response2.json()
                 if data.get('cert_email') == new_email:

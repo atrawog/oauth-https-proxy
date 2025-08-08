@@ -45,7 +45,7 @@ def system_info(ctx):
     try:
         # Gather system information from various endpoints
         info = {
-            'base_url': ctx.config.base_url,
+            'api_url': ctx.config.api_url,
             'authenticated': bool(ctx.config.token),
             'profile': ctx.config.profile,
         }
@@ -166,9 +166,9 @@ def validate_config(ctx):
         
         # Test health endpoint
         if client.health_check_sync():
-            console.print(f"[green]✓ Connected to {ctx.config.base_url}[/green]")
+            console.print(f"[green]✓ Connected to {ctx.config.api_url}[/green]")
         else:
-            console.print(f"[red]✗ Cannot connect to {ctx.config.base_url}[/red]")
+            console.print(f"[red]✗ Cannot connect to {ctx.config.api_url}[/red]")
             return
         
         # Test authentication

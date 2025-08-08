@@ -7,7 +7,7 @@ import sys
 import time
 
 def main():
-    base_url = os.getenv("TEST_BASE_URL")
+    api_url = os.getenv("TEST_API_URL")
     
     if len(sys.argv) < 2:
         print("Usage: test_auth.py <api-token>")
@@ -21,7 +21,7 @@ def main():
         print("1. Testing without token (should fail)...")
         try:
             response = httpx.post(
-                f"{base_url}/certificates",
+                f"{api_url}/certificates",
                 json={
                     "domain": "test-noauth.atradev.org",
                     "email": "test@atradev.org",
@@ -38,7 +38,7 @@ def main():
         print("\n2. Testing with valid token...")
         headers = {"Authorization": f"Bearer {token}"}
         response = httpx.post(
-            f"{base_url}/certificates",
+            f"{api_url}/certificates",
             json={
                 "domain": "test-auth.atradev.org",
                 "email": "test@atradev.org",
@@ -60,14 +60,14 @@ def main():
             
             # Test getting certificate (public, should work without auth)
             print("\n3. Testing GET certificate (public endpoint)...")
-            response = httpx.get(f"{base_url}/certificates/{cert_name}")
+            response = httpx.get(f"{api_url}/certificates/{cert_name}")
             print(f"   Status: {response.status_code}")
             
             # Test renewing with wrong token (should fail)
             print("\n4. Testing renew with wrong token (should fail)...")
             wrong_headers = {"Authorization": "Bearer acm_wrong_token_12345"}
             response = httpx.post(
-                f"{base_url}/certificates/{cert_name}/renew",
+                f"{api_url}/certificates/{cert_name}/renew",
                 headers=wrong_headers
             )
             print(f"   Status: {response.status_code}")
@@ -76,7 +76,7 @@ def main():
             # Test renewing with correct token
             print("\n5. Testing renew with correct token...")
             response = httpx.post(
-                f"{base_url}/certificates/{cert_name}/renew",
+                f"{api_url}/certificates/{cert_name}/renew",
                 headers=headers
             )
             print(f"   Status: {response.status_code}")
@@ -84,7 +84,7 @@ def main():
             # Test deleting domain with correct token
             print("\n6. Testing delete domain with correct token...")
             response = httpx.delete(
-                f"{base_url}/certificates/{cert_name}/domains/test-auth.atradev.org",
+                f"{api_url}/certificates/{cert_name}/domains/test-auth.atradev.org",
                 headers=headers
             )
             print(f"   Status: {response.status_code}")
@@ -97,7 +97,7 @@ def main():
             try:
                 with httpx.Client() as client:
                     delete_response = client.delete(
-                        f"{base_url}/certificates/{cert_name}",
+                        f"{api_url}/certificates/{cert_name}",
                         headers={"Authorization": f"Bearer {token}"}
                     )
                     if delete_response.status_code == 200:

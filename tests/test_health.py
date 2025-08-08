@@ -73,6 +73,6 @@ class TestHealthCheck:
     def test_health_endpoint_response_time(self, http_client: httpx.Client, timeout):
         """Test that health endpoint responds within timeout."""
         # Create a client with specific timeout
-        with httpx.Client(base_url=http_client.base_url, timeout=timeout) as client:
+        with httpx.Client(api_url=http_client.api_url, timeout=timeout) as client:
             response = client.get("/health")
             assert response.status_code == 200

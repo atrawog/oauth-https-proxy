@@ -12,9 +12,9 @@ def create_proxy_target(hostname: str, target_url: str, token: str, staging: boo
         print("Error: All parameters are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -33,7 +33,7 @@ def create_proxy_target(hostname: str, target_url: str, token: str, staging: boo
     
     try:
         response = requests.post(
-            f"{base_url}/proxy/targets",
+            f"{api_url}/proxy/targets",
             json=data,
             headers=headers
         )

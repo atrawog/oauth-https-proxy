@@ -11,10 +11,10 @@ def log_time(msg):
     print(f"[{datetime.now().isoformat()}] {msg}")
 
 def main():
-    base_url = os.getenv("TEST_BASE_URL")
-    assert base_url)
+    api_url = os.getenv("TEST_API_URL")
+    assert api_url)
     
-    client = httpx.Client(base_url=base_url)
+    client = httpx.Client(api_url=api_url)
     
     # Test non-existent challenge
     start = time.time()

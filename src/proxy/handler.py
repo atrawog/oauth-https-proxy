@@ -447,7 +447,7 @@ class EnhancedProxyHandler:
                     "method": request.method,
                     "path": request.url.path,
                     "full_target_url": target_url,
-                    "backend_base_url": target.target_url,
+                    "backend_api_url": target.target_url,
                     "error_class": type(e).__name__,
                     "error_str": str(e),
                     "error_args": e.args if hasattr(e, 'args') else None,
@@ -813,7 +813,7 @@ class EnhancedProxyHandler:
         
         # Build auth verification request
         # Use internal API service URL to avoid proxy loops
-        auth_url = "http://localhost:9000/verify"
+        api_url = "http://localhost:9000/verify"
         
         # Forward relevant headers and cookies
         headers = {
@@ -836,7 +836,7 @@ class EnhancedProxyHandler:
             "Sending auth verification request - DETAILED HEADERS",
             ip=client_ip,
             hostname=target.hostname,
-            auth_url=auth_url,
+            api_url=api_url,
             forwarded_headers=headers,
             original_request_headers=dict(request.headers),
             resource_uri_will_be=f"{request.url.scheme}://{target.hostname}"
@@ -860,13 +860,13 @@ class EnhancedProxyHandler:
                 "Making auth verification request to OAuth server",
                 ip=client_ip,
                 hostname=target.hostname,
-                auth_url=auth_url,
+                api_url=api_url,
                 has_auth_header=bool(headers.get("Authorization")),
                 has_cookies=bool(cookies)
             )
             
             auth_response = await self.client.get(
-                auth_url,
+                api_url,
                 headers=headers,
                 cookies=cookies,
                 follow_redirects=False
@@ -1044,7 +1044,7 @@ class EnhancedProxyHandler:
                     ip=client_ip,
                     hostname=target.hostname,
                     auth_proxy=target.auth_proxy,
-                    auth_url=auth_url,
+                    api_url=api_url,
                     response_status=auth_response.status_code,
                     response_headers=dict(auth_response.headers),
                     response_body=error_response_body,
@@ -1072,12 +1072,12 @@ class EnhancedProxyHandler:
                 ip=client_ip,
                 hostname=target.hostname,
                 auth_proxy=target.auth_proxy,
-                auth_url=auth_url,
+                api_url=api_url,
                 auth_mode=target.auth_mode,
                 error=str(e),
                 error_type=type(e).__name__,
                 connection_details={
-                    "target_url": auth_url,
+                    "target_url": api_url,
                     "client_ip": client_ip,
                     "hostname": target.hostname,
                     "timeout_config": str(self.client.timeout)
@@ -1096,7 +1096,7 @@ class EnhancedProxyHandler:
                 ip=client_ip,
                 hostname=target.hostname,
                 auth_proxy=target.auth_proxy,
-                auth_url=auth_url,
+                api_url=api_url,
                 auth_mode=target.auth_mode,
                 timeout_config=str(self.client.timeout),
                 error=str(e),
@@ -1119,7 +1119,7 @@ class EnhancedProxyHandler:
                 ip=client_ip,
                 hostname=target.hostname,
                 auth_proxy=target.auth_proxy,
-                auth_url=auth_url,
+                api_url=api_url,
                 auth_mode=target.auth_mode,
                 exception_type=type(e).__name__,
                 error=str(e),

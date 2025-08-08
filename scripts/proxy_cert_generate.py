@@ -8,16 +8,16 @@ import time
 
 def generate_proxy_certificate(hostname: str, token: str, staging: bool = False):
     """Generate a certificate for an existing proxy and update its cert_name."""
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
     
     # Get proxy target
     try:
-        response = requests.get(f"{base_url}/proxy/targets/{hostname}", headers=headers)
+        response = requests.get(f"{api_url}/proxy/targets/{hostname}", headers=headers)
         if response.status_code == 404:
             print(f"✗ Proxy target {hostname} not found")
             return False
@@ -43,7 +43,7 @@ def generate_proxy_certificate(hostname: str, token: str, staging: bool = False)
             print("  This will create a new certificate and replace the existing one.")
         
         # Get token info for email
-        response = requests.get(f"{base_url}/token/info", headers=headers)
+        response = requests.get(f"{api_url}/token/info", headers=headers)
         if response.status_code != 200:
             print("✗ Failed to get token info")
             return False
@@ -68,7 +68,7 @@ def generate_proxy_certificate(hostname: str, token: str, staging: bool = False)
             )
         }
         
-        response = requests.post(f"{base_url}/certificates", json=cert_data, headers=headers)
+        response = requests.post(f"{api_url}/certificates", json=cert_data, headers=headers)
         
         if response.status_code != 200:
             error = response.json() if response.headers.get('content-type') == 'application/json' else {}
@@ -84,7 +84,7 @@ def generate_proxy_certificate(hostname: str, token: str, staging: bool = False)
         for attempt in range(max_attempts):
             time.sleep(2)
             
-            response = requests.get(f"{base_url}/certificates/{cert_name}/status", headers=headers)
+            response = requests.get(f"{api_url}/certificates/{cert_name}/status", headers=headers)
             if response.status_code == 200:
                 status_data = response.json()
                 status = status_data.get('status', 'unknown')
@@ -105,7 +105,7 @@ def generate_proxy_certificate(hostname: str, token: str, staging: bool = False)
         print(f"\nUpdating proxy to use certificate...")
         update_data = {"cert_name": cert_name}
         response = requests.put(
-            f"{base_url}/proxy/targets/{hostname}",
+            f"{api_url}/proxy/targets/{hostname}",
             json=update_data,
             headers=headers
         )

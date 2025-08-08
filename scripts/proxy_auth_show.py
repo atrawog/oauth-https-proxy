@@ -15,12 +15,12 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 async def show_proxy_auth(hostname: str):
     """Show authentication configuration for a proxy target."""
-    base_url = os.getenv('BASE_URL', 'http://localhost')
+    api_url = os.getenv('API_URL', 'http://localhost')
     
     async with httpx.AsyncClient() as client:
         # Get auth config (public endpoint)
         response = await client.get(
-            f"{base_url}/proxy/targets/{hostname}/auth"
+            f"{api_url}/proxy/targets/{hostname}/auth"
         )
         
         if response.status_code == 200:

@@ -15,9 +15,9 @@ def update_proxy_target(hostname: str, token: str, target_url: str = None,
         print("Error: Hostname and token are required")
         return False
     
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -45,7 +45,7 @@ def update_proxy_target(hostname: str, token: str, target_url: str = None,
     
     try:
         response = requests.put(
-            f"{base_url}/proxy/targets/{hostname}",
+            f"{api_url}/proxy/targets/{hostname}",
             json=data,
             headers=headers
         )

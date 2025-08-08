@@ -8,9 +8,9 @@ import time
 
 def convert_to_production(cert_name: str, token: str):
     """Convert certificate to production and maintain proxy associations."""
-    base_url = os.getenv('BASE_URL')
-    if not base_url:
-        print("Error: BASE_URL must be set in .env")
+    api_url = os.getenv('API_URL')
+    if not api_url:
+        print("Error: API_URL must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {token}"}
@@ -18,7 +18,7 @@ def convert_to_production(cert_name: str, token: str):
     try:
         # First, find all proxies using this certificate
         print(f"Checking for proxies using certificate {cert_name}...")
-        response = requests.get(f"{base_url}/proxy/targets", headers=headers)
+        response = requests.get(f"{api_url}/proxy/targets", headers=headers)
         if response.status_code != 200:
             print(f"Failed to get proxy targets: {response.status_code}")
             return False
@@ -36,7 +36,7 @@ def convert_to_production(cert_name: str, token: str):
         # Convert certificate to production
         print(f"\nConverting certificate {cert_name} to production...")
         response = requests.post(
-            f"{base_url}/certificates/{cert_name}/convert-to-production",
+            f"{api_url}/certificates/{cert_name}/convert-to-production",
             headers=headers
         )
         
@@ -54,7 +54,7 @@ def convert_to_production(cert_name: str, token: str):
         for attempt in range(max_attempts):
             time.sleep(2)
             
-            response = requests.get(f"{base_url}/certificates/{cert_name}/status", headers=headers)
+            response = requests.get(f"{api_url}/certificates/{cert_name}/status", headers=headers)
             if response.status_code == 200:
                 status_data = response.json()
                 status = status_data.get('status', 'unknown')
@@ -78,7 +78,7 @@ def convert_to_production(cert_name: str, token: str):
                 print(f"  Updating {hostname}...", end='')
                 update_data = {"cert_name": cert_name}
                 response = requests.put(
-                    f"{base_url}/proxy/targets/{hostname}",
+                    f"{api_url}/proxy/targets/{hostname}",
                     json=update_data,
                     headers=headers
                 )

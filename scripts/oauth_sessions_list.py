@@ -9,13 +9,13 @@ from tabulate import tabulate
 
 # Add parent directory to path for imports
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-from test_utils import get_api_base_url, get_admin_token
+from test_utils import get_api_api_url, get_admin_token
 
 
 def list_oauth_sessions():
     """List all active OAuth sessions."""
-    base_url = get_api_base_url()
-    if not base_url:
+    api_url = get_api_api_url()
+    if not api_url:
         print("Error: Unable to determine API base URL")
         return False
     
@@ -28,7 +28,7 @@ def list_oauth_sessions():
     headers = {"Authorization": f"Bearer {token}"}
     
     try:
-        response = requests.get(f"{base_url}/oauth/sessions", headers=headers, timeout=10)
+        response = requests.get(f"{api_url}/oauth/sessions", headers=headers, timeout=10)
         
         if response.status_code == 401:
             print("Error: Unauthorized - invalid or expired token")

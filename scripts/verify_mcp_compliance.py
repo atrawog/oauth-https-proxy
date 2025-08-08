@@ -130,10 +130,10 @@ def check_authorization_endpoint():
     auth_domain = "auth.atradev.org"
     
     # Build a test authorization URL
-    auth_url = f"https://{auth_domain}/authorize?client_id=test&redirect_uri=http://localhost/callback&response_type=code&resource=https://test.example.com"
+    api_url = f"https://{auth_domain}/authorize?client_id=test&redirect_uri=http://localhost/callback&response_type=code&resource=https://test.example.com"
     
     try:
-        response = httpx.get(auth_url, verify=False, follow_redirects=False, timeout=10)
+        response = httpx.get(api_url, verify=False, follow_redirects=False, timeout=10)
         
         # We expect either a redirect (to login) or an error
         if response.status_code in [302, 303]:

@@ -15,7 +15,7 @@ with open(".env", "r") as f:
         elif line.startswith("TEST_TOKEN="):
             test_token = line.strip().split("=", 1)[1]
 
-base_url = "http://localhost:80"
+api_url = "http://localhost:80"
 
 print("🔐 Authentication System Final Test")
 print("=" * 60)
@@ -30,7 +30,7 @@ protected_endpoints = [
 ]
 
 for endpoint in protected_endpoints:
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         resp = client.get(endpoint)
         status = "✅ Protected" if resp.status_code == 403 else f"❌ Not protected ({resp.status_code})"
         print(f"   {endpoint:20} → {status}")
@@ -41,7 +41,7 @@ if admin_token:
     headers = {"Authorization": f"Bearer {admin_token}"}
     
     # Get token info
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         resp = client.get("/token/info", headers=headers)
         if resp.status_code == 200:
             info = resp.json()
@@ -50,7 +50,7 @@ if admin_token:
             print(f"   ❌ Failed to get token info: {resp.status_code}")
     
     # List all certificates
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         resp = client.get("/certificates", headers=headers)
         if resp.status_code == 200:
             certs = resp.json()
@@ -59,7 +59,7 @@ if admin_token:
             print(f"   ❌ Failed to list certificates: {resp.status_code}")
     
     # List all proxy targets
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         resp = client.get("/proxy/targets", headers=headers)
         if resp.status_code == 200:
             targets = resp.json()
@@ -78,7 +78,7 @@ public_endpoints = [
 ]
 
 for endpoint, valid_codes in public_endpoints:
-    with Client(base_url=base_url) as client:
+    with Client(api_url=api_url) as client:
         resp = client.get(endpoint)
         status = "✅ Public" if resp.status_code in valid_codes else f"❌ Not public ({resp.status_code})"
         print(f"   {endpoint:35} → {status}")

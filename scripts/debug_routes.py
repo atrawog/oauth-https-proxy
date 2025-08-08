@@ -11,21 +11,21 @@ with open(".env", "r") as f:
             admin_token = line.strip().split("=", 1)[1]
             break
 
-base_url = "http://localhost:80"
+api_url = "http://localhost:80"
 
 print(f"Admin token: {admin_token[:20]}...")
-print(f"Base URL: {base_url}")
+print(f"Base URL: {api_url}")
 
 # Test without auth
 print("\n1. Testing /routes without auth:")
-resp = requests.get(f"{base_url}/routes")
+resp = requests.get(f"{api_url}/routes")
 print(f"   Status: {resp.status_code}")
 print(f"   Body: {resp.text[:100]}...")
 
 # Test with auth
 print("\n2. Testing /routes with admin token:")
 headers = {"Authorization": f"Bearer {admin_token}"}
-resp = requests.get(f"{base_url}/routes", headers=headers)
+resp = requests.get(f"{api_url}/routes", headers=headers)
 print(f"   Status: {resp.status_code}")
 if resp.status_code == 200:
     routes = resp.json()
@@ -35,7 +35,7 @@ else:
 
 # Test token info endpoint to verify token works
 print("\n3. Testing /token/info with admin token:")
-resp = requests.get(f"{base_url}/token/info", headers=headers)
+resp = requests.get(f"{api_url}/token/info", headers=headers)
 print(f"   Status: {resp.status_code}")
 if resp.status_code == 200:
     info = resp.json()

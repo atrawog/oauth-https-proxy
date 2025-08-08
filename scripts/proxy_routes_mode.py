@@ -21,8 +21,8 @@ def main():
         print(f"Error: Invalid mode '{mode}'. Must be 'all', 'selective', or 'none'")
         sys.exit(1)
     
-    base_url = os.getenv('TEST_BASE_URL', 'http://localhost:80')
-    url = f"{base_url}/proxy/targets/{hostname}/routes"
+    api_url = os.getenv('TEST_API_URL', 'http://localhost:80')
+    url = f"{api_url}/proxy/targets/{hostname}/routes"
     
     headers = {
         'Authorization': f'Bearer {token}',

@@ -51,7 +51,7 @@ The client uses the same environment variables as the OAuth HTTPS Proxy server's
 
 ```bash
 # Core Configuration
-export BASE_URL=http://localhost:80
+export API_URL=http://localhost:80
 export ADMIN_TOKEN=your_admin_token_here
 
 # Optional Configuration
@@ -61,7 +61,7 @@ export PROXY_CONNECT_TIMEOUT=30
 
 # For testing
 export TEST_TOKEN=test_token_here
-export TEST_BASE_URL=https://test.yourdomain.org
+export TEST_API_URL=https://test.yourdomain.org
 ```
 
 ### Configuration File

@@ -10,7 +10,7 @@ import subprocess
 from tabulate import tabulate
 
 
-BASE_URL = os.getenv('TEST_BASE_URL', 'http://localhost:80')
+API_URL = os.getenv('TEST_API_URL', 'http://localhost:80')
 ADMIN_TOKEN = os.getenv('ADMIN_TOKEN', '')
 
 def run_command(cmd):
@@ -35,7 +35,7 @@ def test_route_modes():
     
     # Test default mode (should be 'all')
     print("\n2. Checking default route mode...")
-    resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/route-test.example.com/routes")
+    resp = requests.get(f"{API_URL}/api/v1/proxy/targets/route-test.example.com/routes")
     data = resp.json()
     assert data['route_mode'] == 'all', f"Expected 'all', got {data['route_mode']}"
     print(f"✓ Default mode is 'all'")
@@ -50,7 +50,7 @@ def test_route_modes():
     print("✓ Switched to selective mode")
     
     # Verify no routes apply in selective mode (none enabled)
-    resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/route-test.example.com/routes")
+    resp = requests.get(f"{API_URL}/api/v1/proxy/targets/route-test.example.com/routes")
     data = resp.json()
     assert data['route_mode'] == 'selective'
     assert len(data['applicable_routes']) == 0, "Expected no routes in selective mode"
@@ -65,7 +65,7 @@ def test_route_modes():
     print("✓ Switched to none mode")
     
     # Verify no routes apply in none mode
-    resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/route-test.example.com/routes")
+    resp = requests.get(f"{API_URL}/api/v1/proxy/targets/route-test.example.com/routes")
     data = resp.json()
     assert data['route_mode'] == 'none'
     assert len(data['applicable_routes']) == 0, "Expected no routes in none mode"
@@ -96,7 +96,7 @@ def test_selective_routes():
     
     # Get available routes
     print("\n2. Getting available routes...")
-    resp = requests.get(f"{BASE_URL}/api/v1/routes", 
+    resp = requests.get(f"{API_URL}/api/v1/routes", 
                        headers={'Authorization': f'Bearer {ADMIN_TOKEN}'})
     all_routes = resp.json()
     
@@ -122,7 +122,7 @@ def test_selective_routes():
     print("✓ Route enabled")
     
     # Verify route is now applicable
-    resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/selective-test.example.com/routes")
+    resp = requests.get(f"{API_URL}/api/v1/proxy/targets/selective-test.example.com/routes")
     data = resp.json()
     assert acme_route['route_id'] in data['enabled_routes']
     assert len(data['applicable_routes']) == 1
@@ -149,7 +149,7 @@ def test_disabled_routes():
     print("✓ Proxy created")
     
     # Get initial routes
-    resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/disable-test.example.com/routes")
+    resp = requests.get(f"{API_URL}/api/v1/proxy/targets/disable-test.example.com/routes")
     initial_data = resp.json()
     initial_count = len(initial_data['applicable_routes'])
     print(f"✓ Initial applicable routes: {initial_count}")
@@ -166,7 +166,7 @@ def test_disabled_routes():
         print("✓ Route disabled")
         
         # Verify route is disabled
-        resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/disable-test.example.com/routes")
+        resp = requests.get(f"{API_URL}/api/v1/proxy/targets/disable-test.example.com/routes")
         data = resp.json()
         assert route_to_disable['route_id'] in data['disabled_routes']
         assert len(data['applicable_routes']) == initial_count - 1
@@ -195,7 +195,7 @@ def test_bulk_route_set():
     run_command(cmd)
     
     # Get available routes
-    resp = requests.get(f"{BASE_URL}/api/v1/routes", 
+    resp = requests.get(f"{API_URL}/api/v1/routes", 
                        headers={'Authorization': f'Bearer {ADMIN_TOKEN}'})
     all_routes = resp.json()
     
@@ -215,7 +215,7 @@ def test_bulk_route_set():
         print("✓ Multiple routes enabled")
         
         # Verify
-        resp = requests.get(f"{BASE_URL}/api/v1/proxy/targets/bulk-test.example.com/routes")
+        resp = requests.get(f"{API_URL}/api/v1/proxy/targets/bulk-test.example.com/routes")
         data = resp.json()
         assert len(data['enabled_routes']) == 2
         assert len(data['applicable_routes']) == 2

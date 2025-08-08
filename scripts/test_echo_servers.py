@@ -5,7 +5,7 @@ import json
 import requests
 import uuid
 
-def test_echo_server(server_name, base_url):
+def test_echo_server(server_name, api_url):
     """Test an echo MCP server."""
     # Generate session ID
     session_id = str(uuid.uuid4())
@@ -36,14 +36,14 @@ def test_echo_server(server_name, base_url):
     
     print(f"\n{'=' * 60}")
     print(f"Testing {server_name} MCP endpoint...")
-    print(f"URL: {base_url}")
+    print(f"URL: {api_url}")
     print(f"Session ID: {session_id}")
     print('=' * 60)
     
     # Send initialize request
     print("\n1. Sending initialize request...")
     try:
-        resp = requests.post(base_url, json=init_request, headers=headers)
+        resp = requests.post(api_url, json=init_request, headers=headers)
         print(f"   Status: {resp.status_code}")
         
         if resp.status_code == 200:
@@ -61,7 +61,7 @@ def test_echo_server(server_name, base_url):
                 "id": 2
             }
             
-            resp = requests.post(base_url, json=list_tools, headers=headers)
+            resp = requests.post(api_url, json=list_tools, headers=headers)
             print(f"   Status: {resp.status_code}")
             
             if resp.status_code == 200:
@@ -85,7 +85,7 @@ def test_echo_server(server_name, base_url):
                 "id": 3
             }
             
-            resp = requests.post(base_url, json=echo_request, headers=headers)
+            resp = requests.post(api_url, json=echo_request, headers=headers)
             print(f"   Status: {resp.status_code}")
             
             if resp.status_code == 200:
@@ -105,7 +105,7 @@ def test_echo_server(server_name, base_url):
                 "id": 4
             }
             
-            resp = requests.post(base_url, json=health_request, headers=headers)
+            resp = requests.post(api_url, json=health_request, headers=headers)
             print(f"   Status: {resp.status_code}")
             
             if resp.status_code == 200:
@@ -131,7 +131,7 @@ def test_echo_server(server_name, base_url):
                     "id": 5
                 }
                 
-                resp = requests.post(base_url, json=replay_request, headers=headers)
+                resp = requests.post(api_url, json=replay_request, headers=headers)
                 print(f"   Status: {resp.status_code}")
                 
                 if resp.status_code == 200:

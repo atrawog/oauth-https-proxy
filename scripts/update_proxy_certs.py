@@ -10,18 +10,18 @@ load_dotenv()
 
 def update_proxy_certificates():
     """Update proxy targets to reference their generated certificates."""
-    base_url = os.getenv('BASE_URL')
+    api_url = os.getenv('API_URL')
     admin_token = os.getenv('ADMIN_TOKEN')
     
-    if not all([base_url, admin_token]):
-        print("Error: BASE_URL and ADMIN_TOKEN must be set in .env")
+    if not all([api_url, admin_token]):
+        print("Error: API_URL and ADMIN_TOKEN must be set in .env")
         return False
     
     headers = {"Authorization": f"Bearer {admin_token}"}
     
     # Get all proxy targets
     print("Fetching proxy targets...")
-    response = requests.get(f"{base_url}/proxy/targets", headers=headers)
+    response = requests.get(f"{api_url}/proxy/targets", headers=headers)
     if response.status_code != 200:
         print(f"Failed to get proxy targets: {response.status_code}")
         return False
@@ -30,7 +30,7 @@ def update_proxy_certificates():
     
     # Get all certificates
     print("Fetching certificates...")
-    response = requests.get(f"{base_url}/certificates", headers=headers)
+    response = requests.get(f"{api_url}/certificates", headers=headers)
     if response.status_code != 200:
         print(f"Failed to get certificates: {response.status_code}")
         return False
@@ -60,7 +60,7 @@ def update_proxy_certificates():
             # Update proxy
             update_data = {"cert_name": expected_cert}
             response = requests.put(
-                f"{base_url}/proxy/targets/{hostname}",
+                f"{api_url}/proxy/targets/{hostname}",
                 json=update_data,
                 headers=headers
             )

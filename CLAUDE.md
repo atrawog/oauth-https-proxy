@@ -183,7 +183,7 @@ External LB → Port 10001 (PROXY handler) → Port 9000 (Hypercorn)
 - `HTTPS_PORT` - HTTPS server port (default: 443)
 - `SERVER_HOST` - Server bind address (default: 0.0.0.0)
 - `SELF_SIGNED_CN` - Common name for self-signed certificates (default: localhost)
-- `BASE_URL` - Base URL for API endpoints (default: http://localhost:9000)
+- `API_URL` - Base URL for API endpoints (default: http://localhost:9000)
 - **Internal Ports**:
   - Port 9000: Direct API access (localhost-only)
   - Port 10001: PROXY protocol endpoint (forwards to 9000)
@@ -1130,7 +1130,7 @@ just token-email-update <name> <email>      # Update token cert email
 - `TEST_DOMAIN` - Domain for automated testing
 - `TEST_EMAIL` - Email for test certificates
 - `TEST_DOMAIN_BASE` - Base domain for test subdomains
-- `TEST_BASE_URL` - Base URL for test requests (default: http://localhost:80)
+- `TEST_API_URL` - Base URL for test requests (default: http://localhost:80)
 - `TEST_PROXY_TARGET_URL` - Target URL for proxy testing (default: https://example.com)
 - `TEST_TOKEN` - Token for automated test authentication
 
