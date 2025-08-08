@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 import hashlib
 
 from ..storage import RedisStorage
-from .models import ServicePort, PortAccessToken, PortAllocation
+from .models import ServicePort, PortAllocation
 
 logger = logging.getLogger(__name__)
 
@@ -280,7 +280,12 @@ class PortManager:
             cursor, keys = self.redis.scan(cursor, match="port:*", count=100)
             for key in keys:
                 try:
-                    port_num = int(key.decode().split(":")[-1])
+                    # Handle both bytes and string keys
+                    key_str = key.decode() if isinstance(key, bytes) else key
+                    # Skip port:token keys
+                    if "token" in key_str:
+                        continue
+                    port_num = int(key_str.split(":")[-1])
                     data = self.redis.get(key)
                     if data:
                         allocated[port_num] = json.loads(data)
@@ -317,39 +322,13 @@ class PortManager:
         
         return ranges
     
-    # Token management methods
-    
-    async def create_port_access_token(self, token: PortAccessToken) -> str:
-        """Create a new port access token.
-        
-        Args:
-            token: PortAccessToken configuration
-            
-        Returns:
-            The generated token value
-        """
-        # Generate random token
-        import secrets
-        token_value = f"pat_{secrets.token_urlsafe(32)}"
-        token.token_hash = hashlib.sha256(token_value.encode()).hexdigest()
-        
-        # Store token
-        self.redis.set(
-            f"port:token:{token.token_hash}",
-            token.model_dump_json()
-        )
-        
-        # Index by name
-        self.redis.set(
-            f"port:token:name:{token.token_name}",
-            token.token_hash
-        )
-        
-        logger.info(f"Created port access token: {token.token_name}")
-        return token_value
+    # Port access validation
     
     async def validate_port_access(self, port: int, token_value: Optional[str]) -> bool:
         """Validate access to a port using a token.
+        
+        This simplified version only checks if the provided token matches
+        the port's configured source_token.
         
         Args:
             port: Port number to access
@@ -374,98 +353,11 @@ class PortManager:
             logger.warning(f"Token required for port {port} but none provided")
             return False
         
-        # Validate token
+        # Validate token matches the port's source token
         token_hash = hashlib.sha256(token_value.encode()).hexdigest()
         
-        # Check if it matches the port's source token
         if token_hash == port_config.get("source_token_hash"):
             return True
         
-        # Check if it's a valid port access token
-        token_data = self.redis.get(f"port:token:{token_hash}")
-        if not token_data:
-            logger.warning(f"Invalid token for port {port}")
-            return False
-        
-        try:
-            token = PortAccessToken.model_validate_json(token_data)
-            
-            # Check if token is expired
-            if token.is_expired():
-                logger.warning(f"Token {token.token_name} is expired")
-                return False
-            
-            # Check service access
-            service_name = port_config.get("service_name")
-            if service_name and not token.can_access_service(service_name):
-                logger.warning(f"Token {token.token_name} not allowed for service {service_name}")
-                return False
-            
-            # Check port access
-            if not token.can_access_port(port):
-                logger.warning(f"Token {token.token_name} not allowed for port {port}")
-                return False
-            
-            # Update usage stats
-            token.last_used = datetime.now(timezone.utc)
-            token.use_count += 1
-            self.redis.set(
-                f"port:token:{token_hash}",
-                token.model_dump_json()
-            )
-            
-            return True
-            
-        except Exception as e:
-            logger.error(f"Failed to validate token: {e}")
-            return False
-    
-    async def revoke_port_access_token(self, token_name: str) -> bool:
-        """Revoke a port access token.
-        
-        Args:
-            token_name: Name of the token to revoke
-            
-        Returns:
-            True if revoked, False if not found
-        """
-        # Get token hash by name
-        token_hash = self.redis.get(f"port:token:name:{token_name}")
-        if not token_hash:
-            return False
-        
-        # Delete token records
-        self.redis.delete(f"port:token:{token_hash}")
-        self.redis.delete(f"port:token:name:{token_name}")
-        
-        logger.info(f"Revoked port access token: {token_name}")
-        return True
-    
-    async def list_port_access_tokens(self) -> List[PortAccessToken]:
-        """List all port access tokens.
-        
-        Returns:
-            List of PortAccessToken objects
-        """
-        tokens = []
-        cursor = 0
-        
-        while True:
-            cursor, keys = self.redis.scan(cursor, match="port:token:*", count=100)
-            for key in keys:
-                # Skip name index keys
-                if b":name:" in key:
-                    continue
-                    
-                token_data = self.redis.get(key)
-                if token_data:
-                    try:
-                        token = PortAccessToken.model_validate_json(token_data)
-                        tokens.append(token)
-                    except Exception as e:
-                        logger.error(f"Failed to parse token: {e}")
-            
-            if cursor == 0:
-                break
-        
-        return sorted(tokens, key=lambda t: t.created_at, reverse=True)
+        logger.warning(f"Invalid token for port {port}")
+        return False

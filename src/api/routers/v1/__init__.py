@@ -23,7 +23,6 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         oauth_status,
         oauth_admin,
         services,
-        ports,
         logs
     )
     
@@ -92,17 +91,6 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         logger.info("Included services router in v1")
     except Exception as e:
         logger.warning(f"Docker service endpoints not available: {e}")
-    
-    # Port management endpoints: /api/v1/ports/*
-    try:
-        v1_router.include_router(
-            ports.create_router(storage),
-            prefix="/ports",
-            tags=["ports"]
-        )
-        logger.info("Included ports router in v1")
-    except Exception as e:
-        logger.warning(f"Port management endpoints not available: {e}")
     
     # OAuth status endpoints: /api/v1/oauth/*
     # Note: These are management endpoints, not OAuth protocol endpoints

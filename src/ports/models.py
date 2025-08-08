@@ -60,37 +60,6 @@ class ServicePort(BaseModel):
         return v
 
 
-class PortAccessToken(BaseModel):
-    """Token for accessing exposed ports."""
-    token_hash: str = Field(..., description="SHA256 hash of the token")
-    token_name: str = Field(..., description="Human-readable name for the token")
-    allowed_services: List[str] = Field(default_factory=list, description="List of allowed services (empty = all)")
-    allowed_ports: List[int] = Field(default_factory=list, description="List of allowed ports (empty = all)")
-    expires_at: Optional[datetime] = Field(None, description="Token expiration time")
-    created_by: str = Field(..., description="Token that created this access token")
-    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
-    last_used: Optional[datetime] = Field(None, description="Last time this token was used")
-    use_count: int = Field(0, description="Number of times this token has been used")
-    
-    def is_expired(self) -> bool:
-        """Check if token is expired."""
-        if not self.expires_at:
-            return False
-        return datetime.now(timezone.utc) > self.expires_at
-    
-    def can_access_service(self, service_name: str) -> bool:
-        """Check if token can access a specific service."""
-        if not self.allowed_services:  # Empty list means all services
-            return True
-        return service_name in self.allowed_services
-    
-    def can_access_port(self, port: int) -> bool:
-        """Check if token can access a specific port."""
-        if not self.allowed_ports:  # Empty list means all ports
-            return True
-        return port in self.allowed_ports
-
-
 class PortConfiguration(BaseModel):
     """Configuration for creating multiple ports."""
     name: str = Field(..., description="Port name")

@@ -278,9 +278,78 @@ def create_router(storage) -> APIRouter:
             logger.error(f"Error during cleanup: {e}")
             raise HTTPException(500, f"Error during cleanup: {str(e)}")
     
-    # Port management endpoints
+    # Global port management endpoints (replaces /api/v1/ports/)
     
-
+    @router.get("/ports", response_model=Dict[int, Dict])
+    async def list_all_allocated_ports(
+        token_info: Dict = Depends(require_auth)
+    ):
+        """List all allocated ports across all services."""
+        try:
+            from ....ports import PortManager
+            port_manager = PortManager(storage)
+            ports = await port_manager.get_allocated_ports()
+            return ports
+        except Exception as e:
+            logger.error(f"Error listing allocated ports: {e}")
+            raise HTTPException(500, f"Error listing ports: {str(e)}")
+    
+    @router.get("/ports/available", response_model=List[Dict])
+    async def list_available_port_ranges(
+        token_info: Dict = Depends(require_auth)
+    ):
+        """Get ranges of available ports."""
+        try:
+            from ....ports import PortManager
+            port_manager = PortManager(storage)
+            ranges = await port_manager.get_available_port_ranges()
+            
+            # Format ranges for response
+            result = []
+            for start, end in ranges:
+                if end - start >= 10:  # Only show ranges with at least 10 ports
+                    result.append({
+                        "start": start,
+                        "end": end,
+                        "count": end - start + 1
+                    })
+            return result
+        except Exception as e:
+            logger.error(f"Error getting available port ranges: {e}")
+            raise HTTPException(500, f"Error getting port ranges: {str(e)}")
+    
+    @router.post("/ports/check")
+    async def check_port_availability(
+        port: int = Query(..., ge=1, le=65535),
+        bind_address: str = Query("127.0.0.1"),
+        token_info: Dict = Depends(require_auth)
+    ):
+        """Check if a specific port is available."""
+        try:
+            from ....ports import PortManager
+            port_manager = PortManager(storage)
+            available = await port_manager.is_port_available(port, bind_address)
+            
+            response = {
+                "port": port,
+                "available": available,
+                "bind_address": bind_address
+            }
+            
+            if not available:
+                if port in port_manager.RESTRICTED_PORTS:
+                    response["reason"] = "Port is restricted by system policy"
+                else:
+                    response["reason"] = "Port is already allocated"
+            
+            return response
+            
+        except Exception as e:
+            logger.error(f"Error checking port availability: {e}")
+            raise HTTPException(500, f"Error checking port: {str(e)}")
+    
+    # Service-specific endpoints
+    
     @router.get("/{service_name}", response_model=DockerServiceInfo)
     async def get_service(
         service_name: str,

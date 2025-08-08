@@ -624,14 +624,10 @@ The system automatically registers these internal services:
 - `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove a port from service
 - `PUT /api/v1/services/{name}/ports/{port_name}` - Update port configuration
 
-#### Port Allocation Endpoints
-- `GET /api/v1/ports/` - List all allocated ports (requires trailing slash)
-- `GET /api/v1/ports/available` - Get available port ranges
-- `POST /api/v1/ports/check` - Check if port is available
-- `POST /api/v1/ports/tokens` - Create port access token
-- `GET /api/v1/ports/tokens` - List port access tokens
-- `DELETE /api/v1/ports/tokens/{token_name}` - Revoke port access token
-- `POST /api/v1/ports/tokens/validate` - Validate port access token
+#### Global Port Query Endpoints
+- `GET /api/v1/services/ports` - List all allocated ports across all services
+- `GET /api/v1/services/ports/available` - Get available port ranges
+- `POST /api/v1/services/ports/check` - Check if port is available
 
 ### Service Commands
 ```bash
@@ -669,6 +665,7 @@ just service-port-add <name> <port> [bind-address] [source-token] [token]
 just service-port-remove <name> <port-name> [token]
 just service-port-list <name>
 just service-port-check <port> [bind-address]
+just service-ports-global [available-only]
 
 # Testing
 just test-docker-services
@@ -707,24 +704,10 @@ The port management system provides comprehensive control over port allocation a
 }
 ```
 
-### Port Access Token Schema
-```json
-{
-  "token_name": "api-access",
-  "token_hash": "sha256:...",
-  "allowed_services": ["my-app", "api-service"],  // or ["*"] for all
-  "allowed_ports": [8080, 8443],                  // or ["*"] for all
-  "expires_at": "2024-12-31T23:59:59Z",          // Optional expiry
-  "created_at": "2024-01-01T00:00:00Z",
-  "last_used": "2024-01-15T10:30:00Z",
-  "use_count": 42
-}
-```
-
 ### Key Features
 - **Atomic port allocation** - No race conditions
 - **Service isolation** - Ports owned by services
-- **Access control** - Optional token-based port access
+- **Access control** - Optional source_token for port access
 - **Automatic cleanup** - Ports released when service deleted
 - **Bind address flexibility** - Choose localhost or public access
 
@@ -1056,8 +1039,6 @@ oauth:user_tokens:{user}    # Set of token JTIs for user
 ### Port Management Keys
 ```
 port:{port}                 # Port allocation data
-port:token:{hash}           # Port access token data
-port:token:name:{name}      # Token name to hash mapping
 service:ports:{service}     # Hash of service port configurations
 ```
 
@@ -1082,7 +1063,7 @@ resource:{uri}              # MCP resource configuration
 12. **Resource Limits**: CPU and memory limits for Docker services
 13. **Port Management**: Comprehensive port allocation with bind address control
 14. **Multi-Port Services**: Services can expose multiple ports with different access controls
-15. **Port Access Tokens**: Fine-grained access control for exposed ports
+15. **Port Access Control**: Simple source_token-based access control for exposed ports
 16. **Service Port Binding**: Choose between localhost-only or public access per port
 17. **Python-on-whales**: Uses tuples for port publishing: `("host_ip:port", container_port)`
 18. **PROXY Protocol**: TCP-level handler preserves client IPs for both HTTP and HTTPS
