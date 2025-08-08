@@ -43,7 +43,7 @@ class TokenValidationResponse(BaseModel):
 
 def create_router(storage):
     """Create resources endpoints router."""
-    router = APIRouter(tags=["mcp-resources"])
+    router = APIRouter(tags=["resources"])
     
     @router.get("/", response_model=List[MCPResource])
     async def list_resources(

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 def create_router(storage, cert_manager):
     """Create proxy endpoints router."""
-    router = APIRouter(prefix="/targets", tags=["proxies"])
+    router = APIRouter(prefix="/targets", tags=["proxy"])
     
     @router.post("/")
     async def create_proxy_target(

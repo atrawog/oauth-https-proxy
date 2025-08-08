@@ -29,7 +29,7 @@ class OAuthSetupResponse(BaseModel):
 
 def create_router(storage):
     """Create OAuth admin endpoints router."""
-    router = APIRouter(prefix="/admin", tags=["oauth-admin"])
+    router = APIRouter(prefix="/admin", tags=["oauth"])
     
     @router.post("/setup-routes", response_model=OAuthSetupResponse)
     async def setup_oauth_routes(

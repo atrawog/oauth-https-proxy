@@ -40,8 +40,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     # Certificate endpoints: /api/v1/certificates/*
     v1_router.include_router(
         certificates.create_router(storage, cert_manager),
-        prefix="/certificates",
-        tags=["certificates"]
+        prefix="/certificates"
     )
     logger.info("Included certificates router in v1")
     
@@ -49,24 +48,21 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     # Note: proxies router already has /targets prefix, so we use /proxy
     v1_router.include_router(
         proxies.create_router(storage, cert_manager),
-        prefix="/proxy",
-        tags=["proxies"]
+        prefix="/proxy"
     )
     logger.info("Included proxies router in v1")
     
     # Token endpoints: /api/v1/tokens/*
     v1_router.include_router(
         tokens.create_router(storage),
-        prefix="/tokens",
-        tags=["tokens"]
+        prefix="/tokens"
     )
     logger.info("Included tokens router in v1")
     
     # Route endpoints: /api/v1/routes/*
     v1_router.include_router(
         routes.create_router(storage),
-        prefix="/routes",
-        tags=["routes"]
+        prefix="/routes"
     )
     logger.info("Included routes router in v1")
     
@@ -76,8 +72,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     # MCP Resource endpoints: /api/v1/resources/*
     v1_router.include_router(
         resources.create_router(storage),
-        prefix="/resources",
-        tags=["mcp-resources"]
+        prefix="/resources"
     )
     logger.info("Included resources router in v1")
     
@@ -85,8 +80,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     try:
         v1_router.include_router(
             services.create_router(storage),
-            prefix="/services",
-            tags=["docker-services"]
+            prefix="/services"
         )
         logger.info("Included services router in v1")
     except Exception as e:
@@ -98,8 +92,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
         oauth_status_router = oauth_status.create_oauth_status_router(storage)
         v1_router.include_router(
             oauth_status_router,
-            prefix="/oauth",
-            tags=["oauth-status"]
+            prefix="/oauth"
         )
         logger.info("Included OAuth status router in v1")
     except Exception as e:
@@ -110,8 +103,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     try:
         v1_router.include_router(
             oauth_admin.create_router(storage),
-            prefix="/oauth",
-            tags=["oauth-admin"]
+            prefix="/oauth"
         )
         logger.info("Included OAuth admin router in v1")
     except Exception as e:
@@ -121,8 +113,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     try:
         logs_router = logs.create_router(storage)
         v1_router.include_router(
-            logs_router,
-            tags=["logs"]
+            logs_router
         )
         logger.info("Included logs router in v1")
     except Exception as e:
