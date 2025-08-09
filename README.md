@@ -629,7 +629,7 @@ mcp-http-proxy/
 ```bash
 just health              # System health check
 just stats               # Resource statistics
-just cleanup-orphaned    # Clean up orphaned resources
+just service-cleanup-orphaned    # Clean up orphaned resources
 just redis-cli          # Direct Redis access
 just shell              # Shell into api container
 ```

@@ -510,9 +510,6 @@ just route-delete <route-id> [token]                # Delete a route
 just route-create-global <path> <target-type> <target-value> [token] [priority] [methods] [is-regex] [description]  # Create global route
 just route-create-proxy <path> <target-type> <target-value> <proxies> [token] [priority] [methods] [is-regex] [description]  # Create proxy-specific route
 just route-list-by-scope [scope]                    # List routes filtered by scope (all|global|proxy)
-
-# Service migration utilities
-just migrate-service-names [token]                  # Migrate old service names (defaults to ADMIN_TOKEN)
 ```
 
 ## Service Management
@@ -892,7 +889,7 @@ Response:
 ### OAuth Commands
 ```bash
 # OAuth setup and management
-just generate-oauth-key                            # Generate RSA key
+just oauth-key-generate                            # Generate RSA key
 just oauth-routes-setup <domain> [token]          # Setup OAuth routes (CRITICAL!)
 just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client for testing
 
@@ -1059,8 +1056,6 @@ just rebuild <service>       # Rebuild specific service (api or redis)
 just logs [service]          # View service logs (all or specific)
 just shell                   # Shell into api container
 just redis-cli               # Access Redis CLI
-just dev                     # Run development server locally
-just setup                   # Quick setup for development
 ```
 
 ### Token Management
@@ -1095,14 +1090,11 @@ just test-all               # Run comprehensive test suite
 
 # System maintenance
 just health                 # Check system health
-just stats                  # Show system statistics
-just cleanup-orphaned       # Clean up orphaned resources
-just web-ui                 # Open web UI
+just service-cleanup-orphaned       # Clean up orphaned resources
 just help                   # Show all available commands
 
 # Additional commands
 just token-admin            # Generate admin token
-just lint                   # Run linting
 just docs-build            # Build documentation
 just oauth-test-tokens <server-url>  # Generate test OAuth tokens for MCP client
 ```

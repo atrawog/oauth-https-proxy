@@ -2538,57 +2538,12 @@ test-all:
 # UTILITY COMMANDS
 # ============================================================================
 
-# Show system statistics
-stats:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "=== System Statistics ==="
-    
-    API_URL="${API_URL:-{{default_api_url}}}"
-    
-    # Get health status
-    health=$(curl -s "${API_URL}/health")
-    
-    echo "Certificates: $(echo "$health" | jq -r '.certificates_loaded')"
-    echo "Redis: $(echo "$health" | jq -r '.redis')"
-    echo "Scheduler: $(echo "$health" | jq -r '.scheduler')"
-    echo "HTTPS: $(echo "$health" | jq -r '.https_enabled')"
-    echo "Orphaned resources: $(echo "$health" | jq -r '.orphaned_resources')"
-
-# Open web UI
-web-ui:
-    @echo "Opening web UI at http://localhost/"
-    @command -v xdg-open >/dev/null 2>&1 && xdg-open http://localhost/ || \
-     command -v open >/dev/null 2>&1 && open http://localhost/ || \
-     echo "Please open http://localhost/ in your browser"
-
-# ============================================================================
-# DEVELOPMENT HELPERS
-# ============================================================================
-
-# Quick setup for development
-setup: token-admin
-    @echo "Setup complete!"
-    @echo "1. Copy the admin token to your .env file as ADMIN_TOKEN"
-    @echo "2. Start services with: just up"
-    @echo "3. Open the web UI with: just web-ui"
-
-# Run development server locally
-dev:
-    pixi run python run.py
-
-# Run linting
-lint:
-    pixi run ruff check .
-    pixi run ruff format .
-
 # Build documentation
 docs-build:
     pixi run jupyter-book build docs
 
 # Clean up orphaned resources
-cleanup-orphaned:
+service-cleanup-orphaned:
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -2676,7 +2631,7 @@ config-load filename force="":
 
 # OAuth Commands
 # Generate RSA private key for OAuth JWT signing
-generate-oauth-key:
+oauth-key-generate:
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Generating RSA private key for OAuth JWT signing..."
@@ -3406,63 +3361,4 @@ route-list-by-scope scope="all":
 # ============================================================================
 # SERVICE NAME MIGRATION
 # ============================================================================
-
-# Migrate to new service names (run this after updating docker-compose.yml)
-@migrate-service-names token="${ADMIN_TOKEN}":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "🔄 Migrating to new service names..."
-    echo "=================================="
-    
-    # 1. Start services with new names
-    echo "1️⃣ Starting services with new names..."
-    just up
-    
-    # 2. Wait for services to be healthy
-    echo ""
-    echo "2️⃣ Waiting for services to be healthy..."
-    sleep 15
-    
-    # 3. Update proxy targets
-    echo ""
-    echo "3️⃣ Updating proxy targets..."
-    
-    # Update auth proxy
-    if just proxy-list | grep -q "auth.${BASE_DOMAIN}"; then
-        echo "   Updating auth.${BASE_DOMAIN}..."
-        curl -X PUT -H "Authorization: Bearer {{token}}" \
-            -H "Content-Type: application/json" \
-            -d '{"target_url": "http://auth:8000"}' \
-            http://localhost/api/v1/proxy/targets/auth.${BASE_DOMAIN} > /dev/null 2>&1 || true
-    fi
-    
-    # Update fetcher proxy
-    if just proxy-list | grep -q "fetcher.${BASE_DOMAIN}"; then
-        echo "   Updating fetcher.${BASE_DOMAIN}..."
-        curl -X PUT -H "Authorization: Bearer {{token}}" \
-            -H "Content-Type: application/json" \
-            -d '{"target_url": "http://fetcher:3000"}' \
-            http://localhost/api/v1/proxy/targets/fetcher.${BASE_DOMAIN} > /dev/null 2>&1 || true
-    fi
-    
-    # 4. Verify services
-    echo ""
-    echo "4️⃣ Verifying services..."
-    docker compose ps
-    
-    echo ""
-    echo "5️⃣ Updated proxy targets:"
-    just proxy-list | grep -E "auth|fetcher" || true
-    
-    echo ""
-    echo "✅ Migration complete!"
-    echo ""
-    echo "Service name changes:"
-    echo "  - acme-certmanager → proxy"
-    echo "  - mcp-proxy-gateway → proxy"
-    echo "  - mcp-oauth-dynamicclient → auth"
-    echo "  - mcp-oauth-server → auth"
-    echo "  - fetcher-mcp → fetcher"
-    echo "  - mcp-fetcher → fetcher"
 
