@@ -113,7 +113,7 @@ token-admin:
         exit 1
     fi
 
-token-delete name:
+token-delete name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -124,10 +124,10 @@ token-delete name:
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get admin token
-    auth_token="${ADMIN_TOKEN:-}"
+    # Get auth token
+    auth_token="{{token}}"
     if [ -z "$auth_token" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -144,7 +144,7 @@ token-delete name:
 
 # Update certificate email for token
 
-token-email name email token="":
+token-email name email token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -205,27 +205,22 @@ token-email name email token="":
 
 # Generate admin token
 
-token-generate name email="":
+token-generate name email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Use provided email or ADMIN_EMAIL or prompt
-    if [ -n "{{email}}" ]; then
-        cert_email="{{email}}"
-    elif [ -n "${ADMIN_EMAIL:-}" ]; then
-        cert_email="$ADMIN_EMAIL"
-        echo "Using ADMIN_EMAIL: $cert_email"
-    else
+    # Use provided email (defaults to ADMIN_EMAIL)
+    cert_email="{{email}}"
+    if [ -z "$cert_email" ]; then
         read -p "Certificate email for {{name}}: " cert_email
     fi
     
     # Try API first if available
     if [ "${USE_API:-true}" = "true" ] && [ -n "${API_URL:-}" ]; then
-        # Get admin token
-        if [ -n "${ADMIN_TOKEN:-}" ]; then
-            auth_token="${ADMIN_TOKEN}"
-        else
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
+        # Get auth token
+        auth_token="{{token}}"
+        if [ -z "$auth_token" ]; then
+            echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
             exit 1
         fi
         
@@ -258,17 +253,16 @@ token-generate name email="":
 
 # Show token value
 
-token-list:
+token-list token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     # Try API first if available
     if [ "${USE_API:-true}" = "true" ] && [ -n "${API_URL:-}" ]; then
-        # Get admin token
-        if [ -n "${ADMIN_TOKEN:-}" ]; then
-            auth_token="${ADMIN_TOKEN}"
-        else
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
+        # Get auth token
+        auth_token="{{token}}"
+        if [ -z "$auth_token" ]; then
+            echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
             exit 1
         fi
         
@@ -288,7 +282,7 @@ token-list:
 
 # Delete token and owned resources
 
-token-show name:
+token-show name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -299,10 +293,10 @@ token-show name:
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get admin token for API access
-    auth_token="${ADMIN_TOKEN:-}"
+    # Get auth token for API access
+    auth_token="{{token}}"
     if [ -z "$auth_token" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -327,61 +321,47 @@ token-show name:
 # CERTIFICATE MANAGEMENT
 # ============================================================================
 
-cert-create name domain email="" token="" staging="false":  # Create a new certificate
+cert-create name domain staging="false" email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":  # Create a new certificate
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get certificate email if not provided
-    if [ -z "{{email}}" ]; then
-        # Try to get from token first
+    # Use provided email (defaults to ADMIN_EMAIL)
+    cert_email="{{email}}"
+    if [ -z "$cert_email" ]; then
+        # Try to get from token if no email provided
         response=$(curl -s -H "Authorization: Bearer $token_value" "${API_URL}/api/v1/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
-        # Fall back to ACME_EMAIL or ADMIN_EMAIL if token has no email
         if [ -z "$cert_email" ]; then
-            cert_email="${ACME_EMAIL:-${ADMIN_EMAIL:-}}"
-            if [ -z "$cert_email" ]; then
-                echo "Error: No email provided, token has no default email, and neither ACME_EMAIL nor ADMIN_EMAIL are set"
-                exit 1
-            fi
+            echo "Error: No email provided and token has no default email"
+            exit 1
         fi
-    else
-        cert_email="{{email}}"
     fi
     
     # Build request data
@@ -416,40 +396,31 @@ cert-create name domain email="" token="" staging="false":  # Create a new certi
 
 # List certificates (requires authentication)
 
-cert-delete name token="" force="false":  # Delete certificate
+cert-delete name force="false" token="${ADMIN_TOKEN}":  # Delete certificate
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
@@ -477,42 +448,33 @@ cert-delete name token="" force="false":  # Delete certificate
     
     echo "$body" | jq '.'
 
-cert-list token="":  # List certificates (requires authentication)
+cert-list token="${ADMIN_TOKEN}":  # List certificates (requires authentication)
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
@@ -533,42 +495,33 @@ cert-list token="":  # List certificates (requires authentication)
 
 # Show certificate details
 
-cert-show name token="" pem="false":  # Show certificate details
+cert-show name pem="false" token="${ADMIN_TOKEN}":  # Show certificate details
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
@@ -590,7 +543,7 @@ cert-show name token="" pem="false":  # Show certificate details
 # PROXY MANAGEMENT
 # ============================================================================
 
-proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes="" allowed-audiences="":
+proxy-auth-config hostname users="" emails="" groups="" allowed-scopes="" allowed-audiences="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -682,7 +635,7 @@ proxy-auth-config hostname token="" users="" emails="" groups="" allowed-scopes=
 
 # Set protected resource metadata for a proxy
 
-proxy-auth-disable hostname token="":
+proxy-auth-disable hostname token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -716,7 +669,7 @@ proxy-auth-disable hostname token="":
 
 # Show proxy authentication configuration
 
-proxy-auth-enable hostname token="" auth-proxy="" mode="forward" allowed-scopes="" allowed-audiences="":
+proxy-auth-enable hostname auth-proxy="" mode="forward" allowed-scopes="" allowed-audiences="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -784,7 +737,7 @@ proxy-auth-enable hostname token="" auth-proxy="" mode="forward" allowed-scopes=
 
 # Disable OAuth authentication on a proxy
 
-proxy-auth-show hostname:
+proxy-auth-show hostname token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -803,60 +756,46 @@ proxy-auth-show hostname:
 
 # Configure auth settings for a proxy (users, emails, groups, scopes, audiences)
 
-proxy-create hostname target-url token="" email="" staging="false" preserve-host="true" enable-http="true" enable-https="true":
+proxy-create hostname target-url staging="false" preserve-host="true" enable-http="true" enable-https="true" email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get certificate email - use parameter first, then token, then ADMIN_EMAIL
-    if [ -n "{{email}}" ]; then
-        cert_email="{{email}}"
-    else
-        # Try to get from token
+    # Use provided email (defaults to ADMIN_EMAIL)
+    cert_email="{{email}}"
+    if [ -z "$cert_email" ]; then
+        # Try to get from token if no email provided
         response=$(curl -s -H "Authorization: Bearer $token_value" "${API_URL}/api/v1/tokens/info")
         cert_email=$(echo "$response" | jq -r '.cert_email // empty')
         
-        # Fall back to ADMIN_EMAIL if token has no email
         if [ -z "$cert_email" ]; then
-            cert_email="${ADMIN_EMAIL:-}"
-            if [ -z "$cert_email" ]; then
-                echo "Error: No email provided, token has no certificate email, and ADMIN_EMAIL not set"
-                exit 1
-            fi
+            echo "Error: No email provided and token has no certificate email"
+            exit 1
         fi
     fi
     
@@ -898,40 +837,31 @@ proxy-create hostname target-url token="" email="" staging="false" preserve-host
 
 # List proxy targets (requires authentication)
 
-proxy-delete hostname token="" delete-cert="false" force="false":
+proxy-delete hostname delete-cert="false" force="false" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
@@ -967,42 +897,33 @@ proxy-delete hostname token="" delete-cert="false" force="false":
 
 # Enable OAuth authentication on a proxy
 
-proxy-list token="":
+proxy-list token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
@@ -1031,7 +952,7 @@ proxy-list token="":
 
 # Show proxy details
 
-proxy-show hostname:
+proxy-show hostname token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1054,7 +975,7 @@ proxy-show hostname:
 # PROTECTED RESOURCE MANAGEMENT
 # ============================================================================
 
-proxy-resource-clear hostname token="":
+proxy-resource-clear hostname token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1088,15 +1009,15 @@ proxy-resource-clear hostname token="":
 
 # Show protected resource metadata configuration for a proxy
 
-proxy-resource-list:
+proxy-resource-list token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    auth_token="${ADMIN_TOKEN:-}"
+    auth_token="{{token}}"
     
     if [ -z "$auth_token" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -1113,7 +1034,7 @@ proxy-resource-list:
 # External Service Management Commands (replaces instance management)
 # List all external services (formerly instances)
 
-proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="":
+proxy-resource-set hostname endpoint="/mcp" scopes="mcp:read mcp:write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1181,7 +1102,7 @@ proxy-resource-set hostname token="" endpoint="/mcp" scopes="mcp:read mcp:write"
 
 # Clear protected resource metadata for a proxy
 
-proxy-resource-show hostname:
+proxy-resource-show hostname token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1202,25 +1123,15 @@ proxy-resource-show hostname:
 # ROUTE MANAGEMENT
 # ============================================================================
 
-route-create path target-type target-value token="" priority="50" methods="*" is-regex="false" description="":
+route-create path target-type target-value priority="50" methods="*" is-regex="false" description="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    else
-        token_value="{{token}}"
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
     fi
     
     # Create route via API
@@ -1268,25 +1179,15 @@ route-create path target-type target-value token="" priority="50" methods="*" is
 
 # Delete a route
 
-route-create-global path target-type target-value token="" priority="50" methods="*" is-regex="false" description="":
+route-create-global path target-type target-value priority="50" methods="*" is-regex="false" description="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    else
-        token_value="{{token}}"
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
     fi
     
     # Create route via API
@@ -1331,25 +1232,15 @@ route-create-global path target-type target-value token="" priority="50" methods
 
 # Create a proxy-specific route (only applies to specified proxies)
 
-route-create-proxy path target-type target-value proxies token="" priority="500" methods="*" is-regex="false" description="":
+route-create-proxy path target-type target-value proxies priority="500" methods="*" is-regex="false" description="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    else
-        token_value="{{token}}"
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
     fi
     
     # Create route via API
@@ -1397,25 +1288,15 @@ route-create-proxy path target-type target-value proxies token="" priority="500"
 
 # List routes filtered by scope
 
-route-delete route-id token="":
+route-delete route-id token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    else
-        token_value="{{token}}"
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
     fi
     
     # Delete route via API
@@ -1433,7 +1314,7 @@ route-delete route-id token="":
 
 # Create a global route (applies to all proxies)
 
-route-list:
+route-list token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1453,7 +1334,7 @@ route-list:
 
 # Show route details
 
-route-list-by-scope scope="all":
+route-list-by-scope scope="all" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1478,7 +1359,7 @@ route-list-by-scope scope="all":
         exit 1
     fi
 
-route-show route-id:
+route-show route-id token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1499,12 +1380,12 @@ route-show route-id:
 # DOCKER SERVICE MANAGEMENT
 # ============================================================================
 
-service-cleanup:
+service-cleanup token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${ADMIN_TOKEN:-}"
+    token_value="{{token}}"
     
     response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services/cleanup" \
         -H "Authorization: Bearer $token_value")
@@ -1520,16 +1401,16 @@ service-cleanup:
         exit 1
     fi
 
-service-cleanup-orphaned:
+service-cleanup-orphaned token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get admin token
-    auth_token="${ADMIN_TOKEN:-}"
+    # Get auth token
+    auth_token="{{token}}"
     if [ -z "$auth_token" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -1552,7 +1433,7 @@ service-cleanup-orphaned:
 
 # Save full configuration including SSL certificates to YAML backup file
 
-service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1.0" auto-proxy="false":
+service-create name image="" dockerfile="" port="" memory="512m" cpu="1.0" auto-proxy="false" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1562,36 +1443,27 @@ service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1
         exit 1
     fi
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [[ "{{token}}" == acm_* ]]; then
-        token_value="{{token}}"
-    else
-        # Use API to get token value
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
+    fi
+    
+    # Handle special token names
+    if [ "$token_value" = "ADMIN" ] && [ -n "${ADMIN_TOKEN:-}" ]; then
+        token_value="${ADMIN_TOKEN}"
+    elif [[ "$token_value" != acm_* ]]; then
+        # Use API to get token value if it's a name
         API_URL="${API_URL:-{{default_api_url}}}"
-        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/{{token}}/reveal" \
+        response=$(curl -sf -X GET "${API_URL}/api/v1/tokens/$token_value/reveal" \
             -H "Authorization: Bearer ${ADMIN_TOKEN}" 2>/dev/null || true)
         
         if [ -n "$response" ]; then
-            token_value=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
-            if [ -z "$token_value" ] || [ "$token_value" = "null" ]; then
-                echo "Error: Token '{{token}}' not found" >&2
-                exit 1
+            actual_token=$(echo "$response" | jq -r '.token' 2>/dev/null || true)
+            if [ -n "$actual_token" ] && [ "$actual_token" != "null" ]; then
+                token_value="$actual_token"
             fi
-        else
-            echo "Error: Failed to retrieve token '{{token}}'" >&2
-            exit 1
         fi
     fi
     
@@ -1632,7 +1504,7 @@ service-create name image="" dockerfile="" port="" token="" memory="512m" cpu="1
 
 # List Docker services
 
-service-create-exposed name image port bind-address="127.0.0.1" token="" memory="512m" cpu="1.0":
+service-create-exposed name image port bind-address="127.0.0.1" memory="512m" cpu="1.0" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1699,7 +1571,7 @@ service-create-exposed name image port bind-address="127.0.0.1" token="" memory=
         exit 1
     fi
 
-service-delete name token="" force="false" delete-proxy="true":
+service-delete name force="false" delete-proxy="true" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1759,7 +1631,7 @@ service-delete name token="" force="false" delete-proxy="true":
 
 # Start Docker service
 
-service-list owned-only="false" token="":
+service-list owned-only="false" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1802,12 +1674,12 @@ service-list owned-only="false" token="":
 
 # Show Docker service details
 
-service-logs name lines="100" timestamps="false":
+service-logs name lines="100" timestamps="false" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${ADMIN_TOKEN:-}"
+    token_value="{{token}}"
     
     response=$(curl -sf -H "Authorization: Bearer $token_value" \
         "${API_URL}/api/v1/services/{{name}}/logs?lines={{lines}}&timestamps={{timestamps}}")
@@ -1816,7 +1688,7 @@ service-logs name lines="100" timestamps="false":
 
 # Get Docker service stats
 
-service-proxy-create name hostname="" enable-https="false" token="":
+service-proxy-create name hostname="" enable-https="false" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1857,7 +1729,7 @@ service-proxy-create name hostname="" enable-https="false" token="":
 
 # Cleanup orphaned Docker services (admin only)
 
-service-restart name token="":
+service-restart name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1891,12 +1763,12 @@ service-restart name token="":
 
 # Get Docker service logs
 
-service-show name:
+service-show name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${ADMIN_TOKEN:-}"
+    token_value="{{token}}"
     
     response=$(curl -sfL -H "Authorization: Bearer $token_value" \
         "${API_URL}/api/v1/services/{{name}}")
@@ -1905,7 +1777,7 @@ service-show name:
 
 # Delete Docker service
 
-service-start name token="":
+service-start name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1939,12 +1811,12 @@ service-start name token="":
 
 # Stop Docker service
 
-service-stats name:
+service-stats name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${ADMIN_TOKEN:-}"
+    token_value="{{token}}"
     
     response=$(curl -sfL -H "Authorization: Bearer $token_value" \
         "${API_URL}/api/v1/services/{{name}}/stats")
@@ -1953,7 +1825,7 @@ service-stats name:
 
 # Create proxy for Docker service
 
-service-stop name token="":
+service-stop name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -1991,7 +1863,7 @@ service-stop name token="":
 # PORT MANAGEMENT
 # ============================================================================
 
-service-port-add name port bind-address="127.0.0.1" source-token="" token="":
+service-port-add name port bind-address="127.0.0.1" source-token="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -2044,12 +1916,12 @@ service-port-add name port bind-address="127.0.0.1" source-token="" token="":
 
 # Remove a port from a service
 
-service-port-check port bind-address="127.0.0.1":
+service-port-check port bind-address="127.0.0.1" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
+    token_value="{{token}}"
     
     response=$(curl -s -w '\n%{http_code}' -X POST "${API_URL}/api/v1/services/ports/check?port={{port}}&bind_address={{bind-address}}" \
         -H "Authorization: Bearer $token_value")
@@ -2073,12 +1945,12 @@ service-port-check port bind-address="127.0.0.1":
 
 # Create a service with exposed port(s)
 
-service-port-list name:
+service-port-list name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
+    token_value="{{token}}"
     
     response=$(curl -s -w '\n%{http_code}' "${API_URL}/api/v1/services/{{name}}/ports" \
         -H "Authorization: Bearer $token_value")
@@ -2097,7 +1969,7 @@ service-port-list name:
 
 # List all allocated ports globally
 
-service-port-remove name port-name token="":
+service-port-remove name port-name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -2125,12 +1997,12 @@ service-port-remove name port-name token="":
 
 # List ports for a service
 
-service-ports-global available-only="false":
+service-ports-global available-only="false" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    token_value="${TOKEN:-${ADMIN_TOKEN:-}}"
+    token_value="{{token}}"
     
     if [ "{{available-only}}" = "true" ]; then
         endpoint="/api/v1/services/ports/available"
@@ -2164,16 +2036,16 @@ service-ports-global available-only="false":
 # EXTERNAL SERVICE MANAGEMENT
 # ============================================================================
 
-service-list-all type="":
+service-list-all type="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get admin token
-    token_value="${ADMIN_TOKEN:-}"
+    # Get auth token
+    token_value="{{token}}"
     if [ -z "$token_value" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -2205,16 +2077,16 @@ service-list-all type="":
 # Route Management Commands
 # List all routes
 
-service-list-external:
+service-list-external token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get admin token
-    token_value="${ADMIN_TOKEN:-}"
+    # Get auth token
+    token_value="{{token}}"
     if [ -z "$token_value" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -2234,7 +2106,7 @@ service-list-external:
 
 # Show external service details
 
-service-register name target-url token="" description="":
+service-register name target-url description="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     API_URL="${API_URL:-{{default_api_url}}}"
     TOKEN="{{token}}"
@@ -2268,21 +2140,21 @@ service-register name target-url token="" description="":
 
 # Update an external service
 
-service-register-oauth token="":
+service-register-oauth token="${ADMIN_TOKEN}":
     just service-register "auth" "http://auth:8000" "{{token}}" "OAuth 2.0 Authorization Server"
 
 # List all services (Docker and external)
 
-service-show-external name:
+service-show-external name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
     
-    # Get admin token
-    token_value="${ADMIN_TOKEN:-}"
+    # Get auth token
+    token_value="{{token}}"
     if [ -z "$token_value" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -2306,7 +2178,7 @@ service-show-external name:
 
 # Register an external service (replaces instance-register)
 
-service-unregister name token="":
+service-unregister name token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     API_URL="${API_URL:-{{default_api_url}}}"
     TOKEN="{{token}}"
@@ -2333,7 +2205,7 @@ service-unregister name token="":
 
 # Register OAuth server as external service (convenience command)
 
-service-update-external name target-url token="" description="":
+service-update-external name target-url description="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     API_URL="${API_URL:-{{default_api_url}}}"
     TOKEN="{{token}}"
@@ -2377,7 +2249,7 @@ service-update-external name target-url token="" description="":
 # OAUTH MANAGEMENT
 # ============================================================================
 
-oauth-client-register name redirect-uri="http://localhost:8080/callback" scope="mcp:read mcp:write":
+oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="mcp:read mcp:write" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -2424,15 +2296,15 @@ oauth-client-register name redirect-uri="http://localhost:8080/callback" scope="
 
 # Generate test OAuth tokens for MCP client
 
-oauth-clients-list active-only="":
+oauth-clients-list active-only="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    auth_token="${ADMIN_TOKEN:-}"
+    auth_token="{{token}}"
     
     if [ -z "$auth_token" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -2454,7 +2326,7 @@ oauth-clients-list active-only="":
 
 # List active OAuth sessions
 
-oauth-key-generate:
+oauth-key-generate token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Generating RSA private key for OAuth JWT signing..."
@@ -2479,25 +2351,15 @@ oauth-key-generate:
 
 # Setup OAuth routes for the auth domain
 
-oauth-routes-setup domain token="":
+oauth-routes-setup domain token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    # Default to ADMIN_TOKEN if no token specified
-    if [ -z "{{token}}" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    elif [ "{{token}}" = "ADMIN" ]; then
-        token_value="${ADMIN_TOKEN:-}"
-        if [ -z "$token_value" ]; then
-            echo "Error: ADMIN_TOKEN not set in environment" >&2
-            exit 1
-        fi
-    else
-        token_value="{{token}}"
+    # Use provided token (defaults to ADMIN_TOKEN)
+    token_value="{{token}}"
+    if [ -z "$token_value" ]; then
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
+        exit 1
     fi
     
     # Try API first if available
@@ -2540,15 +2402,15 @@ oauth-routes-setup domain token="":
 # OAuth Client Testing Commands
 # Register a new OAuth client for testing
 
-oauth-sessions-list:
+oauth-sessions-list token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
     API_URL="${API_URL:-{{default_api_url}}}"
-    auth_token="${ADMIN_TOKEN:-}"
+    auth_token="{{token}}"
     
     if [ -z "$auth_token" ]; then
-        echo "Error: ADMIN_TOKEN not set in environment" >&2
+        echo "Error: Token not provided and ADMIN_TOKEN not set" >&2
         exit 1
     fi
     
@@ -2565,7 +2427,7 @@ oauth-sessions-list:
 # Protected Resource Commands
 # List protected resources
 
-oauth-test-tokens server-url:
+oauth-test-tokens server-url token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
