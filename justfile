@@ -939,13 +939,13 @@ token-delete name:
     fi
 
 # Update certificate email for token
-token-email-update name email token="":
+token-email name email token="":
     #!/usr/bin/env bash
     set -euo pipefail
     
     # Default to ADMIN_TOKEN if no token specified
     if [ -z "{{token}}" ]; then
-        # For token-email-update, we need to get the token for the specified name
+        # For token-email, we need to get the token for the specified name
         if [ "{{name}}" = "ADMIN" ]; then
             token_value="${ADMIN_TOKEN:-}"
             if [ -z "$token_value" ]; then
@@ -999,7 +999,7 @@ token-email-update name email token="":
     echo "$body" | jq '.'
 
 # Generate admin token
-generate-admin-token:
+token-admin:
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -2568,7 +2568,7 @@ web-ui:
 # ============================================================================
 
 # Quick setup for development
-setup: generate-admin-token
+setup: token-admin
     @echo "Setup complete!"
     @echo "1. Copy the admin token to your .env file as ADMIN_TOKEN"
     @echo "2. Start services with: just up"
@@ -2890,7 +2890,7 @@ oauth-sessions-list:
 
 # Protected Resource Commands
 # List protected resources
-resource-list:
+proxy-resource-list:
     #!/usr/bin/env bash
     set -euo pipefail
     

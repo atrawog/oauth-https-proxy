@@ -71,7 +71,7 @@ base64 -w 0 private.pem
 just up
 
 # Generate an admin token
-just generate-admin-token
+just token-admin
 # Save this token - you'll need it for all admin operations!
 ```
 

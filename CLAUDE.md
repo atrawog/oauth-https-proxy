@@ -151,8 +151,7 @@ just token-generate <name> [cert-email]  # Create token with optional cert email
 just token-show <name>                   # Retrieve full token
 just token-list                          # List all tokens
 just token-delete <name>                 # Delete token + owned resources
-just token-show-certs [name]             # Show certificates by token
-just token-email-update <name> <email>   # Update token cert email
+just token-email <name> <email>          # Update token cert email
 ```
 
 ## Service Architecture
@@ -297,23 +296,11 @@ class DomainService:
 
 ### Certificate Commands
 ```bash
-# Single-domain certificates
+# Certificate operations
 just cert-create <name> <domain> <email> <token> [staging]
 just cert-delete <name> <token> [force]
-just cert-renew <name> <token> [force]
 just cert-list [token]
 just cert-show <name> [token] [pem]
-just cert-status <name> [token] [wait]
-just cert-to-production <name> [token]
-
-# Multi-domain certificates
-just cert-create-multi <name> <domains> <email> <token> [staging]
-just cert-create-wildcard <name> <base-domain> <email> <token> [staging]
-just cert-coverage <name> [token]
-
-# Testing
-just test-certs                  # Test certificate operations
-just test-multi-domain           # Test multi-domain certificates
 ```
 
 ## Proxy Manager
@@ -477,18 +464,9 @@ When enabled, the proxy automatically serves:
 ```bash
 # Basic proxy operations
 just proxy-create <hostname> <target-url> <token> [email] [staging] [preserve-host] [enable-http] [enable-https]
-just proxy-create-group <group> <hostnames> <target-url> <token> [staging] [preserve-host]
-just proxy-update <hostname> <token> [options]
 just proxy-delete <hostname> <token> [delete-cert] [force]
-just proxy-enable <hostname> <token>
-just proxy-disable <hostname> <token>
 just proxy-list [token]
 just proxy-show <hostname>
-just proxy-cleanup [hostname]
-
-# Certificate management for proxies
-just proxy-cert-generate <hostname> <token> [staging]
-just proxy-cert-attach <hostname> <cert-name> <token>
 
 # OAuth proxy authentication
 just proxy-auth-enable <hostname> <token> <auth-proxy> <mode> [allowed-scopes] [allowed-audiences]
@@ -505,19 +483,10 @@ just proxy-auth-config api.example.com $TOKEN "*"
 just proxy-auth-config api.example.com $TOKEN ""
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)
-# Note: proxy-mcp-* commands have been renamed to proxy-resource-* for clarity
 just proxy-resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research]
 just proxy-resource-clear <hostname> <token>
 just proxy-resource-show <hostname>
-just test-proxy-resource <hostname>
-
-# Testing
-just test-proxy-basic
-just test-proxy-example
-just test-websocket-proxy
-just test-streaming-proxy
-just test-proxy-all
-just test-auth-flow <hostname>
+just proxy-resource-list                  # List protected resources
 ```
 
 ### Route API Endpoints
@@ -543,11 +512,7 @@ just route-create-proxy <path> <target-type> <target-value> <proxies> [token] [p
 just route-list-by-scope [scope]                    # List routes filtered by scope (all|global|proxy)
 
 # Service migration utilities
-just migrate-instances-to-services                  # Migrate old instance configs to services
 just migrate-service-names [token]                  # Migrate old service names (defaults to ADMIN_TOKEN)
-
-# Testing
-just test-proxy-routes                              # Test proxy route functionality
 ```
 
 ## Service Management
@@ -647,7 +612,7 @@ just service-start <name> [token]
 just service-stop <name> [token]
 just service-restart <name> [token]
 
-# External service management (replaces instance commands)
+# External service management
 just service-register <name> <target-url> [token] [description]  # Register external service
 just service-list-external                                       # List external services
 just service-show-external <name>                                # Show external service details
@@ -672,10 +637,6 @@ just service-port-remove <name> <port-name> [token]
 just service-port-list <name>
 just service-port-check <port> [bind-address]
 just service-ports-global [available-only]
-
-# Testing
-just test-docker-services
-just test-docker-api
 ```
 
 ## Port Management Architecture
@@ -935,34 +896,16 @@ just generate-oauth-key                            # Generate RSA key
 just oauth-routes-setup <domain> [token]          # Setup OAuth routes (CRITICAL!)
 just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client for testing
 
-# Protected resource management (for MCP compliance)
-just resource-register <uri> <proxy> <n> [scopes] # Register protected resource
-just resource-list                                # List protected resources
-just resource-show <uri>                          # Show resource details
-just resource-validate <uri> <token>              # Validate token for resource
-
 # OAuth status and monitoring
-just oauth-clients-list [active-only]
-just oauth-client-show <client-id>
-just oauth-client-tokens <client-id>
-just oauth-client-stats <client-id>
-just oauth-tokens-stats
-just oauth-token-show <jti>
-just oauth-tokens-cleanup
-just oauth-sessions-list
-just oauth-session-show <session-id>
-just oauth-session-revoke <session-id>
-just oauth-metrics
-just oauth-health
-just oauth-proxy-status [hostname]
+just oauth-clients-list [active-only]             # List OAuth clients
+just oauth-sessions-list                          # List active sessions
+just oauth-test-tokens <server-url>               # Generate test OAuth tokens for MCP client
 
-# Testing
-just test-auth [token]
-just test-auth-flow <hostname>
-just test-oauth-status-api
-just test-mcp-compliance                          # Test MCP spec compliance
-just test-resource-indicators                     # Test RFC 8707
-just test-audience-validation                     # Test audience restrictions
+# Protected resource management (see proxy-resource commands above)
+just proxy-resource-list                          # List protected resources
+just proxy-resource-set <hostname> <token> ...    # Set protected resource metadata
+just proxy-resource-clear <hostname> <token>      # Clear protected resource metadata
+just proxy-resource-show <hostname>               # Show protected resource metadata
 ```
 
 ### Protected Resource Configuration
@@ -1101,7 +1044,7 @@ The system is **FULLY COMPLIANT** with MCP authorization specification:
 - Per-resource access control
 
 To ensure MCP compliance for any proxy:
-1. Register as protected resource: `just resource-register <uri> <proxy> <name>`
+1. Set protected resource metadata: `just proxy-resource-set <hostname> <token>`
 2. Enable auth on proxy: `just proxy-auth-enable <proxy> <token> <auth-proxy> forward`
 3. Verify metadata endpoint: `curl https://<proxy>/.well-known/oauth-protected-resource`
 
@@ -1126,8 +1069,7 @@ just token-generate <name> [cert-email]     # Create token with optional cert em
 just token-show <name>                      # Retrieve full token
 just token-list                             # List all tokens
 just token-delete <name>                    # Delete token + certs
-just token-show-certs [name]                # Show certs by token
-just token-email-update <name> <email>      # Update token cert email
+just token-email <name> <email>             # Update token cert email
 ```
 
 ### Testing & Debugging
@@ -1151,11 +1093,6 @@ just token-email-update <name> <email>      # Update token cert email
 just test                    # Run standard test suite
 just test-all               # Run comprehensive test suite
 
-# Service tests
-just test-certs             # Test certificate operations
-just test-proxy-all         # Run all proxy tests
-just test-auth [token]      # Test authorization system
-
 # System maintenance
 just health                 # Check system health
 just stats                  # Show system statistics
@@ -1164,10 +1101,8 @@ just web-ui                 # Open web UI
 just help                   # Show all available commands
 
 # Additional commands
-just generate-admin-token   # Generate admin token
+just token-admin            # Generate admin token
 just lint                   # Run linting
 just docs-build            # Build documentation
-just mcp-test-all          # Run full MCP client test suite
-just mcp-test-auth         # Test MCP client authentication
 just oauth-test-tokens <server-url>  # Generate test OAuth tokens for MCP client
 ```

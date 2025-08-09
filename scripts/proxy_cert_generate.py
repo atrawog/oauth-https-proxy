@@ -52,7 +52,7 @@ def generate_proxy_certificate(hostname: str, token: str, staging: bool = False)
         email = token_info.get('cert_email')
         if not email:
             print("✗ No certificate email configured for token")
-            print("  Set email with: just token-email-update <email>")
+            print("  Set email with: just token-email <email>")
             return False
         
         # Create certificate

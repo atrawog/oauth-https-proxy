@@ -55,7 +55,7 @@ def create_proxy_group(
         email = token_info.get('cert_email')
         if not email:
             print("✗ No certificate email configured for token")
-            print("  Set email with: just token-email-update <email>")
+            print("  Set email with: just token-email <email>")
             return False
     except Exception as e:
         print(f"✗ Error getting token info: {e}")
