@@ -62,14 +62,20 @@ Access logs via the `/api/v1/logs` endpoints:
 
 #### Log Query Commands
 ```bash
-just app-logs-by-ip <ip> [hours] [limit]      # Query logs by client IP
-just app-logs-by-host <hostname> [hours]      # Query logs by hostname
-just app-logs-by-client <client-id> [hours]   # Query logs by OAuth client
-just app-logs-search <query>                 # Search logs  
-just app-logs-errors [hours] [limit]          # Show recent errors
-just app-logs-follow [interval]               # Follow logs in real-time
-just app-logs [hours] [limit]                 # Show recent logs
-just app-logs-test                            # Test logging system
+just logs [hours] [limit]                    # Show recent logs (default)
+just logs-ip <ip> [hours] [limit]            # Query logs by client IP
+just logs-host <hostname> [hours]            # Query logs by hostname
+just logs-client <client-id> [hours]         # Query logs by OAuth client
+just logs-search <query>                     # Search logs with filters
+just logs-errors [hours] [limit]             # Show recent errors
+just logs-errors-debug [hours] [limit]       # Detailed errors with debugging
+just logs-follow [interval]                  # Follow logs in real-time
+just logs-oauth <ip> [hours]                 # OAuth activity summary
+just logs-oauth-debug <ip> [hours]           # Full OAuth flow debugging
+just logs-oauth-flow [client-id] [username]  # Track OAuth flows
+just logs-stats [hours]                      # Show event statistics
+just logs-test                               # Test logging system
+just logs-service [service]                  # Docker container logs
 ```
 
 #### Performance Optimizations

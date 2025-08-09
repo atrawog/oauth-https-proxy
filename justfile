@@ -37,13 +37,13 @@ down:
 # Restart all services
 restart: down up
 
-# Rebuild a specific service
-rebuild service="proxy":
+# Rebuild a specific service (defaults to api)
+rebuild service="api":
     docker compose build {{service}}
     docker compose up -d {{service}}
 
 # View Docker container logs (no follow, last 100 lines)
-logs service="" lines="100":
+logs-service service="" lines="100":
     #!/usr/bin/env bash
     if [ -n "{{service}}" ]; then
         docker compose logs --tail={{lines}} {{service}}
@@ -92,52 +92,54 @@ logs-all lines="50" hours="1" token="${ADMIN_TOKEN}":
     
     echo ""
     echo "=== Application Structured Logs (last {{hours}} hour(s)) ==="
-    just app-logs hours={{hours}} limit={{lines}} token={{token}} || true
+    just logs hours={{hours}} limit={{lines}} token={{token}} || true
 
 # Show available log commands
 logs-help:
     @echo "=== Available Logging Commands ==="
     @echo ""
     @echo "🐳 Docker Container Logs:"
-    @echo "  just logs                    # Show Docker container logs (last 100 lines)"
+    @echo "  just logs-service            # Show Docker container logs (last 100 lines)"
     @echo "  just logs-follow             # Follow Docker container logs (tail -f)"
-    @echo "  just logs proxy              # Show proxy service logs"
+    @echo "  just logs-service api        # Show api service logs"
     @echo "  just logs-follow redis       # Follow redis service logs"
     @echo ""
     @echo "🔄 Combined View:"
     @echo "  just logs-all                # Show both Docker and application logs"
     @echo ""
-    @echo "📋 Application Logs (Structured):"
-    @echo "  just app-logs                # Show recent application logs"
-    @echo "  just app-logs-recent         # Quick view of last 10 logs"
-    @echo "  just app-logs-follow         # Follow application logs in real-time"
-    @echo "  just app-logs-errors         # Show only errors"
+    @echo "📋 Application Logs:"
+    @echo "  just logs                    # Show recent application logs (default)"
+    @echo "  just logs-follow             # Follow application logs in real-time"
+    @echo "  just logs-errors             # Show only errors"
+    @echo "  just logs-errors-debug       # Detailed errors with debugging info"
     @echo ""
     @echo "🔍 Search and Filter:"
-    @echo "  just app-logs-by-ip <ip>     # Query logs from specific IP"
-    @echo "  just app-logs-oauth-debug <ip> # Full OAuth flow debug for IP"
-    @echo "  just app-logs-oauth-summary <ip> # OAuth flow summary for IP"
-    @echo "  just app-logs-by-client <id> # Query logs from OAuth client"
-    @echo "  just app-logs-by-host <host> # Query logs for specific hostname"
-    @echo "  just app-logs-search         # Search with multiple filters"
+    @echo "  just logs-ip <ip>            # Query logs from specific IP"
+    @echo "  just logs-client <id>        # Query logs from OAuth client"
+    @echo "  just logs-host <host>        # Query logs for specific hostname"
+    @echo "  just logs-search             # Search with multiple filters"
     @echo ""
-    @echo "🔗 Flow Tracking:"
-    @echo "  just app-logs-oauth-flow       # Track OAuth authentication flows"
+    @echo "🔐 OAuth Debugging:"
+    @echo "  just logs-oauth <ip>         # OAuth activity summary for IP"
+    @echo "  just logs-oauth-debug <ip>   # Full OAuth flow debug for IP"
+    @echo "  just logs-oauth-flow         # Track OAuth authentication flows"
     @echo ""
     @echo "📊 Analysis:"
-    @echo "  just app-logs-event-stats    # Show event statistics"
+    @echo "  just logs-stats              # Show event statistics"
     @echo ""
     @echo "🗑️  Maintenance:"
     @echo "  just logs-clear              # Clear all logs from Redis (requires token)"
+    @echo "  just logs-test               # Test logging system"
     @echo ""
     @echo "💡 Examples:"
-    @echo "  just logs                    # Docker container logs"
-    @echo "  just app-logs event=oauth    # Application OAuth logs"
-    @echo "  just app-logs-follow event=proxy.error"
-    @echo "  just app-logs-by-ip 192.168.1.100"
+    @echo "  just logs                    # Show recent application logs"
+    @echo "  just logs-service            # Docker container logs"
+    @echo "  just logs event=oauth        # Application OAuth logs"
+    @echo "  just logs-follow event=proxy.error"
+    @echo "  just logs-ip 192.168.1.100"
 
-# Show recent application logs (no following)
-app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN}":
+# Show recent application logs (default command)
+logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -176,39 +178,16 @@ app-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN
         )
     ' 2>/dev/null || echo "$response" | jq '.'
 
-# Quick view of last 10 application logs (compact format)
-app-logs-recent limit="10" token="${ADMIN_TOKEN}":
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    # Get token value
-    if [ -z "{{token}}" ]; then
-        echo "Error: Token required. Set ADMIN_TOKEN or provide token parameter." >&2
-        exit 1
-    fi
-    
-    API_URL="${API_URL:-{{default_api_url}}}"
-    
-    # Get recent logs (last 5 minutes)
-    response=$(curl -sL -H "Authorization: Bearer {{token}}" \
-        "${API_URL}/api/v1/logs/search?hours=1&limit={{limit}}")
-    
-    # Compact format - simple time display
-    echo "$response" | jq -r '
-        (.logs[] | 
-            ((if .timestamp then (.timestamp | todateiso8601 | split("T")[1] | split(".")[0]) else "??:??:??" end) + " [" + .level + "] " + (.event // "no-event") + " - " + .message)
-        )
-    ' 2>/dev/null || echo "$response" | jq '.'
 
 # Show only errors (quick error check)
-app-logs-errors-only hours="1" limit="20" token="${ADMIN_TOKEN}":
+logs-errors hours="1" limit="20" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
-    just app-logs-errors hours={{hours}} include-warnings=false limit={{limit}} token={{token}}
+    just logs-errors-debug hours={{hours}} include-warnings=false limit={{limit}} token={{token}}
 
 # Follow application logs in real-time (tail -f equivalent)
-app-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}":
+logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -260,7 +239,7 @@ app-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}
     done
 
 # Query application logs by IP address
-app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
+logs-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -338,7 +317,7 @@ app-logs-by-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}
     '
 
 # Query application logs by OAuth client ID
-app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
+logs-client client-id hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -365,9 +344,8 @@ app-logs-by-client client-id hours="24" event="" level="" limit="100" token="${A
         "\(.timestamp | todateiso8601 | split(".")[0] | gsub("T"; " ")) [\(.level)] \(.event // "no-event") - \(.message)"
     ' 2>/dev/null || echo "$response" | jq '.'
 
-# Search application logs with filters
 # Query application logs by IP with full OAuth flow debug details
-app-logs-oauth-debug ip hours="24" limit="100" token="${ADMIN_TOKEN}":
+logs-oauth-debug ip hours="24" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -486,8 +464,8 @@ app-logs-oauth-debug ip hours="24" limit="100" token="${ADMIN_TOKEN}":
         end
     '
 
-# Query application logs by IP with OAuth flow summary
-app-logs-oauth-summary ip hours="24" limit="100" token="${ADMIN_TOKEN}":
+# OAuth activity summary for an IP
+logs-oauth ip hours="24" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -562,7 +540,8 @@ app-logs-oauth-summary ip hours="24" limit="100" token="${ADMIN_TOKEN}":
         end
     '
 
-app-logs-search query="" hours="24" event="" level="" hostname="" limit="100" token="${ADMIN_TOKEN}":
+# Search application logs with filters
+logs-search query="" hours="24" event="" level="" hostname="" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -593,8 +572,8 @@ app-logs-search query="" hours="24" event="" level="" hostname="" limit="100" to
         )
     ' 2>/dev/null || echo "$response" | jq '.'
 
-# Get recent application errors and warnings
-app-logs-errors hours="1" include-warnings="false" limit="50" token="${ADMIN_TOKEN}":
+# Get detailed application errors with debugging info
+logs-errors-debug hours="1" include-warnings="false" limit="50" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -625,7 +604,7 @@ app-logs-errors hours="1" include-warnings="false" limit="50" token="${ADMIN_TOK
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Get application event statistics
-app-logs-event-stats hours="24" token="${ADMIN_TOKEN}":
+logs-stats hours="24" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -649,7 +628,7 @@ app-logs-event-stats hours="24" token="${ADMIN_TOKEN}":
     '
 
 # Follow OAuth flow for a specific request
-app-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
+logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -693,7 +672,7 @@ app-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Show all application logs for a hostname
-app-logs-by-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
+logs-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -719,7 +698,7 @@ app-logs-by-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
     ' 2>/dev/null || echo "$response" | jq '.'
 
 # Test application logging system
-app-logs-test token="${ADMIN_TOKEN}":
+logs-test token="${ADMIN_TOKEN}":
     #!/usr/bin/env bash
     set -euo pipefail
     
@@ -738,11 +717,11 @@ app-logs-test token="${ADMIN_TOKEN}":
     # 3. Query recent logs
     echo "3. Querying recent logs..."
     echo ""
-    just app-logs-recent limit=5 token={{token}}
+    just logs limit=5 token={{token}}
     
     echo ""
     echo "4. Checking event statistics..."
-    just app-logs-event-stats hours=1 token={{token}} | head -10
+    just logs-stats hours=1 token={{token}} | head -10
     
     echo ""
     echo "✅ Logging system test complete!"
