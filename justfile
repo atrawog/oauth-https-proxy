@@ -1893,33 +1893,6 @@ proxy-resource-show hostname:
     
     echo "$body" | jq '.'
 
-# Test proxy protected resource metadata endpoint
-test-proxy-resource hostname:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    # First check if proxy exists
-    echo "Testing protected resource metadata endpoint for {{hostname}}..."
-    
-    # Try to fetch the protected resource metadata endpoint
-    # First try HTTPS, if that fails try HTTP with Host header
-    if curl -s -f "https://{{hostname}}/.well-known/oauth-protected-resource" -k --max-time 2 >/dev/null 2>&1; then
-        response=$(curl -s -w '\n%{http_code}' "https://{{hostname}}/.well-known/oauth-protected-resource" -k)
-    else
-        response=$(curl -s -w '\n%{http_code}' "http://localhost/.well-known/oauth-protected-resource" -H "Host: {{hostname}}")
-    fi
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n -1)
-    
-    echo "HTTP Status: $http_code"
-    echo "Response:"
-    echo "$body" | jq '.' 2>/dev/null || echo "$body"
-    
-    # Also check the proxy's resource configuration
-    echo -e "\nProxy Resource Configuration:"
-    just proxy-resource-show {{hostname}}
-
 # ============================================================================
 # DOCKER SERVICE MANAGEMENT
 # ============================================================================
@@ -2582,15 +2555,6 @@ test-all:
     @echo "════════════════════════════════════════════════════════════════"
     docker exec {{container_name}} pixi run pytest tests/ -v --tb=short
 
-# Test OAuth flow for a specific hostname
-test-auth-flow hostname:
-    @echo "Testing OAuth flow for {{hostname}}..."
-    @echo "Checking OAuth metadata endpoints..."
-    @curl -s https://{{hostname}}/.well-known/oauth-authorization-server | jq -e . > /dev/null && echo "✓ OAuth authorization server metadata OK" || echo "✗ OAuth authorization server metadata FAILED"
-    @curl -s https://{{hostname}}/.well-known/oauth-protected-resource | jq -e . > /dev/null && echo "✓ OAuth protected resource metadata OK" || echo "✗ OAuth protected resource metadata FAILED"
-    @curl -s -o /dev/null -w "✓ MCP endpoint returns %{http_code} (expected 401)\n" https://{{hostname}}/mcp || true
-    @curl -s -I https://{{hostname}}/mcp | grep -q "www-authenticate:" && echo "✓ WWW-Authenticate header present" || echo "✗ WWW-Authenticate header missing"
-
 # ============================================================================
 # UTILITY COMMANDS
 # ============================================================================
@@ -2892,11 +2856,6 @@ oauth-test-tokens server-url:
     echo ""
     echo "OAuth client configured. Server URL saved to .env."
 
-# Test MCP client authentication
-mcp-test-auth:
-    @echo "Testing MCP client authentication..."
-    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py::TestMCPClient::test_oauth_client_registration -v
-
 # OAuth Status Commands
 # List OAuth clients
 oauth-clients-list active-only="":
@@ -2973,11 +2932,6 @@ resource-list:
         echo "Error: Failed to list MCP resources" >&2
         exit 1
     fi
-
-# Run full MCP client test suite
-mcp-test-all:
-    @echo "Running full MCP client test suite..."
-    docker exec {{container_name}} pixi run pytest tests/test_mcp_client.py -v -m integration
 
 # External Service Management Commands (replaces instance management)
 # List all external services (formerly instances)
@@ -3180,47 +3134,6 @@ service-list-all type="":
     echo "$response" | \
         jq -r '.services[] | [.service_name, .service_type, (.target_url // .docker_info.image // "N/A"), .description] | @tsv' | \
         column -t -s $'\t' -N "Name,Type,Target/Image,Description"
-
-# Migrate old instance data to new service format
-migrate-instances-to-services:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    
-    echo "=== Migrating Instances to Services ==="
-    echo "This will convert all instance_url:* keys to service:url:* format"
-    echo ""
-    
-    # Use redis-cli to find and migrate all instance keys
-    docker compose exec redis redis-cli -a "${REDIS_PASSWORD}" --no-auth-warning eval "
-        local instance_keys = redis.call('keys', 'instance_url:*')
-        local migrated = 0
-        
-        for _, key in ipairs(instance_keys) do
-            local name = string.sub(key, 14)  -- Remove 'instance_url:' prefix
-            local url = redis.call('get', key)
-            
-            -- Store in new service format
-            redis.call('set', 'service:url:' .. name, url)
-            
-            -- Add to external services set
-            redis.call('sadd', 'services:external', name)
-            
-            -- Delete old keys
-            redis.call('del', key)
-            redis.call('del', 'instance_info:' .. name)
-            redis.call('del', 'instance:' .. name)
-            
-            migrated = migrated + 1
-        end
-        
-        return migrated
-    " 0 | tail -1 | {
-        read count
-        echo "✓ Migrated $count instances to services"
-    }
-    
-    echo ""
-    echo "Migration complete. Use 'just service-list-all' to see all services."
 
 # Route Management Commands
 # List all routes
