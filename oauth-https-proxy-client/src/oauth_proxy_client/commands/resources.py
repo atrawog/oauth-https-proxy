@@ -1,4 +1,4 @@
-"""MCP resource management commands."""
+"""Protected resource management commands."""
 
 import click
 from rich.console import Console
@@ -8,18 +8,18 @@ console = Console()
 
 @click.group('resource')
 def resource_group():
-    """Manage MCP resources."""
+    """Manage protected resources."""
     pass
 
 
 @resource_group.command('list')
 @click.pass_obj
 def list_resources(ctx):
-    """List all MCP resources."""
+    """List all protected resources."""
     try:
         client = ctx.ensure_client()
         resources = client.get_sync('/api/v1/resources/')
-        ctx.output(resources, title="MCP Resources")
+        ctx.output(resources, title="Protected Resources")
     except Exception as e:
         ctx.handle_error(e)
 
@@ -31,7 +31,7 @@ def list_resources(ctx):
 @click.option('--scopes', default='mcp:read,mcp:write', help='Comma-separated scopes')
 @click.pass_obj
 def register_resource(ctx, uri, proxy_hostname, name, scopes):
-    """Register a new MCP resource."""
+    """Register a new protected resource."""
     try:
         client = ctx.ensure_client()
         
@@ -44,7 +44,7 @@ def register_resource(ctx, uri, proxy_hostname, name, scopes):
         
         result = client.post_sync('/api/v1/resources/', data)
         
-        console.print(f"[green]MCP resource registered successfully![/green]")
+        console.print(f"[green]Protected resource registered successfully![/green]")
         ctx.output(result)
     except Exception as e:
         ctx.handle_error(e)
@@ -54,7 +54,7 @@ def register_resource(ctx, uri, proxy_hostname, name, scopes):
 @click.argument('uri')
 @click.pass_obj
 def show_resource(ctx, uri):
-    """Show MCP resource details."""
+    """Show protected resource details."""
     try:
         client = ctx.ensure_client()
         
@@ -63,7 +63,7 @@ def show_resource(ctx, uri):
         encoded_uri = quote(uri, safe='')
         
         resource = client.get_sync(f'/api/v1/resources/{encoded_uri}')
-        ctx.output(resource, title=f"MCP Resource: {uri}")
+        ctx.output(resource, title=f"Protected Resource: {uri}")
     except Exception as e:
         ctx.handle_error(e)
 
@@ -96,7 +96,7 @@ def validate_token(ctx, uri, token):
 @resource_group.command('auto-register')
 @click.pass_obj
 def auto_register_resources(ctx):
-    """Auto-discover and register MCP resources from proxy configurations."""
+    """Auto-discover and register protected resources from proxy configurations."""
     try:
         client = ctx.ensure_client()
         result = client.post_sync('/api/v1/resources/auto-register')

@@ -153,7 +153,7 @@ just service-port-list <service>
 ### Set Up MCP Echo Servers (Example)
 
 ```bash
-# One command to set up example MCP servers with OAuth
+# One command to set up example protected resources with OAuth
 just mcp-echo-setup
 
 # Access them at:
@@ -207,7 +207,7 @@ The PROXY protocol handler:
 - **API Service**: All-in-one container with HTTP/HTTPS gateway, OAuth server, certificate manager, and Docker management
 - **Redis**: Stores all configuration, certificates, tokens, and session data
 - **Docker Socket**: Enables dynamic container creation and management
-- **Backend Services**: Your applications (MCP servers, APIs, Docker containers)
+- **Backend Services**: Your applications (protected resources, APIs, Docker containers)
 
 ### Request Flow
 
@@ -231,10 +231,10 @@ The PROXY protocol handler:
 
 This proxy is fully compliant with MCP 2025-06-18 specification:
 
-### For MCP Servers
+### For Protected Resources
 
 ```bash
-# 1. Create proxy for your MCP server
+# 1. Create proxy for your protected resource
 just proxy-create mcp.yourdomain.com http://mcp-server:3000 [token]
 
 # 2. Enable OAuth protection
@@ -243,7 +243,7 @@ just proxy-auth-enable mcp.yourdomain.com [token] auth.yourdomain.com [mode]
 # 3. Enable MCP metadata (for automatic metadata endpoints)
 just proxy-resource-set mcp.yourdomain.com [token] [endpoint] [scopes]
 
-# Your MCP server is now accessible at https://mcp.yourdomain.com/mcp
+# Your protected resource is now accessible at https://mcp.yourdomain.com/mcp
 # with full OAuth protection and MCP compliance!
 ```
 
@@ -465,8 +465,8 @@ Authorization: Bearer your-admin-token
 - Token introspection
 - System metrics
 
-#### MCP Resources (`/api/v1/resources/*`)
-- MCP server registration
+#### Protected Resources (`/api/v1/resources/*`)
+- Protected resource registration
 - Resource validation
 - Auto-discovery
 

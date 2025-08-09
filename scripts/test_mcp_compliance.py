@@ -63,11 +63,11 @@ class MCPComplianceTester:
         # Wait for certificates
         time.sleep(5)
         
-        # Register MCP resources
+        # Register protected resources
         headers = {"Authorization": f"Bearer {self.admin_token}"}
         resources = [
-            ("https://mcp1.example.com", "mcp1.example.com", "MCP Server 1"),
-            ("https://mcp2.example.com", "mcp2.example.com", "MCP Server 2")
+            ("https://mcp1.example.com", "mcp1.example.com", "Protected Resource 1"),
+            ("https://mcp2.example.com", "mcp2.example.com", "Protected Resource 2")
         ]
         
         for uri, proxy, name in resources:

@@ -189,14 +189,14 @@ proxy-client oauth register my-mcp-client \
 echo "# MCP Resource Examples"
 echo
 
-# List MCP resources
+# List protected resources
 proxy-client resource list
 
-# Register MCP resource
+# Register protected resource
 proxy-client resource register \
   https://mcp.example.com \
   mcp.example.com \
-  "Example MCP Server" \
+  "Example Protected Resource" \
   --scopes mcp:read,mcp:write
 
 # Validate token for resource

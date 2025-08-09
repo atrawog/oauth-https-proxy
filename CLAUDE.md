@@ -1,4 +1,4 @@
-# MCP HTTPS OAuth Proxy Specification
+# HTTPS OAuth Proxy with Protected Resources Specification
 
 ## General Development Guidelines
 
@@ -369,7 +369,7 @@ just test-multi-domain           # Test multi-domain certificates
   "enabled_routes": [],
   "disabled_routes": [],
   
-  // MCP resource metadata (optional)
+  // Protected resource metadata (optional)
   "resource_endpoint": null,
   "resource_scopes": null,
   "resource_stateful": false,
@@ -441,8 +441,8 @@ This provides granular control over authentication at the proxy level. The field
 
 This dual-check ensures consistent access control throughout the authentication flow.
 
-### MCP Metadata Configuration
-Enable MCP protocol metadata endpoints for proxies:
+### Protected Resource Metadata Configuration
+Enable protected resource metadata endpoints for proxies:
 ```json
 {
   "mcp_enabled": true,
@@ -454,7 +454,7 @@ Enable MCP protocol metadata endpoints for proxies:
 ```
 
 When enabled, the proxy automatically serves:
-- `/.well-known/oauth-protected-resource` - MCP resource metadata
+- `/.well-known/oauth-protected-resource` - Protected resource metadata
 - Proper WWW-Authenticate headers on 401 responses
 - Integration with OAuth for token validation
 
@@ -786,7 +786,7 @@ OAuth is integrated directly into the proxy service:
   }
   ```
 
-#### MCP Server Requirements (RFC 9728)
+#### Protected Resource Requirements (RFC 9728)
 - **Protected Resource Metadata**: Each MCP server MUST implement `/.well-known/oauth-protected-resource`:
   ```json
   {
@@ -800,7 +800,7 @@ OAuth is integrated directly into the proxy service:
   ```
 - **WWW-Authenticate Header**: On 401 responses:
   ```
-  WWW-Authenticate: Bearer realm="MCP Server",
+  WWW-Authenticate: Bearer realm="Protected Resource",
     as_uri="https://auth.example.com/.well-known/oauth-authorization-server",
     resource_uri="https://mcp.example.com/.well-known/oauth-protected-resource"
   ```
@@ -914,17 +914,17 @@ Response:
 - `GET /api/v1/oauth/proxies` - OAuth status for proxies
 - `GET /api/v1/oauth/proxies/{hostname}/sessions` - Proxy sessions
 
-### MCP Resource Management API Endpoints
+### Protected Resource Management API Endpoints
 **Note**: These management endpoints are optional conveniences, not MCP requirements.
-- `GET /api/v1/resources/` - List registered MCP resources (requires trailing slash)
-- `POST /api/v1/resources/` - Register new MCP resource
+- `GET /api/v1/resources/` - List registered protected resources (requires trailing slash)
+- `POST /api/v1/resources/` - Register new protected resource
 - `GET /api/v1/resources/{uri}` - Get resource details
 - `PUT /api/v1/resources/{uri}` - Update resource
 - `DELETE /api/v1/resources/{uri}` - Remove resource
 - `POST /api/v1/resources/{uri}/validate-token` - Validate token for resource
 - `POST /api/v1/resources/auto-register` - Auto-discover proxy resources
 
-### MCP Server Endpoints (Required on each MCP server)
+### Protected Resource Endpoints (Required on each protected resource)
 - `GET /.well-known/oauth-protected-resource` - Protected resource metadata (REQUIRED)
 - `GET /mcp` or `/mcp/sessions` - MCP protocol endpoints (implementation-specific)
 
@@ -935,9 +935,9 @@ just generate-oauth-key                            # Generate RSA key
 just oauth-routes-setup <domain> [token]          # Setup OAuth routes (CRITICAL!)
 just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client for testing
 
-# MCP resource management (for MCP compliance)
-just resource-register <uri> <proxy> <n> [scopes] # Register MCP resource
-just resource-list                                # List MCP resources
+# Protected resource management (for MCP compliance)
+just resource-register <uri> <proxy> <n> [scopes] # Register protected resource
+just resource-list                                # List protected resources
 just resource-show <uri>                          # Show resource details
 just resource-validate <uri> <token>              # Validate token for resource
 
@@ -965,7 +965,7 @@ just test-resource-indicators                     # Test RFC 8707
 just test-audience-validation                     # Test audience restrictions
 ```
 
-### MCP Configuration
+### Protected Resource Configuration
 ```bash
 # Environment variables for MCP compliance
 MCP_RESOURCE_INDICATORS_ENABLED=true
@@ -975,7 +975,7 @@ MCP_MAX_RESOURCES_PER_TOKEN=5
 # Redis schema for resources
 resource:{resource_uri} = {
   "uri": "https://mcp.example.com",
-  "name": "Example MCP Server",
+  "name": "Example Protected Resource",
   "proxy_target": "mcp.example.com",
   "scopes": ["mcp:read", "mcp:write"],
   "metadata_url": "https://mcp.example.com/.well-known/oauth-protected-resource"
@@ -1050,7 +1050,7 @@ service:ports:{service}     # Hash of service port configurations
 
 ### Resource Keys (MCP)
 ```
-resource:{uri}              # MCP resource configuration
+resource:{uri}              # Protected resource configuration
 ```
 
 ## Key Implementation Insights
@@ -1088,8 +1088,8 @@ The system is **FULLY COMPLIANT** with MCP authorization specification:
 - Dynamic client registration (RFC 7591)
 - Token introspection and revocation endpoints
 
-### ✅ MCP Server Compliance  
-- Protected resource metadata endpoint on each MCP server
+### ✅ Protected Resource Compliance  
+- Protected resource metadata endpoint on each protected resource
 - WWW-Authenticate headers with metadata URLs
 - Audience validation for all protected resources
 - Resource-specific scope enforcement
@@ -1101,7 +1101,7 @@ The system is **FULLY COMPLIANT** with MCP authorization specification:
 - Per-resource access control
 
 To ensure MCP compliance for any proxy:
-1. Register as MCP resource: `just resource-register <uri> <proxy> <name>`
+1. Register as protected resource: `just resource-register <uri> <proxy> <name>`
 2. Enable auth on proxy: `just proxy-auth-enable <proxy> <token> <auth-proxy> forward`
 3. Verify metadata endpoint: `curl https://<proxy>/.well-known/oauth-protected-resource`
 

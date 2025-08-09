@@ -1,4 +1,4 @@
-"""MCP Resource management API endpoints."""
+"""Protected Resource management API endpoints."""
 
 import logging
 from typing import List, Optional, Dict, Any, Tuple
@@ -10,8 +10,8 @@ from ...auth import get_current_token_info, require_admin
 logger = logging.getLogger(__name__)
 
 
-class MCPResource(BaseModel):
-    """MCP Resource model."""
+class ProtectedResource(BaseModel):
+    """Protected Resource model."""
     uri: str = Field(..., description="Resource URI (e.g., https://mcp.example.com)")
     name: str = Field(..., description="Human-readable resource name")
     proxy_target: str = Field(..., description="Proxy hostname this resource maps to")
@@ -45,11 +45,11 @@ def create_router(storage):
     """Create resources endpoints router."""
     router = APIRouter(tags=["resources"])
     
-    @router.get("/", response_model=List[MCPResource])
+    @router.get("/", response_model=List[ProtectedResource])
     async def list_resources(
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
-        """List all registered MCP resources."""
+        """List all registered Protected Resources."""
         # Get all resources from Redis using SCAN for production safety
         resources = []
         cursor = 0
@@ -61,7 +61,7 @@ def create_router(storage):
                 if resource_data:
                     try:
                         resource = json.loads(resource_data)
-                        resources.append(MCPResource(**resource))
+                        resources.append(ProtectedResource(**resource))
                     except Exception as e:
                         logger.error(f"Failed to parse resource {key}: {e}")
             
@@ -70,12 +70,12 @@ def create_router(storage):
         
         return resources
     
-    @router.post("/", response_model=MCPResource)
+    @router.post("/", response_model=ProtectedResource)
     async def register_resource(
-        resource: MCPResource,
+        resource: ProtectedResource,
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
-        """Register a new MCP resource."""
+        """Register a new Protected Resource."""
         # Check if resource already exists
         resource_key = f"resource:{resource.uri}"
         if storage.redis_client.exists(resource_key):
@@ -89,15 +89,15 @@ def create_router(storage):
         resource_data = resource.model_dump()
         storage.redis_client.set(resource_key, json.dumps(resource_data))
         
-        logger.info(f"Registered MCP resource: {resource.uri}")
+        logger.info(f"Registered Protected Resource: {resource.uri}")
         return resource
     
-    @router.get("/{uri:path}", response_model=MCPResource)
+    @router.get("/{uri:path}", response_model=ProtectedResource)
     async def get_resource(
         uri: str,
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
-        """Get details of a specific MCP resource."""
+        """Get details of a specific Protected Resource."""
         # Reconstruct full URI
         full_uri = f"https://{uri}" if not uri.startswith(('http://', 'https://')) else uri
         resource_key = f"resource:{full_uri}"
@@ -108,18 +108,18 @@ def create_router(storage):
         
         try:
             resource = json.loads(resource_data)
-            return MCPResource(**resource)
+            return ProtectedResource(**resource)
         except Exception as e:
             logger.error(f"Failed to parse resource {full_uri}: {e}")
             raise HTTPException(500, "Failed to parse resource data")
     
-    @router.put("/{uri:path}", response_model=MCPResource)
+    @router.put("/{uri:path}", response_model=ProtectedResource)
     async def update_resource(
         uri: str,
-        resource: MCPResource,
+        resource: ProtectedResource,
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
-        """Update an existing MCP resource."""
+        """Update an existing Protected Resource."""
         # Reconstruct full URI
         full_uri = f"https://{uri}" if not uri.startswith(('http://', 'https://')) else uri
         resource_key = f"resource:{full_uri}"
@@ -135,7 +135,7 @@ def create_router(storage):
         resource_data = resource.model_dump()
         storage.redis_client.set(resource_key, json.dumps(resource_data))
         
-        logger.info(f"Updated MCP resource: {full_uri}")
+        logger.info(f"Updated Protected Resource: {full_uri}")
         return resource
     
     @router.delete("/{uri:path}")
@@ -143,7 +143,7 @@ def create_router(storage):
         uri: str,
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
-        """Delete an MCP resource."""
+        """Delete a Protected Resource."""
         # Reconstruct full URI
         full_uri = f"https://{uri}" if not uri.startswith(('http://', 'https://')) else uri
         resource_key = f"resource:{full_uri}"
@@ -152,7 +152,7 @@ def create_router(storage):
             raise HTTPException(404, f"Resource {full_uri} not found")
         
         storage.redis_client.delete(resource_key)
-        logger.info(f"Deleted MCP resource: {full_uri}")
+        logger.info(f"Deleted Protected Resource: {full_uri}")
         
         return {"status": "deleted", "uri": full_uri}
     
@@ -188,7 +188,7 @@ def create_router(storage):
     async def auto_register_proxy_resources(
         _: None = Depends(require_admin)
     ):
-        """Auto-register MCP resources from proxy configurations."""
+        """Auto-register Protected Resources from proxy configurations."""
         # Get all proxy targets
         proxy_targets = storage.list_proxy_targets()
         registered = []
@@ -207,9 +207,9 @@ def create_router(storage):
                 continue
             
             # Create resource
-            resource = MCPResource(
+            resource = ProtectedResource(
                 uri=resource_uri,
-                name=f"MCP Server at {target.hostname}",
+                name=f"Protected Resource at {target.hostname}",
                 proxy_target=target.hostname,
                 scopes=["mcp:read", "mcp:write"],
                 metadata_url=f"{resource_uri}/.well-known/oauth-protected-resource",

@@ -33,7 +33,7 @@ from .auth import (
 )
 from .proxy_handler_v2 import EnhancedProxyHandler as ProxyHandler
 from .oauth_status import create_oauth_status_router
-from .resource_registry import MCPResourceRegistry
+from .resource_registry import ProtectedResourceRegistry
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +216,7 @@ manager: Optional[CertificateManager] = None
 https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
-resource_registry: Optional[MCPResourceRegistry] = None
+resource_registry: Optional[ProtectedResourceRegistry] = None
 
 
 @asynccontextmanager
@@ -231,7 +231,7 @@ async def lifespan(app: FastAPI):
     https_server = HTTPSServer(manager)
     scheduler = CertificateScheduler(manager)
     proxy_handler = ProxyHandler(manager.storage)
-    resource_registry = MCPResourceRegistry(manager.storage.redis_client)
+    resource_registry = ProtectedResourceRegistry(manager.storage.redis_client)
     
     # Create and add OAuth status router BEFORE catch-all routes
     oauth_router = create_oauth_status_router(manager.storage)
@@ -1215,7 +1215,7 @@ async def delete_route(
 
 # Optional Resource Registry Management Endpoints
 # NOTE: These endpoints are NOT required by the MCP specification.
-# They provide administrative convenience for managing MCP resources.
+# They provide administrative convenience for managing protected resources.
 # The MCP spec (RFC 8707 & RFC 9728) only requires:
 # - OAuth servers to handle 'resource' parameter in auth/token requests
 # - MCP servers to implement /.well-known/oauth-protected-resource
@@ -1228,7 +1228,7 @@ async def register_resource(
     scopes: Optional[List[str]] = None,
     metadata: Optional[Dict[str, Union[str, int, bool]]] = None
 ):
-    """Register an MCP resource (optional management feature).
+    """Register a protected resource (optional management feature).
     
     NOTE: This is NOT required by MCP spec - it's an administrative convenience.
     The MCP spec only requires OAuth servers to validate the 'resource' parameter.
@@ -1246,7 +1246,7 @@ async def register_resource(
 @app.get("/resources",
          dependencies=[Depends(get_current_token_info)])
 async def list_resources():
-    """List all registered MCP resources (optional management feature).
+    """List all registered protected resources (optional management feature).
     
     NOTE: This is NOT required by MCP spec - it's an administrative convenience.
     """
@@ -1257,7 +1257,7 @@ async def list_resources():
 @app.get("/resources/{resource_uri:path}",
          dependencies=[Depends(get_current_token_info)])
 async def get_resource(resource_uri: str):
-    """Get a specific MCP resource (optional management feature).
+    """Get a specific protected resource (optional management feature).
     
     NOTE: This is NOT required by MCP spec - it's an administrative convenience.
     """
@@ -1277,7 +1277,7 @@ async def update_resource(
     resource_uri: str,
     updates: Dict[str, Union[str, int, bool, List[str]]]
 ):
-    """Update an MCP resource."""
+    """Update a protected resource."""
     # Reconstruct full URI
     if not resource_uri.startswith(("http://", "https://")):
         resource_uri = f"https://{resource_uri}"
@@ -1291,7 +1291,7 @@ async def update_resource(
 @app.delete("/resources/{resource_uri:path}",
             dependencies=[Depends(get_current_token_info)])
 async def delete_resource(resource_uri: str):
-    """Delete an MCP resource."""
+    """Delete a protected resource."""
     # Reconstruct full URI
     if not resource_uri.startswith(("http://", "https://")):
         resource_uri = f"https://{resource_uri}"
@@ -1305,10 +1305,10 @@ async def delete_resource(resource_uri: str):
 @app.post("/resources/auto-register",
           dependencies=[Depends(get_current_token_info)])
 async def auto_register_resources():
-    """Auto-register MCP resources from existing proxy targets."""
+    """Auto-register protected resources from existing proxy targets."""
     count = await resource_registry.auto_register_proxy_resources()
     return {
-        "message": f"Auto-registered {count} MCP resources",
+        "message": f"Auto-registered {count} protected resources",
         "count": count
     }
 
@@ -1438,7 +1438,7 @@ def run_server():
     if not proxy_handler:
         proxy_handler = ProxyHandler(manager.storage)
     if not resource_registry:
-        resource_registry = MCPResourceRegistry(manager.storage.redis_client)
+        resource_registry = ProtectedResourceRegistry(manager.storage.redis_client)
     
     async def run_servers():
         # Start scheduler

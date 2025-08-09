@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""List MCP resources."""
+"""List protected resources."""
 
 import os
 import sys
@@ -12,7 +12,7 @@ from test_utils import get_api_api_url, get_admin_token
 
 
 def list_resources():
-    """List all MCP resources."""
+    """List all protected resources."""
     api_url = get_api_api_url()
     if not api_url:
         print("Error: Unable to determine API base URL")
@@ -41,8 +41,8 @@ def list_resources():
         resources = response.json()
         
         if not resources:
-            print("No MCP resources registered")
-            print("\nTo register MCP resources:")
+            print("No protected resources registered")
+            print("\nTo register protected resources:")
             print("  just resource-register <uri> <proxy> <name> [scopes]")
             print("  just resource-auto-register")
             return True

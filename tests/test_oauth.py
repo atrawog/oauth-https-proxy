@@ -182,7 +182,7 @@ class TestOAuthAuthorizationFlow:
         assert response.status_code in [400, 302, 422], f"Got {response.status_code}: {response.text}"  # May redirect with error or return validation error
     
     def test_authorization_with_resource_parameter(self, auth_domain: str, test_client: Optional[dict]):
-        """Test authorization with MCP resource parameter."""
+        """Test authorization with protected resource parameter."""
         if not test_client:
             assert False, "FAILURE: Client registration not available"
         
@@ -319,29 +319,29 @@ class TestOAuthStatus:
         assert isinstance(data["checks"], dict)
 
 @pytest.mark.oauth
-class TestMCPResourceManagement:
-    """Test MCP resource management for OAuth."""
+class TestProtectedResourceManagement:
+    """Test protected resource management for OAuth."""
 
     def test_list_mcp_resources(self, http_client: httpx.Client, auth_token: str):
-        """Test listing MCP resources."""
+        """Test listing protected resources."""
         response = http_client.get(
             "/resources/",
             headers={"Authorization": f"Bearer {auth_token}"}
         )
         
-        # Accept 404 if MCP resource management not implemented
+        # Accept 404 if protected resource management not implemented
         if response.status_code == 404:
-            assert False, "FAILURE: MCP resource management not implemented"
+            assert False, "FAILURE: Protected resource management not implemented"
         
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
     
     def test_register_mcp_resource(self, http_client: httpx.Client, auth_token: str):
-        """Test registering an MCP resource."""
+        """Test registering a protected resource."""
         resource_data = {
             "uri": f"https://test-mcp-{secrets.token_hex(4)}.example.com",
-            "name": "Test MCP Server",
+            "name": "Test Protected Resource",
             "proxy_target": "test-mcp.example.com",
             "scopes": ["mcp:read", "mcp:write"]
         }
@@ -353,7 +353,7 @@ class TestMCPResourceManagement:
         )
         
         if response.status_code == 404:
-            assert False, "FAILURE: MCP resource management not implemented"
+            assert False, "FAILURE: Protected resource management not implemented"
         
         assert response.status_code == 200, f"Expected 200 OK, got {response.status_code}: {response.text}"
         data = response.json()

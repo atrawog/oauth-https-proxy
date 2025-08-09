@@ -1,7 +1,7 @@
-"""Optional MCP Resource Registry for tracking MCP servers and their metadata.
+"""Optional Protected Resource Registry for tracking protected resources and their metadata.
 
 NOTE: This is NOT required by the MCP specification. It's an administrative
-feature for managing and tracking MCP resources. The MCP spec only requires:
+feature for managing and tracking protected resources. The MCP spec only requires:
 - OAuth servers to handle the 'resource' parameter
 - MCP servers to implement /.well-known/oauth-protected-resource
 """
@@ -15,8 +15,8 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-class MCPResourceRegistry:
-    """Optional registry for MCP resources.
+class ProtectedResourceRegistry:
+    """Optional registry for protected resources.
     
     This is an administrative feature, NOT required by RFC 8707 or RFC 9728.
     It provides convenient management of MCP resources but is not necessary
@@ -36,7 +36,7 @@ class MCPResourceRegistry:
         scopes: Optional[List[str]] = None,
         metadata: Optional[Dict[str, Any]] = None
     ) -> Dict[str, Any]:
-        """Register an MCP resource with its metadata.
+        """Register a protected resource with its metadata.
         
         Args:
             resource_uri: The resource URI (e.g., https://mcp.example.com)
@@ -68,7 +68,7 @@ class MCPResourceRegistry:
         # Add to index for listing
         await self.redis.sadd(self.index_key, resource_uri)
         
-        logger.info(f"Registered MCP resource: {resource_uri}")
+        logger.info(f"Registered protected resource: {resource_uri}")
         return resource_data
     
     async def get_resource(self, resource_uri: str) -> Optional[Dict[str, Any]]:
@@ -130,7 +130,7 @@ class MCPResourceRegistry:
         key = f"{self.key_prefix}{resource_uri}"
         await self.redis.set(key, json.dumps(resource))
         
-        logger.info(f"Updated MCP resource: {resource_uri}")
+        logger.info(f"Updated protected resource: {resource_uri}")
         return resource
     
     async def delete_resource(self, resource_uri: str) -> bool:
@@ -152,7 +152,7 @@ class MCPResourceRegistry:
         await self.redis.delete(key)
         await self.redis.srem(self.index_key, resource_uri)
         
-        logger.info(f"Deleted MCP resource: {resource_uri}")
+        logger.info(f"Deleted protected resource: {resource_uri}")
         return True
     
     async def find_resources_by_proxy(self, proxy_hostname: str) -> List[Dict[str, Any]]:
@@ -203,7 +203,7 @@ class MCPResourceRegistry:
         """Auto-register resources based on existing proxy targets.
         
         This scans proxy targets and registers any that have certificates
-        as MCP resources.
+        as protected resources.
         
         Returns:
             Number of resources registered
@@ -230,11 +230,11 @@ class MCPResourceRegistry:
                 if await self.get_resource(resource_uri):
                     continue
                 
-                # Register as MCP resource
+                # Register as protected resource
                 await self.register_resource(
                     resource_uri=resource_uri,
                     proxy_hostname=hostname,
-                    name=f"MCP Server at {hostname}",
+                    name=f"Protected Resource at {hostname}",
                     metadata={
                         "auto_registered": True,
                         "cert_name": proxy.get("cert_name"),
@@ -244,6 +244,6 @@ class MCPResourceRegistry:
                 registered += 1
         
         if registered > 0:
-            logger.info(f"Auto-registered {registered} MCP resources")
+            logger.info(f"Auto-registered {registered} protected resources")
         
         return registered

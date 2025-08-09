@@ -33,6 +33,7 @@ COPY --chown=proxyuser:proxyuser pyproject.toml .
 COPY --chown=proxyuser:proxyuser mcp-echo-streamablehttp-server-stateful/ ./mcp-echo-streamablehttp-server-stateful/
 COPY --chown=proxyuser:proxyuser mcp-echo-streamablehttp-server-stateless/ ./mcp-echo-streamablehttp-server-stateless/
 COPY --chown=proxyuser:proxyuser mcp-http-validator/ ./mcp-http-validator/
+COPY --chown=proxyuser:proxyuser oauth-https-proxy-client/ ./oauth-https-proxy-client/
 
 # Switch to non-root user for pixi installation
 USER proxyuser
