@@ -62,20 +62,23 @@ Access logs via the `/api/v1/logs` endpoints:
 
 #### Log Query Commands
 ```bash
-just logs [hours] [limit]                    # Show recent logs (default)
-just logs-ip <ip> [hours] [limit]            # Query logs by client IP
-just logs-host <hostname> [hours]            # Query logs by hostname
-just logs-client <client-id> [hours]         # Query logs by OAuth client
-just logs-search <query>                     # Search logs with filters
-just logs-errors [hours] [limit]             # Show recent errors
-just logs-errors-debug [hours] [limit]       # Detailed errors with debugging
-just logs-follow [interval]                  # Follow logs in real-time
-just logs-oauth <ip> [hours]                 # OAuth activity summary
-just logs-oauth-debug <ip> [hours]           # Full OAuth flow debugging
-just logs-oauth-flow [client-id] [username]  # Track OAuth flows
-just logs-stats [hours]                      # Show event statistics
-just logs-test                               # Test logging system
-just logs-service [service]                  # Docker container logs
+just logs [hours] [event] [level] [hostname] [limit] [token]  # Show recent logs (default)
+just logs-ip <ip> [hours] [event] [level] [limit] [token]    # Query logs by client IP
+just logs-host <hostname> [hours] [limit] [token]             # Query logs by hostname
+just logs-client <client-id> [hours] [event] [level] [limit] [token]  # Query logs by OAuth client
+just logs-search [query] [hours] [event] [level] [hostname] [limit] [token]  # Search logs with filters
+just logs-errors [hours] [limit] [token]                      # Show recent errors
+just logs-errors-debug [hours] [include-warnings] [limit] [token]  # Detailed errors with debugging
+just logs-follow [service]                                    # Follow Docker container logs
+just logs-oauth <ip> [hours] [limit] [token]                  # OAuth activity summary
+just logs-oauth-debug <ip> [hours] [limit] [token]            # Full OAuth flow debugging
+just logs-oauth-flow [client-id] [username] [hours] [token]   # Track OAuth flows
+just logs-stats [hours] [token]                               # Show event statistics
+just logs-test [token]                                        # Test logging system
+just logs-service [service] [lines]                           # Docker container logs
+just logs-all [lines] [hours] [token]                         # Show all logs (Docker + application)
+just logs-clear [token]                                       # Clear all log entries from Redis
+just logs-help                                                # Show logging commands help
 ```
 
 #### Performance Optimizations
@@ -147,11 +150,11 @@ just logs-service [service]                  # Docker container logs
 
 ### Token Commands
 ```bash
-just token-generate <name> [cert-email]  # Create token with optional cert email
-just token-show <name>                   # Retrieve full token
-just token-list                          # List all tokens
-just token-delete <name>                 # Delete token + owned resources
-just token-email <name> <email>          # Update token cert email
+just token-generate <name> [email] [token]  # Create token with optional cert email
+just token-show <name> [token]              # Retrieve full token
+just token-list [token]                     # List all tokens
+just token-delete <name> [token]            # Delete token + owned resources
+just token-email <name> <email> [token]     # Update token cert email
 ```
 
 ## Service Architecture
@@ -297,10 +300,10 @@ class DomainService:
 ### Certificate Commands
 ```bash
 # Certificate operations
-just cert-create <name> <domain> <email> <token> [staging]
-just cert-delete <name> <token> [force]
+just cert-create <name> <domain> [staging] [email] [token]
+just cert-delete <name> [force] [token]
 just cert-list [token]
-just cert-show <name> [token] [pem]
+just cert-show <name> [pem] [token]
 ```
 
 ## Proxy Manager
@@ -463,30 +466,30 @@ When enabled, the proxy automatically serves:
 ### Proxy Commands
 ```bash
 # Basic proxy operations
-just proxy-create <hostname> <target-url> <token> [email] [staging] [preserve-host] [enable-http] [enable-https]
-just proxy-delete <hostname> <token> [delete-cert] [force]
+just proxy-create <hostname> <target-url> [staging] [preserve-host] [enable-http] [enable-https] [email] [token]
+just proxy-delete <hostname> [delete-cert] [force] [token]
 just proxy-list [token]
-just proxy-show <hostname>
+just proxy-show <hostname> [token]
 
 # OAuth proxy authentication
-just proxy-auth-enable <hostname> <token> <auth-proxy> <mode> [allowed-scopes] [allowed-audiences]
-just proxy-auth-disable <hostname> <token>
-just proxy-auth-config <hostname> <token> [users] [emails] [groups] [allowed-scopes] [allowed-audiences]
-just proxy-auth-show <hostname>
+just proxy-auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]
+just proxy-auth-disable <hostname> [token]
+just proxy-auth-config <hostname> [users] [emails] [groups] [allowed-scopes] [allowed-audiences] [token]
+just proxy-auth-show <hostname> [token]
 
 # Examples of per-proxy user configuration:
 # Allow specific GitHub users:
-just proxy-auth-config api.example.com $TOKEN "alice,bob,charlie"
+just proxy-auth-config api.example.com "alice,bob,charlie" "" "" "" "" $TOKEN
 # Allow all GitHub users:
-just proxy-auth-config api.example.com $TOKEN "*"
+just proxy-auth-config api.example.com "*" "" "" "" "" $TOKEN
 # Use global default (OAUTH_ALLOWED_GITHUB_USERS):
-just proxy-auth-config api.example.com $TOKEN ""
+just proxy-auth-config api.example.com "" "" "" "" "" $TOKEN
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)
-just proxy-resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research]
-just proxy-resource-clear <hostname> <token>
-just proxy-resource-show <hostname>
-just proxy-resource-list                  # List protected resources
+just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]
+just proxy-resource-clear <hostname> [token]
+just proxy-resource-show <hostname> [token]
+just proxy-resource-list [token]           # List protected resources
 ```
 
 ### Route API Endpoints
@@ -501,15 +504,15 @@ just proxy-resource-list                  # List protected resources
 ### Route Commands
 ```bash
 # Basic route operations
-just route-list                                      # List all routes in table format
-just route-show <route-id>                          # Show route details in JSON
-just route-create <path> <target-type> <target-value> [token] [priority] [methods] [is-regex] [description]
+just route-list [token]                             # List all routes in table format
+just route-show <route-id> [token]                  # Show route details in JSON
+just route-create <path> <target-type> <target-value> [priority] [methods] [is-regex] [description] [token]
 just route-delete <route-id> [token]                # Delete a route
 
 # Scope-based route operations
-just route-create-global <path> <target-type> <target-value> [token] [priority] [methods] [is-regex] [description]  # Create global route
-just route-create-proxy <path> <target-type> <target-value> <proxies> [token] [priority] [methods] [is-regex] [description]  # Create proxy-specific route
-just route-list-by-scope [scope]                    # List routes filtered by scope (all|global|proxy)
+just route-create-global <path> <target-type> <target-value> [priority] [methods] [is-regex] [description] [token]  # Create global route
+just route-create-proxy <path> <target-type> <target-value> <proxies> [priority] [methods] [is-regex] [description] [token]  # Create proxy-specific route
+just route-list-by-scope [scope] [token]            # List routes filtered by scope (all|global|proxy)
 ```
 
 ## Service Management
@@ -600,40 +603,40 @@ The system automatically registers these internal services:
 ### Service Commands
 ```bash
 # Docker service management
-just service-create <name> <image> [dockerfile] [port] [token] [memory] [cpu] [auto-proxy]
-just service-create-exposed <name> <image> <port> <bind-address> [token] [memory] [cpu]  # Create with exposed port
+just service-create <name> [image] [dockerfile] [port] [memory] [cpu] [auto-proxy] [token]
+just service-create-exposed <name> <image> <port> [bind-address] [memory] [cpu] [token]  # Create with exposed port
 just service-list [owned-only] [token]  # List Docker services
-just service-show <name>
-just service-delete <name> [token] [force] [delete-proxy]
+just service-show <name> [token]
+just service-delete <name> [force] [delete-proxy] [token]
 just service-start <name> [token]
 just service-stop <name> [token]
 just service-restart <name> [token]
 
 # External service management
-just service-register <name> <target-url> [token] [description]  # Register external service
-just service-list-external                                       # List external services
-just service-show-external <name>                                # Show external service details
-just service-update-external <name> <target-url> [token] [desc] # Update external service
+just service-register <name> <target-url> [description] [token]  # Register external service
+just service-list-external [token]                               # List external services
+just service-show-external <name> [token]                        # Show external service details
+just service-update-external <name> <target-url> [description] [token]  # Update external service
 just service-unregister <name> [token]                          # Delete external service
 just service-register-oauth [token]                              # Register OAuth as external service
 
 # Unified service views
-just service-list-all [type]                                     # List all services (Docker + external)
+just service-list-all [type] [token]                             # List all services (Docker + external)
 
 # Service monitoring
-just service-logs <name> [lines] [timestamps]
-just service-stats <name>
+just service-logs <name> [lines] [timestamps] [token]
+just service-stats <name> [token]
 
 # Service proxy management
 just service-proxy-create <name> [hostname] [enable-https] [token]
-just service-cleanup
+just service-cleanup [token]
 
 # Port management
 just service-port-add <name> <port> [bind-address] [source-token] [token]
 just service-port-remove <name> <port-name> [token]
-just service-port-list <name>
-just service-port-check <port> [bind-address]
-just service-ports-global [available-only]
+just service-port-list <name> [token]
+just service-port-check <port> [bind-address] [token]
+just service-ports-global [available-only] [token]
 ```
 
 ## Port Management Architecture
@@ -889,20 +892,20 @@ Response:
 ### OAuth Commands
 ```bash
 # OAuth setup and management
-just oauth-key-generate                            # Generate RSA key
+just oauth-key-generate [token]                   # Generate RSA key
 just oauth-routes-setup <domain> [token]          # Setup OAuth routes (CRITICAL!)
 just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client for testing
 
 # OAuth status and monitoring
-just oauth-clients-list [active-only]             # List OAuth clients
-just oauth-sessions-list                          # List active sessions
-just oauth-test-tokens <server-url>               # Generate test OAuth tokens for MCP client
+just oauth-clients-list [active-only] [token]     # List OAuth clients
+just oauth-sessions-list [token]                  # List active sessions
+just oauth-test-tokens <server-url> [token]       # Generate test OAuth tokens for MCP client
 
 # Protected resource management (see proxy-resource commands above)
-just proxy-resource-list                          # List protected resources
-just proxy-resource-set <hostname> <token> ...    # Set protected resource metadata
-just proxy-resource-clear <hostname> <token>      # Clear protected resource metadata
-just proxy-resource-show <hostname>               # Show protected resource metadata
+just proxy-resource-list [token]                  # List protected resources
+just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]  # Set protected resource metadata
+just proxy-resource-clear <hostname> [token]      # Clear protected resource metadata
+just proxy-resource-show <hostname> [token]       # Show protected resource metadata
 ```
 
 ### Protected Resource Configuration
@@ -1041,8 +1044,8 @@ The system is **FULLY COMPLIANT** with MCP authorization specification:
 - Per-resource access control
 
 To ensure MCP compliance for any proxy:
-1. Set protected resource metadata: `just proxy-resource-set <hostname> <token>`
-2. Enable auth on proxy: `just proxy-auth-enable <proxy> <token> <auth-proxy> forward`
+1. Set protected resource metadata: `just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]`
+2. Enable auth on proxy: `just proxy-auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]`
 3. Verify metadata endpoint: `curl https://<proxy>/.well-known/oauth-protected-resource`
 
 ## System Commands
@@ -1053,18 +1056,18 @@ just up                      # Start all services
 just down                    # Stop all services
 just restart                 # Restart all services
 just rebuild <service>       # Rebuild specific service (api or redis)
-just logs [service]          # View service logs (all or specific)
+just logs-service [service] [lines]  # View Docker container logs
 just shell                   # Shell into api container
 just redis-cli               # Access Redis CLI
 ```
 
 ### Token Management
 ```bash
-just token-generate <name> [cert-email]     # Create token with optional cert email
-just token-show <name>                      # Retrieve full token
-just token-list                             # List all tokens
-just token-delete <name>                    # Delete token + certs
-just token-email <name> <email>             # Update token cert email
+just token-generate <name> [email] [token]  # Create token with optional cert email
+just token-show <name> [token]              # Retrieve full token
+just token-list [token]                     # List all tokens
+just token-delete <name> [token]            # Delete token + certs
+just token-email <name> <email> [token]     # Update token cert email
 ```
 
 ### Testing & Debugging
@@ -1085,16 +1088,20 @@ just token-email <name> <email>             # Update token cert email
 
 ```bash
 # Comprehensive test suites
-just test                    # Run standard test suite
+just test [files]           # Run standard test suite
 just test-all               # Run comprehensive test suite
 
 # System maintenance
 just health                 # Check system health
-just service-cleanup-orphaned       # Clean up orphaned resources
+just service-cleanup-orphaned [token]  # Clean up orphaned resources
 just help                   # Show all available commands
+
+# Configuration management
+just config-save [filename]        # Save full configuration to YAML backup
+just config-load <filename> [force]  # Load configuration from YAML backup
 
 # Additional commands
 just token-admin            # Generate admin token
 just docs-build            # Build documentation
-just oauth-test-tokens <server-url>  # Generate test OAuth tokens for MCP client
+just oauth-test-tokens <server-url> [token]  # Generate test OAuth tokens for MCP client
 ```
