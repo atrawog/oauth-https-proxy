@@ -6,6 +6,7 @@ import time
 from rich.console import Console
 from rich.live import Live
 from rich.table import Table
+from rich.prompt import Confirm
 
 console = Console()
 
@@ -201,5 +202,295 @@ def follow_logs(ctx, interval, hostname, status):
                 
         except KeyboardInterrupt:
             console.print("\n[yellow]Stopped following logs.[/yellow]")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('by-host')
+@click.argument('hostname')
+@click.option('--hours', type=int, default=24, help='Hours to look back')
+@click.option('--limit', type=int, default=100, help='Maximum results')
+@click.pass_obj
+def logs_by_host(ctx, hostname, hours, limit):
+    """Query logs by hostname."""
+    try:
+        client = ctx.ensure_client()
+        
+        params = {
+            'hours': hours,
+            'limit': limit,
+        }
+        
+        logs = client.get_sync(f'/api/v1/logs/host/{hostname}', params)
+        ctx.output(logs, title=f"Logs for hostname: {hostname}")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('stats')
+@click.option('--hours', type=int, default=24, help='Hours to look back')
+@click.pass_obj
+def log_stats(ctx, hours):
+    """Show comprehensive log statistics."""
+    try:
+        client = ctx.ensure_client()
+        
+        params = {'hours': hours}
+        stats = client.get_sync('/api/v1/logs/stats', params)
+        
+        # Display statistics in a formatted way
+        if ctx.output_format == 'table' or ctx.output_format == 'auto':
+            # Create overview table
+            overview = Table(title=f"Log Statistics (Last {hours} hours)")
+            overview.add_column("Metric", style="cyan")
+            overview.add_column("Value", style="yellow")
+            
+            if 'total_requests' in stats:
+                overview.add_row("Total Requests", str(stats['total_requests']))
+            if 'unique_ips' in stats:
+                overview.add_row("Unique IPs", str(stats['unique_ips']))
+            if 'error_rate' in stats:
+                overview.add_row("Error Rate", f"{stats['error_rate']:.2%}")
+            if 'avg_response_time' in stats:
+                overview.add_row("Avg Response Time", f"{stats['avg_response_time']:.2f}ms")
+            
+            console.print(overview)
+            
+            # Show top paths if available
+            if 'top_paths' in stats and stats['top_paths']:
+                paths_table = Table(title="Top Paths")
+                paths_table.add_column("Path", style="cyan")
+                paths_table.add_column("Count", style="yellow")
+                
+                for path, count in stats['top_paths'][:10]:
+                    paths_table.add_row(path, str(count))
+                
+                console.print(paths_table)
+            
+            # Show status code distribution
+            if 'status_codes' in stats and stats['status_codes']:
+                status_table = Table(title="Status Code Distribution")
+                status_table.add_column("Status", style="cyan")
+                status_table.add_column("Count", style="yellow")
+                
+                for status, count in sorted(stats['status_codes'].items()):
+                    status_table.add_row(str(status), str(count))
+                
+                console.print(status_table)
+        else:
+            ctx.output(stats, title="Log Statistics")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('oauth')
+@click.argument('ip')
+@click.option('--hours', type=int, default=24, help='Hours to look back')
+@click.option('--limit', type=int, default=100, help='Maximum results')
+@click.pass_obj
+def oauth_activity(ctx, ip, hours, limit):
+    """Show OAuth activity summary for an IP."""
+    try:
+        client = ctx.ensure_client()
+        
+        params = {
+            'hours': hours,
+            'limit': limit,
+        }
+        
+        activity = client.get_sync(f'/api/v1/logs/oauth/{ip}', params)
+        
+        # Display OAuth activity summary
+        if ctx.output_format == 'table' or ctx.output_format == 'auto':
+            console.print(f"\n[bold]OAuth Activity for IP: {ip}[/bold]")
+            
+            if 'summary' in activity:
+                summary = activity['summary']
+                console.print(f"  Authorization Attempts: {summary.get('auth_attempts', 0)}")
+                console.print(f"  Successful Logins: {summary.get('successful_logins', 0)}")
+                console.print(f"  Failed Logins: {summary.get('failed_logins', 0)}")
+                console.print(f"  Token Requests: {summary.get('token_requests', 0)}")
+                console.print(f"  Active Sessions: {summary.get('active_sessions', 0)}")
+            
+            if 'recent_activity' in activity and activity['recent_activity']:
+                table = Table(title="Recent OAuth Events")
+                table.add_column("Time", style="dim")
+                table.add_column("Event", style="cyan")
+                table.add_column("Status", style="yellow")
+                table.add_column("Details")
+                
+                for event in activity['recent_activity'][:20]:
+                    table.add_row(
+                        event.get('timestamp', 'N/A'),
+                        event.get('event_type', 'N/A'),
+                        event.get('status', 'N/A'),
+                        event.get('details', '')
+                    )
+                
+                console.print(table)
+        else:
+            ctx.output(activity, title=f"OAuth Activity: {ip}")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('oauth-debug')
+@click.argument('ip')
+@click.option('--hours', type=int, default=24, help='Hours to look back')
+@click.option('--limit', type=int, default=100, help='Maximum results')
+@click.pass_obj
+def oauth_debug(ctx, ip, hours, limit):
+    """Full OAuth flow debugging for an IP."""
+    try:
+        client = ctx.ensure_client()
+        
+        params = {
+            'hours': hours,
+            'limit': limit,
+        }
+        
+        debug_info = client.get_sync(f'/api/v1/logs/oauth-debug/{ip}', params)
+        
+        # Display detailed OAuth debugging information
+        if ctx.output_format == 'table' or ctx.output_format == 'auto':
+            console.print(f"\n[bold]OAuth Debug Information for IP: {ip}[/bold]\n")
+            
+            # Show OAuth flows
+            if 'flows' in debug_info and debug_info['flows']:
+                for i, flow in enumerate(debug_info['flows'], 1):
+                    console.print(f"[bold cyan]Flow {i}:[/bold cyan]")
+                    console.print(f"  Session ID: {flow.get('session_id', 'N/A')}")
+                    console.print(f"  Client ID: {flow.get('client_id', 'N/A')}")
+                    console.print(f"  Start Time: {flow.get('start_time', 'N/A')}")
+                    console.print(f"  End Time: {flow.get('end_time', 'N/A')}")
+                    console.print(f"  Status: {flow.get('status', 'N/A')}")
+                    
+                    if 'steps' in flow:
+                        console.print("  Steps:")
+                        for step in flow['steps']:
+                            status_icon = "✓" if step.get('success') else "✗"
+                            console.print(f"    {status_icon} {step.get('name', 'N/A')}: {step.get('message', '')}")
+                    
+                    if 'errors' in flow and flow['errors']:
+                        console.print("  [red]Errors:[/red]")
+                        for error in flow['errors']:
+                            console.print(f"    - {error}")
+                    
+                    console.print()
+            
+            # Show detailed request/response logs
+            if 'detailed_logs' in debug_info and debug_info['detailed_logs']:
+                table = Table(title="Detailed OAuth Requests")
+                table.add_column("Time", style="dim")
+                table.add_column("Method", style="cyan")
+                table.add_column("Path")
+                table.add_column("Status")
+                table.add_column("Headers/Body", max_width=50)
+                
+                for log in debug_info['detailed_logs'][:30]:
+                    status = str(log.get('status', 'N/A'))
+                    if status.startswith('2'):
+                        status_style = "[green]" + status + "[/green]"
+                    elif status.startswith('4'):
+                        status_style = "[yellow]" + status + "[/yellow]"
+                    elif status.startswith('5'):
+                        status_style = "[red]" + status + "[/red]"
+                    else:
+                        status_style = status
+                    
+                    details = []
+                    if log.get('request_headers'):
+                        details.append("Headers: " + str(log['request_headers'])[:50])
+                    if log.get('request_body'):
+                        details.append("Body: " + str(log['request_body'])[:50])
+                    
+                    table.add_row(
+                        log.get('timestamp', 'N/A'),
+                        log.get('method', 'N/A'),
+                        log.get('path', 'N/A'),
+                        status_style,
+                        "\n".join(details)
+                    )
+                
+                console.print(table)
+        else:
+            ctx.output(debug_info, title=f"OAuth Debug: {ip}")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('oauth-flow')
+@click.option('--client-id', help='Filter by OAuth client ID')
+@click.option('--username', help='Filter by username')
+@click.option('--hours', type=int, default=1, help='Hours to look back')
+@click.pass_obj
+def oauth_flow(ctx, client_id, username, hours):
+    """Track OAuth authorization flows."""
+    try:
+        client = ctx.ensure_client()
+        
+        params = {'hours': hours}
+        
+        if client_id:
+            params['client_id'] = client_id
+        if username:
+            params['username'] = username
+        
+        flows = client.get_sync('/api/v1/logs/oauth-flow', params)
+        ctx.output(flows, title="OAuth Flows")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('clear')
+@click.option('--force', '-f', is_flag=True, help='Skip confirmation')
+@click.pass_obj
+def clear_logs(ctx, force):
+    """Clear all log entries from Redis."""
+    try:
+        if not force:
+            console.print("[yellow]WARNING: This will delete all log entries from Redis![/yellow]")
+            if not Confirm.ask("Are you sure you want to clear all logs?", default=False):
+                return
+        
+        client = ctx.ensure_client()
+        result = client.delete_sync('/api/v1/logs')
+        
+        console.print("[green]✓ All logs cleared successfully![/green]")
+        if result and 'deleted_count' in result:
+            console.print(f"  Deleted {result['deleted_count']} log entries")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@log_group.command('test')
+@click.pass_obj
+def test_logging(ctx):
+    """Test the logging system."""
+    try:
+        client = ctx.ensure_client()
+        
+        console.print("[yellow]Testing logging system...[/yellow]")
+        
+        # Generate test log entries
+        result = client.post_sync('/api/v1/logs/test')
+        
+        if result.get('success'):
+            console.print("[green]✓ Logging system test successful![/green]")
+            console.print(f"  Generated {result.get('entries_created', 0)} test entries")
+            
+            # Try to retrieve the test entries
+            params = {'hours': 0.1, 'limit': 5}
+            recent_logs = client.get_sync('/api/v1/logs/search', params)
+            
+            if recent_logs:
+                console.print(f"  Retrieved {len(recent_logs)} recent log entries")
+                console.print("[green]✓ Log retrieval working correctly![/green]")
+            else:
+                console.print("[yellow]⚠ No recent logs found[/yellow]")
+        else:
+            console.print("[red]✗ Logging system test failed[/red]")
+            if result.get('error'):
+                console.print(f"  Error: {result['error']}")
     except Exception as e:
         ctx.handle_error(e)

@@ -26,6 +26,7 @@ from .commands.oauth import oauth_group
 from .commands.resources import resource_group
 from .commands.logs import log_group
 from .commands.system import system_group
+from .commands.workflows import workflow_group
 
 # Console for error output
 console = Console(stderr=True)
@@ -40,6 +41,7 @@ class Context:
         self.client: Optional[ProxyClient] = None
         self.output_format: str = 'auto'
         self.debug: bool = False
+        self.dry_run: bool = False
     
     def ensure_client(self) -> ProxyClient:
         """Ensure client is initialized.
@@ -53,7 +55,7 @@ class Context:
         if not self.client:
             if not self.config:
                 raise ConfigurationError("Configuration not initialized")
-            self.client = ProxyClient(self.config)
+            self.client = ProxyClient(self.config, dry_run=self.dry_run)
         return self.client
     
     def output(self, data, **kwargs):
@@ -147,9 +149,14 @@ class Context:
     default=False,
     help='Enable debug output'
 )
+@click.option(
+    '--dry-run',
+    is_flag=True,
+    help='Show what would be done without making changes'
+)
 @click.version_option(version='0.1.0', prog_name='oauth-https-proxy-client')
 @click.pass_context
-def cli(ctx, api_url, token, output_format, profile, config_file, timeout, debug):
+def cli(ctx, base_url, token, output_format, profile, config_file, timeout, debug, dry_run):
     """OAuth HTTPS Proxy Client - Manage your proxy infrastructure.
     
     This CLI provides comprehensive management of OAuth HTTPS proxy services,
@@ -169,6 +176,11 @@ def cli(ctx, api_url, token, output_format, profile, config_file, timeout, debug
     context = Context()
     context.output_format = output_format
     context.debug = debug
+    context.dry_run = dry_run
+    
+    # Show dry-run warning if enabled
+    if dry_run:
+        console.print("[yellow]DRY RUN MODE - No changes will be made[/yellow]\n")
     
     # Load configuration
     if config_file:
@@ -191,8 +203,8 @@ def cli(ctx, api_url, token, output_format, profile, config_file, timeout, debug
             context.config = Config.from_env()
     
     # Override with command-line options
-    if api_url:
-        context.config.api_url = api_url
+    if base_url:
+        context.config.api_url = base_url
     if token:
         context.config.token = token
     if timeout:
@@ -219,6 +231,7 @@ cli.add_command(oauth_group)
 cli.add_command(resource_group)
 cli.add_command(log_group)
 cli.add_command(system_group)
+cli.add_command(workflow_group)
 
 
 def main():

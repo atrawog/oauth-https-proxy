@@ -6,6 +6,7 @@ from typing import Optional, Dict, Any, List, Union, AsyncIterator
 from urllib.parse import urljoin, urlencode
 import httpx
 from httpx import Response, HTTPError, TimeoutException, ConnectError
+from rich.console import Console
 
 from .config import Config
 from .exceptions import (
@@ -18,6 +19,8 @@ from .exceptions import (
     ValidationError,
 )
 
+console = Console()
+
 
 class ProxyClient:
     """HTTP client for interacting with OAuth HTTPS Proxy API.
@@ -26,13 +29,15 @@ class ProxyClient:
     with automatic authentication, retries, and error handling.
     """
     
-    def __init__(self, config: Optional[Config] = None):
+    def __init__(self, config: Optional[Config] = None, dry_run: bool = False):
         """Initialize the proxy client.
         
         Args:
             config: Configuration object (creates default if not provided)
+            dry_run: If True, show what would be done without making changes
         """
         self.config = config or Config.from_env()
+        self.dry_run = dry_run
         self._client: Optional[httpx.AsyncClient] = None
         self._sync_client: Optional[httpx.Client] = None
     
@@ -378,6 +383,12 @@ class ProxyClient:
         Returns:
             JSON response as dictionary
         """
+        if self.dry_run:
+            console.print(f"[yellow]DRY RUN: Would POST to {path}[/yellow]")
+            if json_data:
+                console.print(f"[dim]Data: {json.dumps(json_data, indent=2)}[/dim]")
+            return {"dry_run": True, "action": "POST", "path": path}
+        
         response = self.request_sync('POST', path, json_data=json_data)
         if response.status_code == 204:
             return {}
@@ -393,6 +404,12 @@ class ProxyClient:
         Returns:
             JSON response as dictionary
         """
+        if self.dry_run:
+            console.print(f"[yellow]DRY RUN: Would PUT to {path}[/yellow]")
+            if json_data:
+                console.print(f"[dim]Data: {json.dumps(json_data, indent=2)}[/dim]")
+            return {"dry_run": True, "action": "PUT", "path": path}
+        
         response = self.request_sync('PUT', path, json_data=json_data)
         if response.status_code == 204:
             return {}
@@ -407,6 +424,10 @@ class ProxyClient:
         Returns:
             True if successful
         """
+        if self.dry_run:
+            console.print(f"[yellow]DRY RUN: Would DELETE {path}[/yellow]")
+            return True
+        
         response = self.request_sync('DELETE', path)
         return response.status_code in (200, 204)
     
