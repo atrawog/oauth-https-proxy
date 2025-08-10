@@ -84,13 +84,30 @@ Open http://localhost in your browser to access the management interface.
 ### Create a Proxy
 
 ```bash
-# Proxy example.com to a backend service
+# Create proxy with automatic certificate handling
 just proxy-create api.yourdomain.com http://backend:8080 [token]
 
 # The proxy will automatically:
-# - Obtain an HTTPS certificate
+# - Check for existing certificates and use them
+# - Create production Let's Encrypt certificate if needed
 # - Set up HTTP and HTTPS routing
-# - Start forwarding traffic
+# - Handle certificate generation asynchronously
+
+# For staging/testing (creates staging certificate)
+just proxy-create api.yourdomain.com http://backend:8080 true [token]
+
+# Common scenarios:
+# 1. First-time proxy with production cert
+just proxy-create echo.yourdomain.com http://service:3000
+
+# 2. Proxy with existing certificate (automatically detected)
+just proxy-create echo.yourdomain.com http://service:3000
+
+# 3. Testing with staging certificate
+just proxy-create echo.yourdomain.com http://service:3000 true
+
+# 4. HTTP-only proxy (no certificate needed)
+just proxy-create internal.local http://service:3000 false true true false
 ```
 
 ### Enable OAuth Protection

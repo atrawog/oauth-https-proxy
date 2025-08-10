@@ -465,7 +465,7 @@ When enabled, the proxy automatically serves:
 
 ### Proxy Commands
 ```bash
-# Basic proxy operations
+# Create proxy with automatic certificate handling
 just proxy-create <hostname> <target-url> [staging] [preserve-host] [enable-http] [enable-https] [email] [token]
 just proxy-delete <hostname> [delete-cert] [force] [token]
 just proxy-list [token]
@@ -1019,6 +1019,7 @@ resource:{uri}              # Protected resource configuration
 19. **Redis Side Channel**: Connection-based client info storage with 60s TTL
 20. **Unified IP Handling**: Same mechanism works for HTTP header injection and HTTPS
 21. **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist via `auth_required_users`, overriding the global `OAUTH_ALLOWED_GITHUB_USERS` setting
+22. **Smart Certificate Handling**: Proxy creation automatically detects existing certificates and creates new ones when needed using environment defaults
 
 ## MCP 2025-06-18 Compliance Summary
 

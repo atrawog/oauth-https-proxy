@@ -66,14 +66,6 @@ Available tool categories:
         # Initialize session manager for stateful mode
         self.session_manager = None if stateless_mode else SessionManager(session_timeout)
         
-        # Store server configuration in app state
-        self.mcp.app.state.stateless_mode = stateless_mode
-        self.mcp.app.state.session_manager = self.session_manager
-        self.mcp.app.state.debug = debug
-        self.mcp.app.state.server_name = self.SERVER_NAME
-        self.mcp.app.state.server_version = self.SERVER_VERSION
-        self.mcp.app.state.supported_versions = self.supported_versions
-        
         # Register middleware
         self._register_middleware()
         
@@ -88,83 +80,103 @@ Available tool categories:
     
     def _register_middleware(self):
         """Register middleware for request processing."""
+        from fastmcp.server.middleware import Middleware
+        import time
+        import uuid
         
-        @self.mcp.middleware
-        async def mode_middleware(ctx, next_handler):
-            """Set up mode-specific behavior and request context."""
-            import time
-            import uuid
+        # Create custom middleware class for mode-specific behavior
+        class ModeMiddleware(Middleware):
+            def __init__(self, server_instance):
+                self.server = server_instance
+                super().__init__()
             
-            # Set mode in context
-            ctx.set_state("stateless_mode", self.stateless_mode)
-            ctx.set_state("server_debug", self.debug)
-            
-            # Store request-scoped data (works in both modes)
-            ctx.set_state("request_start_time", time.time())
-            ctx.set_state("request_id", ctx.request_id or str(uuid.uuid4()))
-            
-            # Extract and store headers if available
-            if hasattr(ctx, "_request") and hasattr(ctx._request, "headers"):
-                headers = dict(ctx._request.headers)
-                ctx.set_state("request_headers", headers)
-            
-            if not self.stateless_mode and self.session_manager:
-                # Stateful mode: manage sessions
-                session_id = None
+            async def on_message(self, ctx, call_next):
+                """Set up mode-specific behavior and request context."""
+                # Set mode and server config in context
+                ctx.set_state("stateless_mode", self.server.stateless_mode)
+                ctx.set_state("server_debug", self.server.debug)
+                ctx.set_state("server_name", self.server.SERVER_NAME)
+                ctx.set_state("server_version", self.server.SERVER_VERSION)
+                ctx.set_state("supported_versions", self.server.supported_versions)
                 
-                # Try to get session ID from headers or context
-                if hasattr(ctx, "session_id") and ctx.session_id:
-                    session_id = ctx.session_id
-                elif hasattr(ctx, "_request") and hasattr(ctx._request, "headers"):
-                    session_id = ctx._request.headers.get("mcp-session-id")
+                # Store request-scoped data (works in both modes)
+                ctx.set_state("request_start_time", time.time())
+                request_id = str(uuid.uuid4())
+                if hasattr(ctx, "request_id") and ctx.request_id:
+                    request_id = ctx.request_id
+                ctx.set_state("request_id", request_id)
                 
-                # Create or get session
-                if not session_id:
-                    session_id = self.session_manager.create_session()
-                    if self.debug:
-                        logger.debug(f"Created new session: {session_id}")
+                # Extract and store headers if available
+                if hasattr(ctx, "_request") and hasattr(ctx._request, "headers"):
+                    headers = dict(ctx._request.headers)
+                    ctx.set_state("request_headers", headers)
                 
-                # Store session ID in context
-                ctx.set_state("session_id", session_id)
-                
-                # Update session activity
-                session = self.session_manager.get_session(session_id)
-                if session:
-                    session["last_activity"] = time.time()
-                    session["request_count"] = session.get("request_count", 0) + 1
+                if not self.server.stateless_mode and self.server.session_manager:
+                    # Stateful mode: manage sessions
+                    session_id = None
                     
-                    # Store session data in context for easy access
-                    ctx.set_state(f"session_{session_id}_data", session)
-            
-            # Track request in history (for both modes)
-            await self._track_request(ctx)
-            
-            # Call next handler
-            result = await next_handler(ctx)
-            
-            # Track response
-            await self._track_response(ctx, result)
-            
-            return result
+                    # Try to get session ID from headers or context
+                    if hasattr(ctx, "session_id") and ctx.session_id:
+                        session_id = ctx.session_id
+                    elif hasattr(ctx, "_request") and hasattr(ctx._request, "headers"):
+                        session_id = ctx._request.headers.get("mcp-session-id")
+                    
+                    # Create or get session
+                    if not session_id:
+                        session_id = self.server.session_manager.create_session()
+                        if self.server.debug:
+                            logger.debug(f"Created new session: {session_id}")
+                    
+                    # Store session ID in context
+                    ctx.set_state("session_id", session_id)
+                    
+                    # Update session activity
+                    session = self.server.session_manager.get_session(session_id)
+                    if session:
+                        session["last_activity"] = time.time()
+                        session["request_count"] = session.get("request_count", 0) + 1
+                        
+                        # Store session data in context for easy access
+                        ctx.set_state(f"session_{session_id}_data", session)
+                
+                # Track request in history (for both modes)
+                await self.server._track_request(ctx)
+                
+                # Call next handler
+                result = await call_next(ctx)
+                
+                # Track response
+                await self.server._track_response(ctx, result)
+                
+                return result
         
-        @self.mcp.middleware
-        async def error_handling_middleware(ctx, next_handler):
-            """Handle errors gracefully."""
-            try:
-                return await next_handler(ctx)
-            except Exception as e:
-                logger.error(f"Error processing request: {e}", exc_info=True)
-                
-                # Track error in context
-                errors = ctx.get_state("request_errors", [])
-                errors.append({
-                    "error": str(e),
-                    "type": type(e).__name__,
-                    "timestamp": time.time()
-                })
-                ctx.set_state("request_errors", errors)
-                
-                raise
+        # Create error handling middleware class
+        class ErrorHandlingMiddleware(Middleware):
+            def __init__(self, server_instance):
+                self.server = server_instance
+                super().__init__()
+            
+            async def on_message(self, ctx, call_next):
+                """Handle errors gracefully."""
+                try:
+                    return await call_next(ctx)
+                except Exception as e:
+                    logger.error(f"Error processing request: {e}", exc_info=True)
+                    
+                    # Track error in context
+                    errors = ctx.get_state("request_errors", [])
+                    errors.append({
+                        "error": str(e),
+                        "type": type(e).__name__,
+                        "timestamp": time.time()
+                    })
+                    ctx.set_state("request_errors", errors)
+                    
+                    raise
+        
+        # Add middleware to the FastMCP server
+        self.mcp.add_middleware(ModeMiddleware(self))
+        self.mcp.add_middleware(ErrorHandlingMiddleware(self))
     
     async def _track_request(self, ctx):
         """Track request in history."""

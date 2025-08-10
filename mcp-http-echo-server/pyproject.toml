@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "mcp-http-echo-server"
-version = "1.0.0"
+version = "1.0.1"
 description = "A dual-mode (stateful/stateless) MCP echo server with 21 comprehensive debugging tools built on FastMCP 2.0"
 authors = [
     { name = "Andreas Trawoeger", email = "atrawog@gmail.com" }

@@ -153,7 +153,8 @@ cert-delete name force="false" token="${ADMIN_TOKEN}":
 # PROXY MANAGEMENT (Migrated to proxy-client)
 # ============================================================================
 
-# Create a new proxy
+# Create a new proxy with automatic certificate handling
+# Will check for existing certificates and create new ones if needed
 proxy-create hostname target-url staging="false" preserve-host="true" enable-http="true" enable-https="true" email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client proxy create {{hostname}} {{target-url}} \
         {{ if staging == "true" { "--staging" } else { "" } }} \

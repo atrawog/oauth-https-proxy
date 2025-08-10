@@ -31,12 +31,12 @@ def create_router(storage, cert_manager):
         if existing:
             raise HTTPException(409, f"Proxy target for {request.hostname} already exists")
         
-        # Create proxy target
-        cert_name = f"proxy-{request.hostname.replace('.', '-')}"
+        # Create proxy target - don't set cert_name yet
+        cert_name = f"proxy-{request.hostname.replace('.', '-')}"  # Pattern for checking
         target = ProxyTarget(
             hostname=request.hostname,
             target_url=request.target_url,
-            cert_name=cert_name,
+            cert_name=None,  # Will be set later if cert exists or created
             owner_token_hash=token_hash,
             created_by=token_name,
             created_at=datetime.now(timezone.utc),
@@ -53,53 +53,77 @@ def create_router(storage, cert_manager):
         
         # Check if certificate exists and HTTPS is enabled
         cert_status = "not_required"
+        actual_cert_name = None  # Only set if cert exists or will be created
+        
         if request.enable_https:
             cert = cert_manager.get_certificate(cert_name)
-            if not cert:
-                # Create certificate request
+            if cert and cert.status == "active":
+                # Certificate already exists and is active - use it
+                cert_status = "existing"
+                actual_cert_name = cert_name
+                logger.info(f"Using existing certificate {cert_name} for {request.hostname}")
+            else:
+                # No existing certificate - check if we should create one
                 acme_url = request.acme_directory_url
                 if not acme_url:
-                    acme_url = os.getenv("ACME_STAGING_URL")
+                    # Try to use default ACME URL from environment
+                    acme_url = os.getenv("ACME_DIRECTORY_URL")  # Production by default
                     if not acme_url:
-                        raise HTTPException(400, "ACME directory URL required")
+                        acme_url = os.getenv("ACME_STAGING_URL")
                 
-                # Use token's cert_email if not provided in request
-                email = request.cert_email if request.cert_email else cert_email
-                if not email:
-                    raise HTTPException(400, "Certificate email required")
-                
-                cert_request = CertificateRequest(
-                    domain=request.hostname,
-                    email=email,
-                    cert_name=cert_name,
-                    acme_directory_url=acme_url
-                )
-                
-                # Store initial certificate record
-                from ....certmanager.models import Certificate
-                cert = Certificate(
-                    cert_name=cert_name,
-                    domains=[request.hostname],
-                    email=email,
-                    acme_directory_url=acme_url,
-                    status="pending",
-                    owner_token_hash=token_hash,
-                    created_by=token_name
-                )
-                storage.store_certificate(cert_name, cert)
-                
-                # Trigger async certificate generation
-                from ....certmanager.async_acme import generate_certificate_async
-                background_tasks.add_task(
-                    generate_certificate_async,
-                    cert_manager,
-                    cert_request
-                )
-                cert_status = "Certificate generation started"
-            else:
-                cert_status = "existing"
+                if acme_url:
+                    # We have an ACME URL - create certificate
+                    email = request.cert_email if request.cert_email else cert_email
+                    if not email:
+                        # Rollback proxy creation since we can't create cert
+                        storage.delete_proxy_target(request.hostname)
+                        raise HTTPException(400, "Certificate email required for HTTPS proxy")
+                    
+                    cert_request = CertificateRequest(
+                        domain=request.hostname,
+                        email=email,
+                        cert_name=cert_name,
+                        acme_directory_url=acme_url
+                    )
+                    
+                    # Store initial certificate record
+                    from ....certmanager.models import Certificate
+                    cert = Certificate(
+                        cert_name=cert_name,
+                        domains=[request.hostname],
+                        email=email,
+                        acme_directory_url=acme_url,
+                        status="pending",
+                        owner_token_hash=token_hash,
+                        created_by=token_name
+                    )
+                    storage.store_certificate(cert_name, cert)
+                    
+                    # Trigger async certificate generation
+                    from ....certmanager.async_acme import generate_certificate_async
+                    background_tasks.add_task(
+                        generate_certificate_async,
+                        cert_manager,
+                        cert_request
+                    )
+                    cert_status = "Certificate generation started"
+                    actual_cert_name = cert_name  # Will have cert soon
+                    logger.info(f"Started certificate generation for {request.hostname}")
+                else:
+                    # No cert exists and no ACME URL - disable HTTPS
+                    logger.warning(f"No certificate exists for {request.hostname} and no ACME URL provided - disabling HTTPS")
+                    target.enable_https = False
+                    target.cert_name = None
+                    # Update the stored proxy to reflect HTTPS disabled
+                    storage.store_proxy_target(request.hostname, target)
+                    cert_status = "https_disabled_no_cert"
         else:
             logger.info(f"HTTPS disabled for {request.hostname}, skipping certificate generation")
+        
+        # Update cert_name in target if we have one
+        if actual_cert_name:
+            target.cert_name = actual_cert_name
+            storage.store_proxy_target(request.hostname, target)
         
         # Create instance for the proxy
         # Import here to avoid circular imports at module level
@@ -119,7 +143,7 @@ def create_router(storage, cert_manager):
         return {
             "proxy_target": target,
             "certificate_status": cert_status,
-            "cert_name": cert_name if request.enable_https else None
+            "cert_name": actual_cert_name  # Only set if cert exists or being created
         }
     
     @router.get("/")

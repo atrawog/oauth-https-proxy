@@ -48,13 +48,43 @@ def create_proxy(ctx, hostname, target_url, cert_name, email, staging, preserve_
             'enable_https': enable_https,
         }
         
+        # Add certificate configuration
         if cert_name:
             data['cert_name'] = cert_name
         
+        # Add ACME configuration for certificate generation
+        if enable_https and not cert_name:
+            if staging:
+                data['acme_directory_url'] = 'https://acme-staging-v02.api.letsencrypt.org/directory'
+            # No need to set production URL - API will use default
+            
+            if email:
+                data['cert_email'] = email
+        
         result = client.post_sync('/api/v1/proxy/targets/', data)
         
-        console.print(f"[green]Proxy created successfully![/green]")
-        ctx.output(result)
+        # Check certificate status
+        proxy_target = result.get('proxy_target', {})
+        cert_status = result.get('certificate_status', '')
+        
+        console.print(f"[green]✓ Proxy created successfully![/green]")
+        console.print(f"  Hostname: {proxy_target.get('hostname')}")
+        console.print(f"  Target URL: {proxy_target.get('target_url')}")
+        
+        if proxy_target.get('enable_https'):
+            if cert_status == 'existing':
+                console.print(f"  Certificate: {proxy_target.get('cert_name')} [green](existing)[/green]")
+            elif cert_status == 'Certificate generation started':
+                console.print(f"  Certificate: {proxy_target.get('cert_name')} [yellow](generating...)[/yellow]")
+            elif cert_status == 'https_disabled_no_cert':
+                console.print(f"  [yellow]⚠ HTTPS requested but no certificate available[/yellow]")
+                console.print(f"    Create one with: just cert-create {proxy_target.get('cert_name')} {hostname}")
+        
+        if proxy_target.get('enable_https') and proxy_target.get('cert_name'):
+            console.print(f"\nTest with: curl https://{hostname}")
+        elif proxy_target.get('enable_http'):
+            console.print(f"\nTest with: curl http://{hostname}")
+            
     except Exception as e:
         ctx.handle_error(e)
 
