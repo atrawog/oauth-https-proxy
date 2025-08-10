@@ -105,3 +105,66 @@ def auto_register_resources(ctx):
         ctx.output(result)
     except Exception as e:
         ctx.handle_error(e)
+
+
+@resource_group.command('update')
+@click.argument('uri')
+@click.option('--name', help='Resource name')
+@click.option('--proxy-target', help='Proxy hostname')
+@click.option('--scopes', help='Comma-separated scopes')
+@click.option('--metadata-url', help='Metadata URL')
+@click.pass_obj
+def update_resource(ctx, uri, name, proxy_target, scopes, metadata_url):
+    """Update protected resource configuration."""
+    try:
+        client = ctx.ensure_client()
+        
+        from urllib.parse import quote
+        encoded_uri = quote(uri, safe='')
+        
+        # Get current configuration
+        current = client.get_sync(f'/api/v1/resources/{encoded_uri}')
+        
+        # Build update data
+        data = dict(current)
+        
+        if name:
+            data['name'] = name
+        if proxy_target:
+            data['proxy_target'] = proxy_target
+        if scopes:
+            data['scopes'] = scopes.split(',')
+        if metadata_url:
+            data['metadata_url'] = metadata_url
+        
+        result = client.put_sync(f'/api/v1/resources/{encoded_uri}', data)
+        
+        console.print(f"[green]Protected resource '{uri}' updated successfully![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@resource_group.command('delete')
+@click.argument('uri')
+@click.option('--force', '-f', is_flag=True, help='Skip confirmation')
+@click.pass_obj
+def delete_resource(ctx, uri, force):
+    """Delete a protected resource."""
+    try:
+        from rich.prompt import Confirm
+        
+        if not force:
+            if not Confirm.ask(f"Delete protected resource '{uri}'?", default=False):
+                return
+        
+        client = ctx.ensure_client()
+        
+        from urllib.parse import quote
+        encoded_uri = quote(uri, safe='')
+        
+        client.delete_sync(f'/api/v1/resources/{encoded_uri}')
+        
+        console.print(f"[green]Protected resource '{uri}' deleted successfully![/green]")
+    except Exception as e:
+        ctx.handle_error(e)

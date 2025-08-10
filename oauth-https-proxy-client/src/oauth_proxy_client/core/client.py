@@ -50,7 +50,7 @@ class ProxyClient:
         """
         if self._client is None:
             self._client = httpx.AsyncClient(
-                api_url=self.config.api_url,
+                base_url=self.config.api_url,
                 headers=self.config.get_headers(),
                 timeout=httpx.Timeout(
                     connect=self.config.connect_timeout,
@@ -72,7 +72,7 @@ class ProxyClient:
         """
         if self._sync_client is None:
             self._sync_client = httpx.Client(
-                api_url=self.config.api_url,
+                base_url=self.config.api_url,
                 headers=self.config.get_headers(),
                 timeout=httpx.Timeout(
                     connect=self.config.connect_timeout,
@@ -360,7 +360,7 @@ class ProxyClient:
         response = await self.request('DELETE', path)
         return response.status_code in (200, 204)
     
-    def get_sync(self, path: str, params: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def get_sync(self, path: str, params: Optional[Dict[str, Any]] = None) -> Union[Dict[str, Any], str]:
         """Make a synchronous GET request.
         
         Args:
@@ -368,10 +368,21 @@ class ProxyClient:
             params: Query parameters
         
         Returns:
-            JSON response as dictionary
+            JSON response as dictionary or text for formatted endpoints
         """
         response = self.request_sync('GET', path, params=params)
-        return response.json()
+        
+        # Check if this is a formatted endpoint that returns text
+        if path.endswith('/formatted'):
+            return response.text
+        
+        # Check content-type header
+        content_type = response.headers.get('content-type', '')
+        if 'application/json' in content_type:
+            return response.json()
+        else:
+            # Return text for non-JSON responses
+            return response.text
     
     def post_sync(self, path: str, json_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         """Make a synchronous POST request.

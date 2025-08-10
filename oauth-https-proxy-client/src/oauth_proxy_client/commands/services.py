@@ -511,3 +511,140 @@ def create_service_proxy(ctx, service_name, hostname, enable_https, staging):
         ctx.output(result)
     except Exception as e:
         ctx.handle_error(e)
+
+
+# Additional service commands for missing endpoints
+
+@service_group.command('update')
+@click.argument('service-name')
+@click.option('--image', help='Docker image')
+@click.option('--internal-port', type=int, help='Internal port')
+@click.option('--memory-limit', help='Memory limit (e.g., 512m)')
+@click.option('--cpu-limit', type=float, help='CPU limit')
+@click.option('--environment', help='Environment variables as JSON')
+@click.option('--command', help='Command to run as JSON array')
+@click.option('--bind-address', help='Default bind address for ports')
+@click.pass_obj
+def update_service(ctx, service_name, image, internal_port, memory_limit, cpu_limit, environment, command, bind_address):
+    """Update service configuration."""
+    try:
+        import json
+        client = ctx.ensure_client()
+        
+        # Get current configuration
+        current = client.get_sync(f'/api/v1/services/{service_name}')
+        
+        # Build update data
+        data = dict(current)
+        
+        if image:
+            data['image'] = image
+        if internal_port:
+            data['internal_port'] = internal_port
+        if memory_limit:
+            data['memory_limit'] = memory_limit
+        if cpu_limit:
+            data['cpu_limit'] = cpu_limit
+        if environment:
+            data['environment'] = json.loads(environment)
+        if command:
+            data['command'] = json.loads(command)
+        if bind_address:
+            data['bind_address'] = bind_address
+        
+        result = client.put_sync(f'/api/v1/services/{service_name}', data)
+        
+        console.print(f"[green]Service '{service_name}' updated successfully![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@port_group.command('update')
+@click.argument('service-name')
+@click.argument('port-name')
+@click.option('--host-port', type=int, help='New host port')
+@click.option('--container-port', type=int, help='New container port')
+@click.option('--bind-address', help='New bind address')
+@click.option('--protocol', type=click.Choice(['tcp', 'udp']), help='Protocol')
+@click.option('--source-token', help='Source token for access control')
+@click.pass_obj
+def update_port(ctx, service_name, port_name, host_port, container_port, bind_address, protocol, source_token):
+    """Update port configuration."""
+    try:
+        client = ctx.ensure_client()
+        
+        # Get current port configuration
+        ports = client.get_sync(f'/api/v1/services/{service_name}/ports')
+        current = next((p for p in ports if p.get('port_name') == port_name), None)
+        
+        if not current:
+            console.print(f"[red]Port '{port_name}' not found for service '{service_name}'[/red]")
+            return
+        
+        # Build update data
+        data = dict(current)
+        
+        if host_port:
+            data['host_port'] = host_port
+        if container_port:
+            data['container_port'] = container_port
+        if bind_address:
+            data['bind_address'] = bind_address
+        if protocol:
+            data['protocol'] = protocol
+        if source_token:
+            data['source_token'] = source_token
+        
+        result = client.put_sync(f'/api/v1/services/{service_name}/ports/{port_name}', data)
+        
+        console.print(f"[green]Port '{port_name}' updated successfully![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@service_group.command('ports-global')
+@click.option('--available-only', is_flag=True, help='Show only available ports')
+@click.pass_obj
+def list_global_ports(ctx, available_only):
+    """List all allocated ports across all services."""
+    try:
+        client = ctx.ensure_client()
+        
+        if available_only:
+            ports = client.get_sync('/api/v1/services/ports/available')
+            ctx.output(ports, title="Available Port Ranges")
+        else:
+            ports = client.get_sync('/api/v1/services/ports')
+            ctx.output(ports, title="All Allocated Ports")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@service_group.command('port-check-api')
+@click.argument('port', type=int)
+@click.option('--bind-address', default='127.0.0.1', help='Bind address to check')
+@click.pass_obj
+def check_port_api(ctx, port, bind_address):
+    """Check if a port is available (using API endpoint)."""
+    try:
+        client = ctx.ensure_client()
+        
+        data = {
+            'port': port,
+            'bind_address': bind_address
+        }
+        
+        result = client.post_sync('/api/v1/services/ports/check', data)
+        
+        if result.get('available'):
+            console.print(f"[green]Port {port} on {bind_address} is available[/green]")
+        else:
+            console.print(f"[red]Port {port} on {bind_address} is in use[/red]")
+            if result.get('service_name'):
+                console.print(f"Used by service: {result['service_name']}")
+        
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)

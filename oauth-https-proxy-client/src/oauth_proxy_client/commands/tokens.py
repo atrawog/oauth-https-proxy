@@ -151,7 +151,7 @@ def update_token_email(ctx, email):
     """Update certificate email for current token."""
     try:
         client = ctx.ensure_client()
-        result = client.put_sync('/api/v1/tokens/email', {'cert_email': email})
+        result = client.put_sync('/api/v1/tokens/email', {'email': email})
         
         console.print(f"[green]Email updated successfully![/green]")
         ctx.output(result)
@@ -204,5 +204,79 @@ def show_token_certs(ctx, name):
             ctx.output(owned_certs, title=f"Certificates owned by token: {name}")
         else:
             console.print(f"[yellow]No certificates owned by token: {name}[/yellow]")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@token_group.command('list-formatted')
+@click.pass_obj
+def list_tokens_formatted(ctx):
+    """List all tokens in formatted display."""
+    try:
+        client = ctx.ensure_client()
+        formatted = client.get_sync('/api/v1/tokens/formatted')
+        
+        # Formatted endpoint returns text, not JSON
+        console.print(formatted)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@token_group.command('certificates')
+@click.argument('name')
+@click.pass_obj
+def token_certificates(ctx, name):
+    """List certificates owned by a token."""
+    try:
+        client = ctx.ensure_client()
+        certs = client.get_sync(f'/api/v1/tokens/{name}/certificates')
+        
+        if certs:
+            ctx.output(certs, title=f"Certificates owned by token: {name}")
+        else:
+            console.print(f"[yellow]No certificates owned by token: {name}[/yellow]")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@token_group.command('proxies')
+@click.argument('name')
+@click.pass_obj
+def token_proxies(ctx, name):
+    """List proxies owned by a token."""
+    try:
+        client = ctx.ensure_client()
+        proxies = client.get_sync(f'/api/v1/tokens/{name}/proxies')
+        
+        if proxies:
+            ctx.output(proxies, title=f"Proxies owned by token: {name}")
+        else:
+            console.print(f"[yellow]No proxies owned by token: {name}[/yellow]")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@token_group.command('create-admin')
+@click.option('--name', default='ADMIN', help='Admin token name')
+@click.option('--cert-email', help='Email for certificate generation')
+@click.pass_obj
+def create_admin_token(ctx, name, cert_email):
+    """Create an admin token."""
+    try:
+        client = ctx.ensure_client()
+        
+        data = {'name': name}
+        if cert_email:
+            data['cert_email'] = cert_email
+        
+        result = client.post_sync('/api/v1/tokens/admin', data)
+        
+        console.print(f"[green]Admin token created successfully![/green]")
+        console.print(f"Name: {result['name']}")
+        console.print(f"Token: [bold yellow]{result['token']}[/bold yellow]")
+        console.print("[dim]Save this admin token - it cannot be retrieved again![/dim]")
+        
+        if cert_email:
+            console.print(f"Certificate email: {cert_email}")
     except Exception as e:
         ctx.handle_error(e)

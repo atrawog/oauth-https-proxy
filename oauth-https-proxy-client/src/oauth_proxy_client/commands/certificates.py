@@ -315,7 +315,12 @@ def _wait_for_certificate(client, name, ctx):
             try:
                 status = client.get_sync(f'/api/v1/certificates/{name}/status')
                 
-                if status['status'] == 'ready':
+                current_status = status.get('status', 'unknown')
+                
+                # Update progress message based on status
+                if current_status == 'pending':
+                    progress.update(task, description=f"Generating certificate '{name}'... (pending)")
+                elif current_status == 'completed':
                     progress.remove_task(task)
                     console.print(f"[green]Certificate '{name}' generated successfully![/green]")
                     
@@ -329,7 +334,7 @@ def _wait_for_certificate(client, name, ctx):
                     }
                     ctx.output(display_cert)
                     return
-                elif status['status'] == 'failed':
+                elif current_status == 'failed':
                     progress.remove_task(task)
                     console.print(f"[red]Certificate generation failed: {status.get('error', 'Unknown error')}[/red]")
                     return

@@ -314,3 +314,145 @@ def list_resources(ctx):
         ctx.output(resources, title="Protected Resources")
     except Exception as e:
         ctx.handle_error(e)
+
+
+# Additional proxy commands for missing endpoints
+
+@proxy_group.command('list-formatted')
+@click.pass_obj
+def list_proxies_formatted(ctx):
+    """List all proxy targets in formatted display."""
+    try:
+        client = ctx.ensure_client()
+        formatted = client.get_sync('/api/v1/proxy/targets/formatted')
+        
+        # Formatted endpoint returns text, not JSON
+        console.print(formatted)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_group.command('update')
+@click.argument('hostname')
+@click.option('--target-url', help='New target URL')
+@click.option('--cert-name', help='Certificate to use')
+@click.option('--preserve-host/--no-preserve-host', default=None, help='Preserve host header')
+@click.option('--enable-http/--no-enable-http', default=None, help='Enable HTTP')
+@click.option('--enable-https/--no-enable-https', default=None, help='Enable HTTPS')
+@click.option('--custom-headers', help='Custom headers as JSON')
+@click.option('--custom-response-headers', help='Custom response headers as JSON')
+@click.pass_obj
+def update_proxy(ctx, hostname, target_url, cert_name, preserve_host, enable_http, enable_https, custom_headers, custom_response_headers):
+    """Update proxy configuration."""
+    try:
+        import json
+        client = ctx.ensure_client()
+        
+        # Get current configuration
+        current = client.get_sync(f'/api/v1/proxy/targets/{hostname}')
+        
+        # Build update data
+        data = dict(current)
+        
+        if target_url:
+            data['target_url'] = target_url
+        if cert_name:
+            data['cert_name'] = cert_name
+        if preserve_host is not None:
+            data['preserve_host_header'] = preserve_host
+        if enable_http is not None:
+            data['enable_http'] = enable_http
+        if enable_https is not None:
+            data['enable_https'] = enable_https
+        if custom_headers:
+            data['custom_headers'] = json.loads(custom_headers)
+        if custom_response_headers:
+            data['custom_response_headers'] = json.loads(custom_response_headers)
+        
+        result = client.put_sync(f'/api/v1/proxy/targets/{hostname}', data)
+        
+        console.print(f"[green]Proxy '{hostname}' updated successfully![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+# Route management for proxies
+
+@proxy_group.group('routes')
+def proxy_routes():
+    """Manage proxy-specific routes."""
+    pass
+
+
+@proxy_routes.command('list')
+@click.argument('hostname')
+@click.pass_obj
+def list_proxy_routes(ctx, hostname):
+    """List routes for a specific proxy."""
+    try:
+        client = ctx.ensure_client()
+        routes = client.get_sync(f'/api/v1/proxy/targets/{hostname}/routes')
+        ctx.output(routes, title=f"Routes for proxy: {hostname}")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_routes.command('update')
+@click.argument('hostname')
+@click.option('--route-mode', type=click.Choice(['all', 'allowlist', 'denylist']), help='Route filtering mode')
+@click.option('--enabled-routes', help='Comma-separated list of enabled route IDs')
+@click.option('--disabled-routes', help='Comma-separated list of disabled route IDs')
+@click.pass_obj
+def update_proxy_routes(ctx, hostname, route_mode, enabled_routes, disabled_routes):
+    """Update route configuration for a proxy."""
+    try:
+        client = ctx.ensure_client()
+        
+        # Get current proxy config
+        proxy = client.get_sync(f'/api/v1/proxy/targets/{hostname}')
+        
+        data = {
+            'route_mode': route_mode or proxy.get('route_mode', 'all'),
+            'enabled_routes': enabled_routes.split(',') if enabled_routes else proxy.get('enabled_routes', []),
+            'disabled_routes': disabled_routes.split(',') if disabled_routes else proxy.get('disabled_routes', [])
+        }
+        
+        result = client.put_sync(f'/api/v1/proxy/targets/{hostname}/routes', data)
+        
+        console.print(f"[green]Routes updated for proxy '{hostname}'![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_routes.command('enable')
+@click.argument('hostname')
+@click.argument('route-id')
+@click.pass_obj
+def enable_proxy_route(ctx, hostname, route_id):
+    """Enable a specific route for a proxy."""
+    try:
+        client = ctx.ensure_client()
+        result = client.post_sync(f'/api/v1/proxy/targets/{hostname}/routes/{route_id}/enable', {})
+        
+        console.print(f"[green]Route '{route_id}' enabled for proxy '{hostname}'![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_routes.command('disable')
+@click.argument('hostname')
+@click.argument('route-id')
+@click.pass_obj
+def disable_proxy_route(ctx, hostname, route_id):
+    """Disable a specific route for a proxy."""
+    try:
+        client = ctx.ensure_client()
+        result = client.post_sync(f'/api/v1/proxy/targets/{hostname}/routes/{route_id}/disable', {})
+        
+        console.print(f"[green]Route '{route_id}' disabled for proxy '{hostname}'![/green]")
+        ctx.output(result)
+    except Exception as e:
+        ctx.handle_error(e)

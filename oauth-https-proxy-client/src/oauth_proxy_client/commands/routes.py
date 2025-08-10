@@ -278,3 +278,19 @@ def update_route(ctx, route_id, priority, enabled, methods, description):
         ctx.output(result)
     except Exception as e:
         ctx.handle_error(e)
+
+
+# Additional route commands for missing endpoints
+
+@route_group.command('list-formatted')
+@click.pass_obj
+def list_routes_formatted(ctx):
+    """List all routing rules in formatted display."""
+    try:
+        client = ctx.ensure_client()
+        formatted = client.get_sync('/api/v1/routes/formatted')
+        
+        # Formatted endpoint returns text, not JSON
+        console.print(formatted)
+    except Exception as e:
+        ctx.handle_error(e)
