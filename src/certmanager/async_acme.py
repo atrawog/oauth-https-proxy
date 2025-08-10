@@ -123,24 +123,29 @@ async def create_certificate_task(
             except Exception as e:
                 logger.error(f"Could not access HTTPS server: {e}", exc_info=True)
             
-            # Also try to update unified dispatcher if available
+            # Publish to Redis Stream to notify that certificate is ready
+            logger.info(f"Publishing certificate_ready event for {cert_name}")
             try:
-                from ..dispatcher.unified_dispatcher import unified_server_instance
-                if unified_server_instance:
-                    logger.info(f"unified_server_instance found, updating SSL context for certificate {cert_name}")
-                    # Update SSL context for the new certificate
-                    unified_server_instance.update_ssl_context(certificate)
-                    logger.info(f"SSL context updated in unified dispatcher for {cert_name}")
-                    
-                    # Certificate may be for multiple domains, update each one
-                    for domain in certificate.domains:
-                        logger.info(f"Updating instance certificate for domain {domain}")
-                        await unified_server_instance.update_instance_certificate(domain)
-                        logger.info(f"Instance certificate updated for domain {domain}")
+                from ..storage.redis_stream_publisher import RedisStreamPublisher
+                
+                redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+                publisher = RedisStreamPublisher(redis_url=redis_url)
+                
+                # Publish certificate ready event with all domains
+                event_id = await publisher.publish_certificate_ready(
+                    cert_name=cert_name,
+                    domains=certificate.domains,
+                    is_renewal=False
+                )
+                
+                if event_id:
+                    logger.info(f"Successfully published certificate_ready event {event_id} for {cert_name}")
                 else:
-                    logger.warning(f"unified_server_instance not available - certificate will be loaded on next restart")
+                    logger.warning(f"Failed to publish certificate_ready event for {cert_name}")
+                    
+                await publisher.close()
             except Exception as e:
-                logger.error(f"Failed to update unified dispatcher: {e}", exc_info=True)
+                logger.error(f"Failed to publish certificate_ready event: {e}", exc_info=True)
             
             # Update status to completed
             generation_results[cert_name] = {
@@ -231,24 +236,29 @@ async def create_multi_domain_certificate_task(
             except Exception as e:
                 logger.error(f"Could not access HTTPS server: {e}", exc_info=True)
             
-            # Also try to update unified dispatcher if available
+            # Publish to Redis Stream to notify that multi-domain certificate is ready
+            logger.info(f"Publishing certificate_ready event for multi-domain certificate {cert_name}")
             try:
-                from ..dispatcher.unified_dispatcher import unified_server_instance
-                if unified_server_instance:
-                    logger.info(f"unified_server_instance found, updating SSL context for multi-domain certificate {cert_name}")
-                    # Update SSL context for the new certificate
-                    unified_server_instance.update_ssl_context(certificate)
-                    logger.info(f"SSL context updated in unified dispatcher for multi-domain {cert_name}")
-                    
-                    # Certificate may be for multiple domains, update each one
-                    for domain in certificate.domains:
-                        logger.info(f"Updating instance certificate for domain {domain} in multi-domain cert")
-                        await unified_server_instance.update_instance_certificate(domain)
-                        logger.info(f"Instance certificate updated for domain {domain} in multi-domain cert")
+                from ..storage.redis_stream_publisher import RedisStreamPublisher
+                
+                redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+                publisher = RedisStreamPublisher(redis_url=redis_url)
+                
+                # Publish certificate ready event with all domains
+                event_id = await publisher.publish_certificate_ready(
+                    cert_name=cert_name,
+                    domains=certificate.domains,
+                    is_renewal=False
+                )
+                
+                if event_id:
+                    logger.info(f"Successfully published certificate_ready event {event_id} for multi-domain cert {cert_name} with {len(certificate.domains)} domains")
                 else:
-                    logger.warning(f"unified_server_instance not available - multi-domain certificate will be loaded on next restart")
+                    logger.warning(f"Failed to publish certificate_ready event for multi-domain cert {cert_name}")
+                    
+                await publisher.close()
             except Exception as e:
-                logger.error(f"Failed to update unified dispatcher for multi-domain cert: {e}", exc_info=True)
+                logger.error(f"Failed to publish certificate_ready event for multi-domain cert: {e}", exc_info=True)
             
             # Update status to completed
             generation_results[cert_name] = {

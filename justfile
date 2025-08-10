@@ -149,6 +149,18 @@ cert-delete name force="false" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client cert delete {{name}} \
         {{ if force == "true" { "--force" } else { "" } }}
 
+# Renew a certificate
+cert-renew name force="false" wait="true" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client cert renew {{name}} \
+        {{ if force == "true" { "--force" } else { "" } }} \
+        {{ if wait == "false" { "--no-wait" } else { "" } }}
+
+# Convert staging certificate to production
+cert-convert-to-production name wait="true" force="false" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client cert convert-to-production {{name}} \
+        {{ if wait == "false" { "--no-wait" } else { "" } }} \
+        {{ if force == "true" { "--force" } else { "" } }}
+
 # ============================================================================
 # PROXY MANAGEMENT (Migrated to proxy-client)
 # ============================================================================

@@ -199,6 +199,47 @@ def renew_certificate(ctx, name, force, wait):
         ctx.handle_error(e)
 
 
+@cert_group.command('convert-to-production')
+@click.argument('name')
+@click.option('--wait/--no-wait', default=True, help='Wait for conversion to complete')
+@click.option('--force', '-f', is_flag=True, help='Skip confirmation')
+@click.pass_obj
+def convert_to_production(ctx, name, wait, force):
+    """Convert a staging certificate to production."""
+    try:
+        client = ctx.ensure_client()
+        
+        # Get certificate details to confirm it's staging
+        cert = client.get_sync(f'/api/v1/certificates/{name}')
+        if not cert:
+            console.print(f"[red]Certificate '{name}' not found[/red]")
+            return
+        
+        # Check if it's a staging certificate
+        acme_url = cert.get('acme_directory_url', '')
+        if 'staging' not in acme_url.lower():
+            console.print(f"[yellow]Certificate '{name}' is already a production certificate[/yellow]")
+            return
+        
+        # Confirm with user
+        if not force:
+            if not Confirm.ask(f"Convert staging certificate '{name}' to production?", default=False):
+                return
+        
+        # Trigger conversion
+        result = client.post_sync(f'/api/v1/certificates/{name}/convert-to-production')
+        
+        console.print(f"[green]Certificate conversion to production started for {name}![/green]")
+        
+        if wait:
+            _wait_for_certificate(client, name, ctx)
+            console.print(f"[green]Certificate '{name}' has been converted to production![/green]")
+        else:
+            console.print("Check status with: proxy-client cert status " + name)
+    except Exception as e:
+        ctx.handle_error(e)
+
+
 @cert_group.command('delete')
 @click.argument('name')
 @click.option('--force', '-f', is_flag=True, help='Skip confirmation')

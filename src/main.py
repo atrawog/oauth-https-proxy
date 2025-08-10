@@ -14,6 +14,7 @@ from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
 from .dispatcher import UnifiedMultiInstanceServer
 from .api.server import create_api_app
+from .orchestration.instance_workflow import InstanceWorkflowOrchestrator
 
 logger = logging.getLogger(__name__)
 
@@ -24,11 +25,12 @@ scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
 logging_components: Optional[dict] = None
 request_logger: Optional[RequestLogger] = None
+workflow_orchestrator: Optional[InstanceWorkflowOrchestrator] = None
 
 
 def initialize_components(config: Config) -> None:
     """Initialize all system components."""
-    global manager, https_server, scheduler, proxy_handler, logging_components, request_logger
+    global manager, https_server, scheduler, proxy_handler, logging_components, request_logger, workflow_orchestrator
     
     # Initialize storage with Redis URL
     redis_url = config.get_redis_url_with_password()
@@ -58,6 +60,16 @@ def initialize_components(config: Config) -> None:
     # Initialize proxy handler
     proxy_handler = ProxyHandler(storage)
     
+    # Initialize workflow orchestrator
+    logger.info("Creating InstanceWorkflowOrchestrator...")
+    workflow_orchestrator = InstanceWorkflowOrchestrator(
+        redis_url=redis_url,
+        storage=storage,
+        cert_manager=manager,
+        dispatcher=None  # Will be set later when dispatcher is created
+    )
+    logger.info(f"InstanceWorkflowOrchestrator created: {workflow_orchestrator}")
+    
     # Initialize default routes
     storage.initialize_default_routes()
     
@@ -82,6 +94,11 @@ async def run_server(config: Config) -> None:
     
     # Start scheduler
     scheduler.start()
+    
+    # Start workflow orchestrator
+    logger.info("Starting workflow orchestrator...")
+    await workflow_orchestrator.start()
+    logger.info("Workflow orchestrator started successfully")
     
     try:
         # Start the FastAPI app on dual ports
@@ -123,6 +140,11 @@ async def run_server(config: Config) -> None:
             host=config.SERVER_HOST
         )
         
+        # Set server reference in workflow orchestrator (not just dispatcher)
+        # The workflow needs access to the server's create_instance_for_proxy method
+        workflow_orchestrator.dispatcher = unified_server
+        logger.info("Workflow orchestrator linked to unified server")
+        
         logger.info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)")
         logger.info("Each domain will have its own dedicated Hypercorn instance")
         
@@ -131,6 +153,10 @@ async def run_server(config: Config) -> None:
         scheduler.stop()
         if proxy_handler:
             await proxy_handler.close()
+        
+        # Stop workflow orchestrator
+        await workflow_orchestrator.close()
+        logger.info("Workflow orchestrator stopped")
         
         # Stop async Redis log handler
         if logging_components and logging_components.get("redis_handler"):

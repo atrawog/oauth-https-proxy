@@ -903,26 +903,47 @@ class UnifiedMultiInstanceServer:
         
     async def create_instance_for_proxy(self, hostname: str):
         """Dynamically create and start an instance for a proxy target."""
-        # Check if instance already exists
+        logger.info(f"[PROXY_CREATE] Starting instance creation for {hostname}")
+        
+        # Check if instance already exists (check both HTTP and HTTPS maps)
         if hostname in self.dispatcher.hostname_to_https_port:
-            logger.info(f"Instance already exists for {hostname}")
+            logger.info(f"[PROXY_CREATE] Instance already exists for {hostname} (found in HTTPS map)")
             return
+        if hostname in self.dispatcher.hostname_to_http_port:
+            logger.info(f"[PROXY_CREATE] Instance already exists for {hostname} (found in HTTP map)")
+            return
+        
+        logger.info(f"[PROXY_CREATE] No existing instance found for {hostname}, proceeding with creation")
         
         # Get proxy configuration
         proxy_target = self.https_server.manager.storage.get_proxy_target(hostname)
         if not proxy_target:
-            logger.error(f"No proxy target found for {hostname}")
+            logger.error(f"[PROXY_CREATE] No proxy target found for {hostname} in Redis storage")
             return
         
-        # Get certificate if HTTPS is enabled
+        logger.info(f"[PROXY_CREATE] Found proxy target for {hostname}: target_url={proxy_target.target_url}, enable_http={proxy_target.enable_http}, enable_https={proxy_target.enable_https}")
+        
+        # Get certificate if HTTPS is enabled - but don't block if not available
         cert = None
+        https_ready = False
         if proxy_target.enable_https:
+            logger.info(f"[PROXY_CREATE] HTTPS is enabled for {hostname}, checking certificate availability")
             cert_name = proxy_target.cert_name
-            cert = self.https_server.manager.get_certificate(cert_name)
-            if not cert:
-                logger.warning(f"Certificate not yet available for {hostname}, creating HTTP-only instance")
+            if cert_name:
+                logger.info(f"[PROXY_CREATE] Certificate name is {cert_name}, attempting to retrieve")
+                cert = self.https_server.manager.get_certificate(cert_name)
+                if cert:
+                    https_ready = True
+                    logger.info(f"[PROXY_CREATE] Certificate {cert_name} is available and ready for {hostname}")
+                else:
+                    logger.warning(f"[PROXY_CREATE] Certificate {cert_name} not yet available for {hostname}, will enable HTTPS when ready")
+            else:
+                logger.info(f"[PROXY_CREATE] No certificate name set for {hostname}, HTTPS will be enabled when certificate is assigned")
+        else:
+            logger.info(f"[PROXY_CREATE] HTTPS is disabled for {hostname}")
         
         # Create instance - this is a proxy-only instance
+        logger.info(f"[PROXY_CREATE] Creating HypercornInstance for {hostname} on ports HTTP:{self.next_http_port}, HTTPS:{self.next_https_port}")
         instance = HypercornInstance(
             app=None,  # Will create its own proxy app
             domains=[hostname],
@@ -933,31 +954,35 @@ class UnifiedMultiInstanceServer:
             storage=self.https_server.manager.storage
         )
         
+        logger.info(f"[PROXY_CREATE] Starting instance for {hostname}")
         # Start the instance
         await instance.start()
-        self.instances.append(instance)
+        logger.info(f"[PROXY_CREATE] Instance started successfully for {hostname}")
         
-        # Register with dispatcher
+        self.instances.append(instance)
+        logger.info(f"[PROXY_CREATE] Instance added to instances list for {hostname} (total instances: {len(self.instances)})")
+        
+        # Register with dispatcher - enable HTTPS only if certificate is actually available
+        logger.info(f"[PROXY_CREATE] Registering {hostname} with dispatcher - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}")
         self.dispatcher.register_domain(
             [hostname], 
             self.next_http_port, 
             self.next_https_port,
             enable_http=proxy_target.enable_http,
-            enable_https=proxy_target.enable_https and cert is not None
+            enable_https=https_ready  # Only enable HTTPS routing if cert is available
         )
+        logger.info(f"[PROXY_CREATE] Domain {hostname} registered with dispatcher")
         
         self.next_http_port += 1
         self.next_https_port += 1
         
         logger.info(
-            "Created proxy instance",
-            hostname=hostname,
-            http_enabled=proxy_target.enable_http,
-            https_enabled=proxy_target.enable_https and cert is not None,
-            http_port=instance.http_port,
-            https_port=instance.https_port,
-            target_url=proxy_target.target_url,
-            cert_name=proxy_target.cert_name if proxy_target.cert_name else "none"
+            f"[PROXY_CREATE] ✅ Successfully created proxy instance for {hostname} - "
+            f"HTTP:{proxy_target.enable_http} (port {instance.http_port}), "
+            f"HTTPS:{https_ready} (port {instance.https_port}), "
+            f"HTTPS_pending:{proxy_target.enable_https and not https_ready}, "
+            f"target_url:{proxy_target.target_url}, "
+            f"cert_name:{proxy_target.cert_name if proxy_target.cert_name else 'none'}"
         )
     
     async def remove_instance_for_proxy(self, hostname: str):
@@ -984,6 +1009,75 @@ class UnifiedMultiInstanceServer:
             del self.dispatcher.hostname_to_https_port[hostname]
         
         logger.info(f"Removed instance for {hostname}")
+    
+    async def start_stream_consumer(self):
+        """Start Redis Stream consumer for dynamic proxy management."""
+        from .redis_stream_consumer import RedisStreamConsumer
+        
+        try:
+            # Get Redis connection details
+            redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+            
+            # Create stream consumer
+            self.stream_consumer = RedisStreamConsumer(
+                redis_url=redis_url,
+                group_name="dispatcher-group"
+            )
+            
+            # Initialize consumer
+            await self.stream_consumer.initialize()
+            logger.info("[STREAM_CONSUMER] Redis Stream consumer initialized")
+            
+            # Start consuming events
+            asyncio.create_task(
+                self.stream_consumer.consume_events(self.handle_proxy_event)
+            )
+            
+            # Start pending message handler
+            asyncio.create_task(
+                self.stream_consumer.claim_pending_messages()
+            )
+            
+            logger.info("[STREAM_CONSUMER] Started Redis Stream consumer for proxy events")
+            
+        except Exception as e:
+            logger.error(f"[STREAM_CONSUMER] Failed to start stream consumer: {e}", exc_info=True)
+    
+    async def handle_proxy_event(self, event: dict):
+        """Handle events from Redis Stream."""
+        event_type = event.get('type')
+        hostname = event.get('hostname')
+        
+        logger.info(f"[STREAM_EVENT] Processing {event_type} for {hostname}")
+        
+        try:
+            # REMOVED: Legacy proxy_created handler - workflow orchestrator handles this now
+            
+            if event_type == 'proxy_deleted':
+                # Remove instance for deleted proxy
+                logger.info(f"[STREAM_EVENT] Removing instance for {hostname}")
+                await self.remove_instance_for_proxy(hostname)
+                logger.info(f"[STREAM_EVENT] Instance removed for {hostname}")
+                
+            # REMOVED: Legacy certificate_ready handler - workflow orchestrator handles this now
+            
+            # REMOVED: Legacy create_http_instance handler - workflow orchestrator handles this now
+                    
+            # REMOVED: Legacy create_https_instance handler - workflow orchestrator handles this now
+                
+            elif event_type == 'proxy_updated':
+                # Handle proxy updates
+                logger.info(f"[STREAM_EVENT] Processing proxy_updated event for {hostname}")
+                # Recreate the instance with new configuration
+                await self.remove_instance_for_proxy(hostname)
+                await self.create_instance_for_proxy(hostname)
+                logger.info(f"[STREAM_EVENT] Instance recreated for {hostname}")
+                
+            else:
+                logger.warning(f"[STREAM_EVENT] Unknown event type: {event_type}")
+                
+        except Exception as e:
+            logger.error(f"[STREAM_EVENT] Error processing event {event_type} for {hostname}: {e}", exc_info=True)
     
     async def update_instance_certificate(self, hostname: str):
         """Update instance when certificate becomes available."""
@@ -1054,16 +1148,20 @@ class UnifiedMultiInstanceServer:
         logger.info(f"update_ssl_context called for certificate {certificate.cert_name} domains: {certificate.domains}")
         logger.info(f"Current instances: {[inst.domains for inst in self.instances]}")
         
-        # For each domain in the certificate, update the instance if it exists
-        found_instances = False
+        # For each domain in the certificate, update the instance if it exists OR create one if it doesn't
         for domain in certificate.domains:
+            # Check if we have a proxy target for this domain
+            proxy_target = self.https_server.manager.storage.get_proxy_target(domain)
+            if not proxy_target:
+                logger.debug(f"No proxy target found for domain {domain}, skipping")
+                continue
+            
             # Find the instance handling this domain
             instance_found = False
             for instance in self.instances:
                 if domain in instance.domains:
                     instance_found = True
-                    found_instances = True
-                    logger.info(f"Found instance for domain {domain} with domains {instance.domains}")
+                    logger.info(f"Found existing instance for domain {domain}")
                     
                     # Update the certificate for this instance
                     instance.cert = certificate
@@ -1083,20 +1181,31 @@ class UnifiedMultiInstanceServer:
                         asyncio.create_task(instance.start_https())
                         logger.info(f"HTTPS restart initiated for {domain}")
                     else:
-                        # HTTPS not running yet, just update the cert
-                        logger.info(f"HTTPS not running for {domain}, certificate stored for future use")
+                        # HTTPS not running yet, start it now
                         logger.info(f"Starting HTTPS for {domain} since certificate is now available")
                         asyncio.create_task(instance.start_https())
+                        
+                        # Update dispatcher to enable HTTPS
+                        if proxy_target.enable_https:
+                            self.dispatcher.register_domain(
+                                [domain], 
+                                instance.http_port, 
+                                instance.https_port,
+                                enable_http=proxy_target.enable_http,
+                                enable_https=True
+                            )
+                            logger.info(f"HTTPS routing enabled for {domain}")
+                    break
             
             if not instance_found:
-                logger.warning(f"No instance found for domain {domain} in update_ssl_context")
-        
-        if not found_instances:
-            logger.warning(f"No instances found for any domains in certificate {certificate.cert_name}")
+                # No instance exists - create one now that we have the certificate
+                logger.info(f"No instance found for domain {domain}, creating new instance with certificate")
+                asyncio.create_task(self.create_instance_for_proxy(domain))
     
     async def run(self):
-        """Run the unified multi-instance server architecture."""
-        logger.info("UnifiedMultiInstanceServer.run() started")
+        """Run the unified multi-instance server architecture - WORKFLOW MODE ONLY."""
+        logger.info("UnifiedMultiInstanceServer.run() started in WORKFLOW MODE")
+        logger.info("NO INSTANCES WILL BE CREATED AT STARTUP - ALL DYNAMIC VIA WORKFLOW")
         
         # Set global instance for dynamic management
         global unified_server_instance
@@ -1106,45 +1215,9 @@ class UnifiedMultiInstanceServer:
             logger.warning("No HTTPS server instance available")
             return
         
-        logger.info("HTTPS server available, listing proxy targets")
-        
-        # Get proxy configurations first
-        proxy_targets = self.https_server.manager.storage.list_proxy_targets()
-        domain_to_proxy = {pt.hostname: pt for pt in proxy_targets if pt.enabled}
-        
-        logger.info(f"Found {len(proxy_targets)} proxy targets, {len(domain_to_proxy)} enabled")
-        logger.info(f"Enabled proxy targets: {list(domain_to_proxy.keys())}")
-        
-        # Group domains by the certificate they're configured to use (from proxy config)
-        cert_to_domains: Dict[str, List[str]] = {}
-        domain_to_cert = {}
-        
-        # Load all available certificates for lookup
-        all_certs = {cert.cert_name: cert for cert in self.https_server.manager.storage.list_certificates()
-                     if cert and cert.fullchain_pem and cert.private_key_pem}
-        
-        # Group domains based on proxy configuration
-        for hostname, proxy_target in domain_to_proxy.items():
-            # Skip localhost - it's handled by the API directly
-            if hostname in ['localhost', '127.0.0.1']:
-                logger.info(f"Skipping instance creation for {hostname} - handled by API")
-                continue
-                
-            cert_name = proxy_target.cert_name
-            
-            if cert_name and cert_name in all_certs:
-                # Domain has a certificate assigned
-                cert = all_certs[cert_name]
-                domain_to_cert[hostname] = cert
-                
-                if cert_name not in cert_to_domains:
-                    cert_to_domains[cert_name] = []
-                cert_to_domains[cert_name].append(hostname)
-            else:
-                # Domain has no certificate or certificate doesn't exist
-                if 'no-cert' not in cert_to_domains:
-                    cert_to_domains['no-cert'] = []
-                cert_to_domains['no-cert'].append(hostname)
+        # Start Redis Stream consumer for dynamic proxy management
+        await self.start_stream_consumer()
+        logger.info("Started Redis Stream consumer for dynamic proxy management")
         
         # Load routes from Redis storage
         self.dispatcher.load_routes_from_storage()
@@ -1157,75 +1230,23 @@ class UnifiedMultiInstanceServer:
         # Register localhost to route to the API instance
         self.dispatcher.register_domain(['localhost', '127.0.0.1'], 10001, 10001, enable_http=True, enable_https=False)
         
-        if not cert_to_domains and not domain_to_proxy:
-            logger.info("No additional certificates or proxy configurations available")
+        logger.info("UnifiedMultiInstanceServer ready - waiting for workflow events")
         
-        # Create instances for each group of domains
-        for cert_name, domains in cert_to_domains.items():
-            # Get certificate if available
-            cert = None
-            if cert_name != 'no-cert':
-                cert = all_certs.get(cert_name)
-            
-            # Get proxy configs for these domains
-            proxy_configs = {d: domain_to_proxy[d] for d in domains if d in domain_to_proxy}
-            
-            # Create instance - these are proxy domains
-            instance = HypercornInstance(
-                app=None,  # Will create its own proxy app
-                domains=domains,
-                http_port=self.next_http_port,
-                https_port=self.next_https_port,
-                cert=cert,
-                proxy_configs=proxy_configs,
-                storage=self.https_server.manager.storage
-            )
-            
-            self.instances.append(instance)
-            
-            logger.info(f"Starting instance for domains: {domains}, cert: {cert_name}")
-            
-            # Start the instance
-            await instance.start()
-            
-            # Determine which protocols are enabled for registration
-            http_enabled = False
-            https_enabled = False
-            for domain in domains:
-                if domain in proxy_configs:
-                    config = proxy_configs[domain]
-                    if config.enable_http:
-                        http_enabled = True
-                    if config.enable_https:
-                        https_enabled = True
-            
-            # Default to both enabled if no proxy config exists
-            if not proxy_configs:
-                http_enabled = True
-                https_enabled = True
-            
-            # Register with dispatcher for enabled protocols
-            self.dispatcher.register_domain(
-                domains, 
-                self.next_http_port, 
-                self.next_https_port,
-                enable_http=http_enabled,
-                enable_https=https_enabled
-            )
-            
-            self.next_http_port += 1
-            self.next_https_port += 1
-        
-        logger.info(f"Started {len(self.instances)} domain instances")
-        for instance in self.instances:
-            logger.info(f"Instance domains: {instance.domains}, HTTP port: {instance.http_port}, HTTPS port: {instance.https_port}")
+        # COMPLETELY REMOVED ALL LEGACY STARTUP INSTANCE CREATION
+        # The workflow orchestrator will handle ALL instance creation dynamically
         
         # Start the dispatcher (non-blocking now!)
         await self.dispatcher.start()
         
         # The dispatcher is now running in background
         # unified_server_instance is available for dynamic management
-        logger.info("UnifiedMultiInstanceServer fully initialized and ready for dynamic instance management")
+        logger.info("UnifiedMultiInstanceServer fully initialized in WORKFLOW MODE")
+        logger.info(f"Currently {len(self.instances)} instances running (should be 0 at startup)")
+        
+        if len(self.instances) > 0:
+            logger.error("WARNING: Instances found at startup! This should not happen in workflow mode!")
+            for instance in self.instances:
+                logger.error(f"  Unexpected instance: {instance.domains}")
         
         # Wait forever (this is where we block)
         try:

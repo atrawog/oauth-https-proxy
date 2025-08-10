@@ -99,12 +99,18 @@ def create_router(storage, cert_manager):
                     )
                     storage.store_certificate(cert_name, cert)
                     
-                    # Trigger async certificate generation
-                    from ....certmanager.async_acme import generate_certificate_async
-                    background_tasks.add_task(
-                        generate_certificate_async,
-                        cert_manager,
-                        cert_request
+                    # Trigger async certificate generation with event publishing
+                    # Start the task directly instead of using background_tasks
+                    import asyncio
+                    from ....certmanager.async_acme import create_certificate_task
+                    asyncio.create_task(
+                        create_certificate_task(
+                            cert_manager,
+                            cert_request,
+                            None,  # https_server will be imported inside the task
+                            token_hash,
+                            token_name
+                        )
                     )
                     cert_status = "Certificate generation started"
                     actual_cert_name = cert_name  # Will have cert soon
@@ -125,20 +131,44 @@ def create_router(storage, cert_manager):
             target.cert_name = actual_cert_name
             storage.store_proxy_target(request.hostname, target)
         
-        # Create instance for the proxy
-        # Import here to avoid circular imports at module level
+        # Use workflow orchestrator for complete instance creation
+        logger.info(f"Initiating workflow for proxy creation: {request.hostname}")
         try:
-            from ....dispatcher.unified_dispatcher import unified_server_instance
-            if unified_server_instance:
-                try:
-                    await unified_server_instance.create_instance_for_proxy(request.hostname)
-                    logger.info(f"Instance creation initiated for {request.hostname}")
-                except Exception as e:
-                    logger.error(f"Failed to create instance for {request.hostname}: {e}")
+            from ....storage.redis_stream_publisher import RedisStreamPublisher
+            
+            redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+            publisher = RedisStreamPublisher(redis_url=redis_url)
+            
+            # Publish proxy_creation_requested to start the workflow
+            event_id = await publisher.publish_event("proxy_creation_requested", {
+                "hostname": request.hostname,
+                "target_url": request.target_url,
+                "enable_http": request.enable_http,
+                "enable_https": request.enable_https,
+                "cert_email": cert_email if cert_email else None,
+                "cert_name": actual_cert_name,
+                "owner_token_hash": token_hash,
+                "created_by": token_name
+            })
+            
+            if event_id:
+                logger.info(f"Successfully initiated workflow with event {event_id} for {request.hostname}")
             else:
-                logger.warning("Unified server not yet initialized")
-        except ImportError:
-            logger.warning("Unified dispatcher not available")
+                logger.warning(f"Failed to initiate workflow for {request.hostname}")
+                
+            # Also publish the legacy proxy_created event for backward compatibility
+            # This can be removed once everything uses the workflow
+            await publisher.publish_proxy_created(
+                hostname=request.hostname,
+                target_url=request.target_url,
+                cert_name=actual_cert_name,
+                enable_http=request.enable_http,
+                enable_https=request.enable_https
+            )
+                
+            await publisher.close()
+        except Exception as e:
+            logger.error(f"Failed to initiate workflow for {request.hostname}: {e}", exc_info=True)
             
         return {
             "proxy_target": target,
@@ -272,13 +302,24 @@ def create_router(storage, cert_manager):
         if not storage.delete_proxy_target(hostname):
             raise HTTPException(500, "Failed to delete proxy target")
         
-        # Remove instance for the proxy
+        # Publish to Redis Stream to trigger instance removal
+        logger.info(f"Publishing proxy_deleted event for {hostname}")
         try:
-            from ....dispatcher.unified_dispatcher import unified_server_instance
-            if unified_server_instance:
-                await unified_server_instance.remove_instance_for_proxy(hostname)
-        except ImportError:
-            logger.warning("Unified dispatcher not available")
+            from ....storage.redis_stream_publisher import RedisStreamPublisher
+            
+            redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+            publisher = RedisStreamPublisher(redis_url=redis_url)
+            
+            event_id = await publisher.publish_proxy_deleted(hostname=hostname)
+            
+            if event_id:
+                logger.info(f"Successfully published proxy_deleted event {event_id} for {hostname}")
+            else:
+                logger.warning(f"Failed to publish proxy_deleted event for {hostname}")
+                
+            await publisher.close()
+        except Exception as e:
+            logger.error(f"Failed to publish proxy_deleted event for {hostname}: {e}", exc_info=True)
         
         # Optionally delete certificate
         if delete_certificate and target.cert_name:

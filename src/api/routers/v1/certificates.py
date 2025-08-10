@@ -249,6 +249,62 @@ def create_router(storage, cert_manager):
             "status": "pending"
         }
     
+    @router.post("/{cert_name}/convert-to-production")
+    async def convert_to_production(
+        cert_name: str,
+        background_tasks: BackgroundTasks,
+        token_info: dict = Depends(require_auth)
+    ):
+        """Convert a staging certificate to production."""
+        cert = storage.get_certificate(cert_name)
+        if not cert:
+            raise HTTPException(status_code=404, detail="Certificate not found")
+        
+        # Check ownership
+        if cert.owner_token_hash and cert.owner_token_hash != token_info['hash']:
+            if token_info.get('name') != 'ADMIN':
+                raise HTTPException(status_code=403, detail="Access denied")
+        
+        # Check if it's actually a staging certificate
+        if not cert.acme_directory_url or 'staging' not in cert.acme_directory_url.lower():
+            return {
+                "message": "Certificate is already a production certificate",
+                "acme_url": cert.acme_directory_url
+            }
+        
+        # Get production ACME URL
+        production_url = os.getenv('ACME_DIRECTORY_URL', 'https://acme-v02.api.letsencrypt.org/directory')
+        
+        # Create certificate request with production URL
+        from ....certmanager.models import CertificateRequest
+        cert_request = CertificateRequest(
+            domain=cert.domains[0] if cert.domains else "",
+            domains=cert.domains,
+            email=cert.email,
+            acme_directory_url=production_url,
+            cert_name=cert_name
+        )
+        
+        # Mark old certificate as pending replacement
+        cert.status = "replacing"
+        storage.store_certificate(cert_name, cert)
+        
+        # Generate new production certificate (will replace the staging one)
+        from ....certmanager.async_acme import generate_certificate_async
+        background_tasks.add_task(
+            generate_certificate_async,
+            cert_manager,
+            cert_request,
+            cert.owner_token_hash,
+            cert.created_by
+        )
+        
+        return {
+            "message": f"Converting {cert_name} from staging to production",
+            "status": "pending",
+            "production_url": production_url
+        }
+    
     @router.delete("/{cert_name}")
     async def delete_certificate(
         cert_name: str,

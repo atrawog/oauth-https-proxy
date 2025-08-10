@@ -34,6 +34,9 @@ class CertificateManager:
             created_by=created_by
         )
         
+        # Publish certificate_ready event for workflow orchestration
+        self._publish_certificate_ready_event(request.cert_name, certificate.domains)
+        
         return certificate
     
     def create_multi_domain_certificate(self, request, owner_token_hash: str = None, created_by: str = None) -> Certificate:
@@ -50,6 +53,9 @@ class CertificateManager:
             created_by=created_by
         )
         
+        # Publish certificate_ready event for workflow orchestration
+        self._publish_certificate_ready_event(request.cert_name, certificate.domains)
+        
         return certificate
     
     def get_certificate(self, cert_name: str) -> Optional[Certificate]:
@@ -62,7 +68,11 @@ class CertificateManager:
     
     def renew_certificate(self, cert_name: str) -> Optional[Certificate]:
         """Renew certificate by name."""
-        return self.acme_client.renew_certificate(cert_name)
+        renewed_cert = self.acme_client.renew_certificate(cert_name)
+        if renewed_cert:
+            # Publish certificate_ready event for renewed certificate
+            self._publish_certificate_ready_event(cert_name, renewed_cert.domains, is_renewal=True)
+        return renewed_cert
     
     def delete_certificate(self, cert_name: str) -> bool:
         """Delete certificate by name."""
@@ -136,6 +146,41 @@ class CertificateManager:
         except Exception as e:
             logger.error(f"Error counting orphaned resources: {e}")
             return 0
+    
+    def _publish_certificate_ready_event(self, cert_name: str, domains: List[str], is_renewal: bool = False):
+        """Publish certificate_ready event to Redis Stream for workflow orchestration."""
+        try:
+            import asyncio
+            import os
+            from ..storage.redis_stream_publisher import RedisStreamPublisher
+            
+            async def publish_event():
+                redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+                publisher = RedisStreamPublisher(redis_url=redis_url)
+                
+                event_id = await publisher.publish_certificate_ready(
+                    cert_name=cert_name,
+                    domains=domains,
+                    is_renewal=is_renewal
+                )
+                
+                if event_id:
+                    logger.info(f"Published certificate_ready event {event_id} for {cert_name}")
+                else:
+                    logger.warning(f"Failed to publish certificate_ready event for {cert_name}")
+                    
+                await publisher.close()
+            
+            # Run in current or new event loop
+            try:
+                loop = asyncio.get_running_loop()
+                asyncio.create_task(publish_event())
+            except RuntimeError:
+                # No running loop, create one
+                asyncio.run(publish_event())
+                
+        except Exception as e:
+            logger.error(f"Failed to publish certificate_ready event: {e}", exc_info=True)
     
     def get_expiring_certificates(self, days: int = 30) -> List[tuple[str, Certificate]]:
         """Get certificates expiring within specified days."""
