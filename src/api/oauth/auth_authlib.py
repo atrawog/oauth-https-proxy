@@ -82,20 +82,32 @@ class AuthManager:
         self.key_manager.load_or_generate_keys()
 
         # For GitHub OAuth integration
+        # GitHub client initialized with placeholder redirect_uri
+        # The actual redirect_uri will be set dynamically based on request headers
         self.github_client = AsyncOAuth2Client(
             client_id=settings.github_client_id,
             client_secret=settings.github_client_secret,
-            redirect_uri=f"https://auth.{settings.base_domain}/callback",
+            redirect_uri=f"https://auth.{settings.base_domain}/callback",  # Default, overridden per request
         )
 
-    async def create_jwt_token(self, claims: dict, redis_client: redis.Redis) -> str:
-        """Creates a blessed JWT token using Authlib"""
+    async def create_jwt_token(self, claims: dict, redis_client: redis.Redis, issuer: Optional[str] = None) -> str:
+        """Creates a blessed JWT token using Authlib
+        
+        Args:
+            claims: Token claims
+            redis_client: Redis client for storing token data
+            issuer: Optional issuer URL (defaults to auth.{base_domain})
+        """
         # Generate JTI for tracking
         jti = secrets.token_urlsafe(16)
 
         # Prepare JWT claims according to RFC 7519
         now = datetime.now(timezone.utc)
         header = {"alg": self.settings.jwt_algorithm}
+        
+        # Use provided issuer or default
+        if not issuer:
+            issuer = f"https://auth.{self.settings.base_domain}"
         
         # Handle audience claim for RFC 8707 Resource Indicators
         resources = claims.pop("resources", [])
@@ -110,9 +122,9 @@ class AuthManager:
             )
         else:
             # Fallback to auth server URL for backward compatibility
-            aud = f"https://auth.{self.settings.base_domain}"
+            aud = issuer
             logger.debug(
-                "No resources specified, using default audience",
+                "No resources specified, using issuer as audience",
                 audience=aud,
                 client_id=claims.get("client_id")
             )
@@ -122,7 +134,7 @@ class AuthManager:
             "jti": jti,
             "iat": int(now.timestamp()),
             "exp": int((now + timedelta(seconds=self.settings.access_token_lifetime)).timestamp()),
-            "iss": f"https://auth.{self.settings.base_domain}",
+            "iss": issuer,
             "aud": aud,
             "azp": claims.get("client_id"),  # Authorized party claim
         }

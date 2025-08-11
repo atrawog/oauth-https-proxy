@@ -46,14 +46,14 @@ class JWTBearerTokenValidator(BearerTokenValidator):
             "Starting JWT token authentication - DETAILED VALIDATION",
             token_preview=token_preview,
             jwt_algorithm=self.settings.jwt_algorithm,
-            expected_issuer=f"https://auth.{self.settings.base_domain}",
+            base_domain=self.settings.base_domain,
             has_rsa_key=hasattr(self.key_manager, 'public_key') and self.key_manager.public_key is not None
         )
         
         try:
             # Decode and validate token using Authlib
             claims = None
-            expected_issuer = f"https://auth.{self.settings.base_domain}"
+            # Don't validate issuer here - we'll check it matches our domain pattern after decode
             
             if self.settings.jwt_algorithm == "RS256":
                 logger.debug(
@@ -66,10 +66,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                     token_string,
                     self.key_manager.public_key,
                     claims_options={
-                        "iss": {
-                            "essential": True,
-                            "value": expected_issuer,
-                        },
+                        "iss": {"essential": True},  # Required but don't validate value yet
                         "exp": {"essential": True},
                         "jti": {"essential": True},
                     },
@@ -85,14 +82,32 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                     token_string,
                     self.settings.jwt_secret,
                     claims_options={
-                        "iss": {
-                            "essential": True,
-                            "value": expected_issuer,
-                        },
+                        "iss": {"essential": True},  # Required but don't validate value yet
                         "exp": {"essential": True},
                         "jti": {"essential": True},
                     },
                 )
+
+            # Validate issuer - must be from one of our OAuth domains
+            issuer = claims.get("iss", "")
+            # Accept issuers that end with our base domain or are specific OAuth servers
+            valid_issuer = (
+                issuer.endswith(f".{self.settings.base_domain}") or
+                issuer == f"https://auth.{self.settings.base_domain}" or
+                issuer == f"http://auth.{self.settings.base_domain}" or
+                # Also accept any HTTPS issuer for our proxied domains
+                (issuer.startswith("https://") and self.settings.base_domain in issuer) or
+                (issuer.startswith("http://") and self.settings.base_domain in issuer)
+            )
+            
+            if not valid_issuer:
+                logger.warning(
+                    "JWT token has invalid issuer",
+                    token_issuer=issuer,
+                    expected_pattern=f"*.{self.settings.base_domain}",
+                    token_jti=claims.get("jti")
+                )
+                raise ValueError(f"Invalid issuer: {issuer}")
 
             logger.debug(
                 "JWT token decoded successfully - CLAIMS EXTRACTED",
@@ -160,7 +175,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                 error_type=type(e).__name__,
                 error_message=str(e),
                 jwt_algorithm=self.settings.jwt_algorithm,
-                expected_issuer=expected_issuer,
+                base_domain=self.settings.base_domain,
                 validation_stage="jwt_decode"
             )
             return None

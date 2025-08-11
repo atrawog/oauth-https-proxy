@@ -28,6 +28,23 @@ from ...shared.client_ip import get_real_client_ip
 logger = get_logger(__name__)
 
 
+def get_external_url(request: Request, settings: Settings) -> str:
+    """Get the external URL for this service from request headers.
+    
+    Handles proxied requests by checking X-Forwarded headers first.
+    """
+    # Get host from X-Forwarded-Host (set by proxy) or Host header
+    host = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{settings.base_domain}")
+    # Remove port if present
+    if ":" in host:
+        host = host.split(":")[0]
+    
+    # Get protocol from X-Forwarded-Proto (set by proxy) or request scheme
+    proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+    
+    return f"{proto}://{host}"
+
+
 def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthManager) -> APIRouter:
     """Create OAuth router with all endpoints using Authlib ResourceProtector"""
     router = APIRouter()
@@ -85,17 +102,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     @router.get("/.well-known/oauth-authorization-server")
     async def oauth_metadata(request: Request):
         """Server metadata shrine - reveals our OAuth capabilities"""
-        # Use the actual hostname from the request for multi-domain support
-        # Check X-Forwarded-Host first for proxied requests
-        host = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{settings.base_domain}")
-        # Remove port if present
-        if ":" in host:
-            host = host.split(":")[0]
-        
-        # Determine the issuer URL based on the request
-        # Check X-Forwarded-Proto for proxied requests
-        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
-        api_url = f"{proto}://{host}"
+        # Get the external URL for this service
+        api_url = get_external_url(request, settings)
         
         return {
             "issuer": api_url,
@@ -387,7 +395,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
                         <p style="margin-top: 30px; color: #666; font-size: 0.9em;">
                             For developers: The client should POST to
-                            <code>https://auth.{settings.base_domain}/register</code>
+                            <code>{get_external_url(request, settings)}/register</code>
                             to obtain new credentials.
                         </p>
                     </div>
@@ -555,9 +563,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
 
         # Redirect to GitHub OAuth
+        # Get the external URL for the callback
+        external_url = get_external_url(request, settings)
         github_params = {
             "client_id": settings.github_client_id,
-            "redirect_uri": f"https://auth.{settings.base_domain}/callback",
+            "redirect_uri": f"{external_url}/callback",
             "scope": "user:email",
             "state": auth_state,
         }
@@ -1031,7 +1041,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 audience_will_be_set_to=token_resources  # This becomes the 'aud' claim
             )
             
-            # Generate tokens
+            # Generate tokens with the correct issuer URL
+            issuer_url = get_external_url(request, settings)
             access_token = await auth_manager.create_jwt_token(
                 {
                     "sub": code_data["user_id"],
@@ -1043,6 +1054,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "resources": token_resources,  # RFC 8707 Resource Indicators
                 },
                 redis_client,
+                issuer=issuer_url
             )
 
             refresh_token_value = await auth_manager.create_refresh_token(
@@ -1187,7 +1199,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 audience_will_be_set_to=token_resources
             )
             
-            # Generate new access token
+            # Generate new access token with the correct issuer URL
+            issuer_url = get_external_url(request, settings)
             access_token = await auth_manager.create_jwt_token(
                 {
                     "sub": refresh_data["user_id"],
@@ -1197,6 +1210,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "resources": token_resources,  # RFC 8707 Resource Indicators
                 },
                 redis_client,
+                issuer=issuer_url
             )
 
             # Extract token claims for detailed logging

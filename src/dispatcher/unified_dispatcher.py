@@ -1135,6 +1135,10 @@ class UnifiedMultiInstanceServer:
                 await self.create_instance_for_proxy(hostname)
                 logger.info(f"[STREAM_EVENT] Instance recreated for {hostname}")
                 
+            elif event_type in ['http_instance_started', 'https_instance_started', 'http_route_registered', 'https_route_registered']:
+                # These are confirmation events from the workflow orchestrator - no action needed
+                logger.debug(f"[STREAM_EVENT] Acknowledged {event_type} for {hostname}")
+                
             else:
                 logger.warning(f"[STREAM_EVENT] Unknown event type: {event_type}")
                 
