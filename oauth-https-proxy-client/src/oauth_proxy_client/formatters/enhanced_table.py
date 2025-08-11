@@ -40,8 +40,8 @@ class EnhancedTableFormatter:
             'box': ROUNDED,
         },
         'routes': {
-            'columns': ['route_id', 'path_pattern', 'target_summary', 'priority', 'scope', 'enabled'],
-            'headers': ['ID', 'Path', 'Target', 'Priority', 'Scope', 'Status'],
+            'columns': ['route_id', 'path_pattern', 'target_summary', 'priority', 'scope_display', 'enabled'],
+            'headers': ['ID', 'Path', 'Target', 'Priority', 'Proxy/Scope', 'Status'],
             'styles': ['dim', 'bold cyan', 'blue', 'number', 'yellow', 'bool'],
             'box': SIMPLE,
         },
@@ -144,6 +144,7 @@ class EnhancedTableFormatter:
                 enhanced['memory_cpu'] = self._resource_summary(item)
             elif data_type == 'routes':
                 enhanced['target_summary'] = self._route_target(item)
+                enhanced['scope_display'] = self._route_scope(item)
             elif data_type == 'logs':
                 enhanced['method_path'] = f"{item.get('method', 'GET')} {item.get('path', '/')}"
                 enhanced['response_time'] = item.get('response_time_ms', 0)
@@ -358,6 +359,23 @@ class EnhancedTableFormatter:
         elif target_type == 'url':
             return f"↗{target_value[:30]}"
         return target_value
+    
+    def _route_scope(self, route: Dict) -> str:
+        """Generate route scope display with proxy hostnames."""
+        scope = route.get('scope', 'global')
+        if scope == 'global':
+            return 'global'
+        elif scope == 'proxy':
+            proxies = route.get('proxy_hostnames', [])
+            if not proxies:
+                return 'proxy (none)'
+            elif len(proxies) == 1:
+                return f"{proxies[0]}"
+            elif len(proxies) <= 2:
+                return f"{proxies[0]}, {proxies[1]}"
+            else:
+                return f"{proxies[0]} (+{len(proxies)-1})"
+        return scope
     
     def _generate_summary(self, data: List[Dict], data_type: str) -> str:
         """Generate summary statistics for data."""

@@ -93,15 +93,20 @@ def create_router(async_storage):
             methods = ", ".join(route.methods) if route.methods else "ALL"
             
             # Format target
-            target = f"{route.target_type}:{route.target_value}"
+            target = f"{route.target_type.value if hasattr(route.target_type, 'value') else route.target_type}:{route.target_value}"
             
             # Status
             status = "enabled" if route.enabled else "disabled"
             
             # Format scope
-            scope_info = route.scope
-            if route.scope == "proxy" and route.proxy_hostnames:
-                scope_info = f"proxy({','.join(route.proxy_hostnames[:2])}{'...' if len(route.proxy_hostnames) > 2 else ''})"
+            scope_value = route.scope.value if hasattr(route.scope, 'value') else route.scope
+            scope_info = scope_value
+            if scope_value == "proxy" and route.proxy_hostnames:
+                # Show all proxies if 3 or fewer, otherwise show count
+                if len(route.proxy_hostnames) <= 3:
+                    scope_info = f"proxy: {', '.join(route.proxy_hostnames)}"
+                else:
+                    scope_info = f"proxy: {route.proxy_hostnames[0]} (+{len(route.proxy_hostnames)-1} more)"
             
             rows.append([
                 route.route_id,
