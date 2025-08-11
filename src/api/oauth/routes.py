@@ -83,9 +83,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
     # .well-known/oauth-authorization-server endpoint (RFC 8414)
     @router.get("/.well-known/oauth-authorization-server")
-    async def oauth_metadata():
+    async def oauth_metadata(request: Request):
         """Server metadata shrine - reveals our OAuth capabilities"""
-        api_url = f"https://auth.{settings.base_domain}"
+        # Use the actual hostname from the request for multi-domain support
+        # Check X-Forwarded-Host first for proxied requests
+        host = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{settings.base_domain}")
+        # Remove port if present
+        if ":" in host:
+            host = host.split(":")[0]
+        
+        # Determine the issuer URL based on the request
+        # Check X-Forwarded-Proto for proxied requests
+        proto = request.headers.get("x-forwarded-proto") or request.url.scheme
+        api_url = f"{proto}://{host}"
+        
         return {
             "issuer": api_url,
             "authorization_endpoint": f"{api_url}/authorize",

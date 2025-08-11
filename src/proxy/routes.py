@@ -109,8 +109,10 @@ class Route(BaseModel):
             return False
             
         # Check method if specified
-        if self.methods and method and method.upper() not in self.methods:
-            return False
+        # "*" means all methods are allowed
+        if self.methods and method:
+            if "*" not in self.methods and method.upper() not in self.methods:
+                return False
         
         # Check path
         if self.is_regex:
