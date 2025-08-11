@@ -15,8 +15,8 @@ import hashlib
 from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from ...auth import get_current_token_info, get_optional_token_info
-from ....storage.redis_storage import RedisStorage
+from src.api.auth import get_current_token_info, get_optional_token_info
+from src.storage.redis_storage import RedisStorage
 
 logger = logging.getLogger(__name__)
 

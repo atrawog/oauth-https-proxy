@@ -32,18 +32,20 @@ logger = logging.getLogger(__name__)
 class InstanceWorkflowOrchestrator:
     """Orchestrates instance creation workflow through Redis Streams."""
     
-    def __init__(self, redis_url: str, storage, cert_manager=None, dispatcher=None):
+    def __init__(self, redis_url: str, storage, cert_manager=None, dispatcher=None, async_components=None):
         """
         Initialize the workflow orchestrator.
         
         Args:
             redis_url: Redis connection URL
-            storage: Storage instance for proxy/cert data
+            storage: Storage instance for proxy/cert data (legacy)
             cert_manager: Certificate manager instance
             dispatcher: Dispatcher instance for routing
+            async_components: Async components for Redis operations
         """
         self.redis_url = redis_url
         self.storage = storage
+        self.async_storage = async_components.async_storage if async_components else None
         self.cert_manager = cert_manager
         self.dispatcher = dispatcher
         
@@ -58,6 +60,30 @@ class InstanceWorkflowOrchestrator:
         self.allocated_ports = set()
         self.next_http_port = 10000
         self.next_https_port = 11000
+    
+    async def _get_proxy_target(self, hostname: str):
+        """Get proxy target using async storage if available."""
+        if self.async_storage:
+            return await self.async_storage.get_proxy_target(hostname)
+        return self.storage.get_proxy_target(hostname)
+    
+    async def _get_certificate(self, cert_name: str):
+        """Get certificate using async storage if available."""
+        if self.async_storage:
+            return await self.async_storage.get_certificate(cert_name)
+        return self.storage.get_certificate(cert_name)
+    
+    async def _store_proxy_target(self, hostname: str, proxy):
+        """Store proxy target using async storage if available."""
+        if self.async_storage:
+            return await self.async_storage.store_proxy_target(hostname, proxy)
+        return self.storage.store_proxy_target(hostname, proxy)
+    
+    async def _store_certificate(self, cert_name: str, cert):
+        """Store certificate using async storage if available."""
+        if self.async_storage:
+            return await self.async_storage.store_certificate(cert_name, cert)
+        return self.storage.store_certificate(cert_name, cert)
     
     async def start(self):
         """Start the workflow orchestrator."""
@@ -195,14 +221,14 @@ class InstanceWorkflowOrchestrator:
         )
         
         # CRITICAL: Check if proxy already exists in storage
-        existing_proxy = self.storage.get_proxy_target(hostname)
+        existing_proxy = await self._get_proxy_target(hostname)
         if existing_proxy:
             logger.info(f"[WORKFLOW] Proxy {hostname} already exists in storage")
             
             # Check if certificate exists and is ready
             cert_ready = False
             if existing_proxy.cert_name:
-                cert = self.storage.get_certificate(existing_proxy.cert_name)
+                cert = await self._get_certificate(existing_proxy.cert_name)
                 if cert and cert.status == 'active':
                     cert_ready = True
                     logger.info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is ready for {hostname}")
@@ -239,7 +265,7 @@ class InstanceWorkflowOrchestrator:
             created_at=datetime.now(timezone.utc)
         )
         
-        if self.storage.store_proxy_target(hostname, proxy):
+        if await self._store_proxy_target(hostname, proxy):
             logger.info(f"[WORKFLOW] Proxy {hostname} stored successfully")
             
             # Publish proxy_stored event
@@ -473,9 +499,9 @@ class InstanceWorkflowOrchestrator:
                     logger.info(f"[WORKFLOW] HTTPS port allocated for {hostname}, waiting for certificate")
                 else:
                     # Check if certificate exists now (race condition handling)
-                    proxy = self.storage.get_proxy_target(hostname)
+                    proxy = await self._get_proxy_target(hostname)
                     if proxy and proxy.cert_name:
-                        cert = self.storage.get_certificate(proxy.cert_name)
+                        cert = await self._get_certificate(proxy.cert_name)
                         if cert and cert.status == 'active':
                             # Certificate became ready, start HTTPS
                             logger.info(f"[WORKFLOW] Certificate now ready for {hostname}, creating HTTPS instance")
@@ -527,7 +553,7 @@ class InstanceWorkflowOrchestrator:
             )
         else:
             # Check if HTTPS is expected
-            proxy = self.storage.get_proxy_target(hostname)
+            proxy = await self._get_proxy_target(hostname)
             if proxy and proxy.enable_https:
                 await self.state_tracker.set_instance_state(
                     hostname=hostname,
@@ -733,7 +759,7 @@ class InstanceWorkflowOrchestrator:
         logger.info(f"[WORKFLOW] Creating HTTPS instance for {hostname} on port {https_port} with cert {cert_name}")
         
         # Verify certificate exists and is active
-        cert = self.storage.get_certificate(cert_name)
+        cert = await self._get_certificate(cert_name)
         if not cert or cert.status != 'active':
             logger.error(f"[WORKFLOW] Certificate {cert_name} not ready for {hostname}")
             await self.publisher.publish_instance_failed(
@@ -811,7 +837,7 @@ class InstanceWorkflowOrchestrator:
         
         # Find all proxies using this certificate
         for hostname in domains:
-            proxy = self.storage.get_proxy_target(hostname)
+            proxy = await self._get_proxy_target(hostname)
             if proxy and proxy.cert_name == cert_name:
                 # Trigger SSL context reload
                 if self.dispatcher:
@@ -833,14 +859,14 @@ class InstanceWorkflowOrchestrator:
         logger.info(f"[WORKFLOW] Converting {cert_name} from staging to production")
         
         # Get current certificate
-        cert = self.storage.get_certificate(cert_name)
+        cert = await self._get_certificate(cert_name)
         if not cert:
             logger.error(f"[WORKFLOW] Certificate {cert_name} not found")
             return
         
         # Backup staging certificate
         staging_backup = f"{cert_name}-staging-backup"
-        self.storage.store_certificate(staging_backup, cert)
+        await self._store_certificate(staging_backup, cert)
         
         # Trigger production certificate generation
         from ..certmanager.models import CertificateRequest
@@ -874,7 +900,7 @@ class InstanceWorkflowOrchestrator:
         
         # Update all affected instances
         for hostname in domains:
-            proxy = self.storage.get_proxy_target(hostname)
+            proxy = await self._get_proxy_target(hostname)
             if proxy and proxy.cert_name == cert_name:
                 # Reload SSL context with new production cert
                 if self.dispatcher:

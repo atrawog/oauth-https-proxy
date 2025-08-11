@@ -81,7 +81,8 @@ class UnifiedStreamConsumer(ABC):
                 await self.redis.xgroup_create(
                     stream,
                     self.group_name,
-                    id='0'  # Start from beginning
+                    id='0',  # Start from beginning
+                    mkstream=True  # Create stream if it doesn't exist
                 )
                 logger.info(f"Created consumer group {self.group_name} for stream {stream}")
             except redis_async.ResponseError as e:

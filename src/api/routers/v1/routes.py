@@ -3,70 +3,74 @@
 import logging
 import uuid
 from typing import Optional, Tuple
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 
-from ...auth import get_current_token_info, require_route_owner
-from ....proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
+from src.api.auth import get_current_token_info, require_route_owner
+from src.proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
 
 logger = logging.getLogger(__name__)
 
 
-def create_router(storage):
+def create_router(async_storage):
     """Create routes endpoints router."""
     router = APIRouter(tags=["routes"])
     
     @router.post("/")
     async def create_route(
-        request: RouteCreateRequest,
+        request: Request,
+        route_request: RouteCreateRequest,
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
         """Create a new routing rule."""
+        async_storage = request.app.state.async_storage
         token_hash, token_name, _ = token_info
         
         # Generate unique route ID
-        route_id = f"{request.path_pattern.replace('/', '-').strip('-')}-{uuid.uuid4().hex[:8]}"
+        route_id = f"{route_request.path_pattern.replace('/', '-').strip('-')}-{uuid.uuid4().hex[:8]}"
         
         # Create route
         route = Route(
             route_id=route_id,
-            path_pattern=request.path_pattern,
-            target_type=request.target_type,
-            target_value=request.target_value,
-            priority=request.priority,
-            methods=request.methods,
-            is_regex=request.is_regex,
-            description=request.description,
-            enabled=request.enabled,
-            scope=request.scope,
-            proxy_hostnames=request.proxy_hostnames,
+            path_pattern=route_request.path_pattern,
+            target_type=route_request.target_type,
+            target_value=route_request.target_value,
+            priority=route_request.priority,
+            methods=route_request.methods,
+            is_regex=route_request.is_regex,
+            description=route_request.description,
+            enabled=route_request.enabled,
+            scope=route_request.scope,
+            proxy_hostnames=route_request.proxy_hostnames,
             owner_token_hash=token_hash,
             created_by=token_name
         )
         
         # Store in Redis - storage layer will check for duplicates
-        if not storage.store_route(route):
+        if not await async_storage.store_route(route):
             # Storage rejected due to duplicate path+priority
             raise HTTPException(
                 409, 
-                f"A route already exists with path '{request.path_pattern}' and priority {request.priority}. "
+                f"A route already exists with path '{route_request.path_pattern}' and priority {route_request.priority}. "
                 f"Each path+priority combination must be unique."
             )
         
         logger.info(
-            f"Created new route: id={route_id}, path={request.path_pattern}, "
-            f"target={request.target_type}:{request.target_value}, priority={request.priority}"
+            f"Created new route: id={route_id}, path={route_request.path_pattern}, "
+            f"target={route_request.target_type}:{route_request.target_value}, priority={route_request.priority}"
         )
         
         return route
     
     @router.get("/")
-    async def list_routes():
+    async def list_routes(request: Request):
         """List all routing rules sorted by priority."""
-        routes = storage.list_routes()
+        async_storage = request.app.state.async_storage
+        routes = await async_storage.list_routes()
         return routes
     
     @router.get("/formatted")
     async def list_routes_formatted(
+        request: Request,
         format: str = Query("table", description="Output format", enum=["table", "json", "csv"])
     ):
         """List all routing rules with formatted output."""
@@ -76,7 +80,7 @@ def create_router(storage):
         from tabulate import tabulate
         
         # Get routes using existing endpoint logic
-        routes = await list_routes()
+        routes = await list_routes(request)
         
         if format == "json":
             # Return standard JSON response
@@ -124,32 +128,39 @@ def create_router(storage):
         return PlainTextResponse(table, media_type="text/plain")
     
     @router.get("/{route_id}")
-    async def get_route(route_id: str):
+    async def get_route(
+        request: Request,
+        route_id: str
+    ):
         """Get specific route details."""
-        route = storage.get_route(route_id)
+        async_storage = request.app.state.async_storage
+        route = await async_storage.get_route(route_id)
         if not route:
             raise HTTPException(404, f"Route {route_id} not found")
         return route
     
     @router.put("/{route_id}")
     async def update_route(
+        request: Request,
         route_id: str,
-        request: RouteUpdateRequest,
+        route_request: RouteUpdateRequest,
         _=Depends(require_route_owner)
     ):
         """Update an existing route."""
+        async_storage = request.app.state.async_storage
+        
         # Get existing route
-        route = storage.get_route(route_id)
+        route = await async_storage.get_route(route_id)
         if not route:
             raise HTTPException(404, f"Route {route_id} not found")
         
         # Update fields
-        update_data = request.dict(exclude_unset=True)
+        update_data = route_request.dict(exclude_unset=True)
         for field, value in update_data.items():
             setattr(route, field, value)
         
         # Re-validate if pattern changed
-        if request.path_pattern is not None or request.is_regex is not None:
+        if route_request.path_pattern is not None or route_request.is_regex is not None:
             try:
                 # This will trigger validation
                 route = Route(**route.dict())
@@ -157,27 +168,30 @@ def create_router(storage):
                 raise HTTPException(400, f"Invalid route configuration: {e}")
         
         # Update priority index if priority changed
-        if request.priority is not None:
+        if route_request.priority is not None:
             # Delete old priority index
-            storage.delete_route(route_id)
+            await async_storage.delete_route(route_id)
         
         # Store updated route
-        if not storage.store_route(route):
+        if not await async_storage.store_route(route):
             raise HTTPException(500, "Failed to update route")
         
         return route
     
     @router.delete("/{route_id}")
     async def delete_route(
+        request: Request,
         route_id: str,
         _=Depends(require_route_owner)
     ):
         """Delete a route."""
-        route = storage.get_route(route_id)
+        async_storage = request.app.state.async_storage
+        
+        route = await async_storage.get_route(route_id)
         if not route:
             raise HTTPException(404, f"Route {route_id} not found")
         
-        if not storage.delete_route(route_id):
+        if not await async_storage.delete_route(route_id):
             raise HTTPException(500, "Failed to delete route")
         
         return {"message": f"Route {route_id} deleted successfully"}

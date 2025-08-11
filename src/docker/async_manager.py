@@ -426,6 +426,86 @@ class AsyncDockerManager:
                 trace_id=trace_id
             )
     
+    async def update_service(self, service_name: str, updates: DockerServiceUpdate) -> DockerServiceInfo:
+        """Update a Docker service.
+        
+        Args:
+            service_name: Service name
+            updates: Update configuration
+            
+        Returns:
+            Updated service information
+        """
+        service_info = await self.get_service(service_name)
+        if not service_info:
+            raise ValueError(f"Service {service_name} not found")
+            
+        # Get container
+        try:
+            container = self.client.container.inspect(service_name)
+        except Exception:
+            raise ValueError(f"Container for service {service_name} not found")
+            
+        # Apply updates to service info
+        update_data = updates.dict(exclude_unset=True)
+        for key, value in update_data.items():
+            if hasattr(service_info, key) and value is not None:
+                setattr(service_info, key, value)
+                
+        # Some updates require container recreation
+        needs_recreate = any([
+            updates.memory_limit is not None,
+            updates.cpu_limit is not None,
+            updates.environment is not None
+        ])
+        
+        if needs_recreate:
+            # Stop and remove old container
+            await self.stop_service(service_name)
+            await self.delete_service(service_name, force=True)
+            
+            # Create new container with updated config
+            config = DockerServiceConfig(
+                service_name=service_name,
+                image=service_info.image,
+                dockerfile_path=service_info.dockerfile_path,
+                internal_port=service_info.internal_port,
+                external_port=service_info.external_port,
+                memory_limit=updates.memory_limit or service_info.memory_limit,
+                cpu_limit=updates.cpu_limit or service_info.cpu_limit,
+                environment=updates.environment or service_info.environment,
+                command=service_info.command,
+                networks=service_info.networks,
+                labels=updates.labels or service_info.labels,
+                expose_ports=service_info.expose_ports,
+                port_configs=service_info.port_configs,
+                bind_address=service_info.bind_address
+            )
+            return await self.create_service(config, service_info.owner_token_hash)
+        
+        # Store updated service info
+        key = f"docker_service:{service_name}"
+        await self.storage.redis_client.set(key, service_info.json())
+        
+        return service_info
+    
+    async def restart_service(self, service_name: str) -> bool:
+        """Restart a service.
+        
+        Args:
+            service_name: Service name
+            
+        Returns:
+            True if successful
+        """
+        try:
+            self.client.container.restart(service_name)
+            logger.info(f"Restarted service {service_name}")
+            return True
+        except Exception as e:
+            logger.error(f"Failed to restart service {service_name}: {e}")
+            raise ValueError(f"Container for service {service_name} not found")
+    
     async def start_service(self, service_name: str) -> bool:
         """Start a stopped Docker service.
         
@@ -750,8 +830,11 @@ class AsyncDockerManager:
                 trace_id=trace_id
             )
     
-    async def list_services(self) -> List[DockerServiceInfo]:
+    async def list_services(self, owner_hash: Optional[str] = None) -> List[DockerServiceInfo]:
         """List all managed Docker services.
+        
+        Args:
+            owner_hash: Optional token hash to filter by owner
         
         Returns:
             List of service information
@@ -763,11 +846,40 @@ class AsyncDockerManager:
             if service_data:
                 try:
                     service_info = DockerServiceInfo.parse_raw(service_data)
-                    services.append(service_info)
+                    # Filter by owner if specified
+                    if owner_hash is None or service_info.owner_token_hash == owner_hash:
+                        services.append(service_info)
                 except Exception as e:
                     logger.error(f"Failed to parse service data: {e}")
         
         return services
+    
+    async def get_service(self, service_name: str) -> Optional[DockerServiceInfo]:
+        """Get service information.
+        
+        Args:
+            service_name: Service name
+            
+        Returns:
+            Service information or None if not found
+        """
+        key = f"docker_service:{service_name}"
+        data = await self.storage.redis_client.get(key)
+        
+        if not data:
+            return None
+            
+        service_info = DockerServiceInfo.parse_raw(data)
+        
+        # Update status from actual container if it exists
+        try:
+            container = self.client.container.inspect(service_name)
+            service_info.status = container.state.status
+        except Exception:
+            # Container might not exist yet, use stored status
+            pass
+            
+        return service_info
     
     async def cleanup_orphaned_services(self) -> int:
         """Clean up orphaned Docker services.

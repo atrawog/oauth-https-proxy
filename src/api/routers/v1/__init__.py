@@ -6,13 +6,19 @@ import logging
 logger = logging.getLogger(__name__)
 
 
-def create_v1_router(storage, cert_manager) -> APIRouter:
+def create_v1_router(app) -> APIRouter:
     """
     Create the v1 API router that aggregates all versioned endpoints.
     
     This router will be mounted at /api/v1 in the main app.
     All sub-routers should not include their own version prefix.
     """
+    # Get dependencies from app state
+    async_storage = app.state.async_storage if hasattr(app.state, 'async_storage') else app.state.storage
+    cert_manager = app.state.cert_manager
+    storage = app.state.storage  # Still needed for some routers
+    # Docker manager comes from async_components, not passed directly
+    
     # Import v1 endpoint modules
     from . import (
         certificates,
@@ -47,21 +53,21 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     # Proxy endpoints: /api/v1/proxy/targets/*
     # Note: proxies router already has /targets prefix, so we use /proxy
     v1_router.include_router(
-        proxies.create_router(storage, cert_manager),
+        proxies.create_router(async_storage, cert_manager),
         prefix="/proxy"
     )
     logger.info("Included proxies router in v1")
     
     # Token endpoints: /api/v1/tokens/*
     v1_router.include_router(
-        tokens.create_router(storage),
+        tokens.create_tokens_router(async_storage),
         prefix="/tokens"
     )
     logger.info("Included tokens router in v1")
     
     # Route endpoints: /api/v1/routes/*
     v1_router.include_router(
-        routes.create_router(storage),
+        routes.create_router(async_storage),
         prefix="/routes"
     )
     logger.info("Included routes router in v1")
@@ -79,7 +85,7 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     # Docker service endpoints: /api/v1/services/*
     try:
         v1_router.include_router(
-            services.create_router(storage),
+            services.create_services_router(async_storage),
             prefix="/services"
         )
         logger.info("Included services router in v1")
@@ -111,9 +117,10 @@ def create_v1_router(storage, cert_manager) -> APIRouter:
     
     # Log query endpoints: /api/v1/logs/*
     try:
-        logs_router = logs.create_router(storage)
+        logs_router = logs.create_logs_router(async_storage)
         v1_router.include_router(
-            logs_router
+            logs_router,
+            prefix="/logs"
         )
         logger.info("Included logs router in v1")
     except Exception as e:

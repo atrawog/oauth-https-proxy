@@ -199,9 +199,11 @@ class HypercornInstance:
 class UnifiedDispatcher:
     """Dispatcher that routes both HTTP and HTTPS traffic to domain instances."""
     
-    def __init__(self, host='0.0.0.0', storage=None):
+    def __init__(self, host='0.0.0.0', storage=None, async_components=None):
         self.host = host
         self.storage = storage
+        self.async_components = async_components
+        self.async_storage = async_components.async_storage if async_components else None
         
         # Configure Redis logging if storage is available
         if storage and storage.redis_client:
@@ -222,6 +224,18 @@ class UnifiedDispatcher:
             verify=False  # Since we're forwarding internal requests
         )
         
+    async def _get_proxy_target(self, hostname: str):
+        """Get proxy target using async storage if available."""
+        if self.async_storage:
+            return await self.async_storage.get_proxy_target(hostname)
+        return self.storage.get_proxy_target(hostname) if self.storage else None
+    
+    async def _list_routes(self):
+        """List routes using async storage if available."""
+        if self.async_storage:
+            return await self.async_storage.list_routes()
+        return self.storage.list_routes() if self.storage else []
+    
     def get_applicable_routes(self, proxy_config: Optional[ProxyTarget]) -> List[Route]:
         """Get routes applicable to a specific proxy based on its configuration and scope."""
         if not proxy_config:
@@ -294,7 +308,7 @@ class UnifiedDispatcher:
             except Exception as e:
                 logger.error(f"Failed to store service in Redis: {e}")
     
-    def load_routes_from_storage(self):
+    async def load_routes_from_storage(self):
         """Load routes from Redis storage."""
         if not self.storage:
             logger.warning("No storage available for loading routes")
@@ -308,7 +322,7 @@ class UnifiedDispatcher:
             self.storage.initialize_default_proxies()
             
             # Load all routes from storage
-            self.routes = self.storage.list_routes()
+            self.routes = await self._list_routes()
             
             # Filter only enabled routes
             self.routes = [r for r in self.routes if r.enabled]
@@ -691,9 +705,9 @@ class UnifiedDispatcher:
             
             # Get proxy config if this is a proxy domain
             proxy_config = None
-            if self.storage and hostname not in ['localhost', '127.0.0.1']:
+            if (self.storage or self.async_storage) and hostname not in ['localhost', '127.0.0.1']:
                 try:
-                    proxy_config = self.storage.get_proxy_target(hostname)
+                    proxy_config = await self._get_proxy_target(hostname)
                 except Exception as e:
                     logger.debug(f"Could not get proxy config for {hostname}: {e}")
             
@@ -890,14 +904,15 @@ class UnifiedDispatcher:
 class UnifiedMultiInstanceServer:
     """Main server that manages domain instances with unified dispatching."""
     
-    def __init__(self, https_server_instance, app=None, host='0.0.0.0'):
+    def __init__(self, https_server_instance, app=None, host='0.0.0.0', async_components=None):
         self.https_server = https_server_instance
         self.app = app  # Not used anymore - each instance creates its own proxy app
         self.host = host
+        self.async_components = async_components
         self.instances: List[HypercornInstance] = []
-        # Pass storage to dispatcher for route management
+        # Pass storage and async components to dispatcher for route management
         storage = https_server_instance.manager.storage if https_server_instance else None
-        self.dispatcher = UnifiedDispatcher(host, storage)
+        self.dispatcher = UnifiedDispatcher(host, storage, async_components)
         self.next_http_port = 10002   # Starting port for HTTP instances (10001 reserved for API)
         self.next_https_port = 11000  # Starting port for HTTPS instances
         
@@ -1220,7 +1235,7 @@ class UnifiedMultiInstanceServer:
         logger.info("Started Redis Stream consumer for dynamic proxy management")
         
         # Load routes from Redis storage
-        self.dispatcher.load_routes_from_storage()
+        await self.dispatcher.load_routes_from_storage()
         
         # Register the API service as a named instance
         # The API runs on port 10001 with PROXY protocol for external access

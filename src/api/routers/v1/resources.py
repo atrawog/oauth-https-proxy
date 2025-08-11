@@ -5,7 +5,7 @@ from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, field_validator
 
-from ...auth import get_current_token_info, require_admin
+from src.api.auth import get_current_token_info, require_admin
 
 logger = logging.getLogger(__name__)
 

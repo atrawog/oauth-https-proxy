@@ -6,8 +6,8 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
-from ...auth import require_admin
-from ....proxy.routes import Route, RouteCreateRequest
+from src.api.auth import require_admin
+from src.proxy.routes import Route, RouteCreateRequest
 
 logger = logging.getLogger(__name__)
 

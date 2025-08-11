@@ -13,6 +13,8 @@ from ..storage.async_redis_storage import AsyncRedisStorage
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..consumers.metrics_processor import MetricsProcessor
 from ..consumers.alert_manager import AlertManager
+from ..docker.async_manager import AsyncDockerManager
+from ..certmanager.async_manager import AsyncCertificateManager
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +28,8 @@ class AsyncComponents:
         self.unified_logger: Optional[UnifiedAsyncLogger] = None
         self.metrics_processor: Optional[MetricsProcessor] = None
         self.alert_manager: Optional[AlertManager] = None
+        self.docker_manager: Optional[AsyncDockerManager] = None
+        self.cert_manager: Optional[AsyncCertificateManager] = None
         self.initialized = False
     
     async def initialize(self, redis_url: str):
@@ -42,7 +46,9 @@ class AsyncComponents:
             logger.info("Initializing async Redis Streams components...")
             
             # Initialize Redis clients
-            self.redis_clients = await initialize_redis_clients(redis_url)
+            # Note: initialize_redis_clients doesn't take parameters, it uses env var
+            self.redis_clients = RedisClients(redis_url)
+            await self.redis_clients.initialize()
             logger.info("Redis clients initialized")
             
             # Initialize async storage
@@ -54,6 +60,13 @@ class AsyncComponents:
             self.unified_logger = UnifiedAsyncLogger(self.redis_clients)
             self.unified_logger.set_component("api_server")
             logger.info("Unified logger initialized")
+            
+            # Initialize async managers
+            self.docker_manager = AsyncDockerManager(self.async_storage, self.redis_clients)
+            logger.info("Async Docker manager initialized")
+            
+            self.cert_manager = AsyncCertificateManager(self.async_storage, self.redis_clients)
+            logger.info("Async Certificate manager initialized")
             
             # Initialize consumers
             self.metrics_processor = MetricsProcessor(self.redis_clients.stream_redis)
@@ -74,6 +87,8 @@ class AsyncComponents:
                     "redis_clients": "initialized",
                     "async_storage": "initialized",
                     "unified_logger": "initialized",
+                    "docker_manager": "initialized",
+                    "cert_manager": "initialized",
                     "metrics_processor": "started",
                     "alert_manager": "started"
                 }
@@ -163,7 +178,32 @@ def attach_to_app(app: FastAPI, components: AsyncComponents):
     app.state.async_components = components
     app.state.async_storage = components.async_storage
     app.state.unified_logger = components.unified_logger
+    
+    # Initialize request logger
+    from src.logging.request_logger import RequestLogger
+    app.state.request_logger = RequestLogger(components.async_storage.redis_client if components.async_storage else None)
+    
+    # Set global request logger
+    from src.shared.logging import set_request_logger
+    set_request_logger(app.state.request_logger)
     app.state.metrics_processor = components.metrics_processor
     app.state.alert_manager = components.alert_manager
+    app.state.docker_manager = components.docker_manager
+    app.state.cert_manager = components.cert_manager
     
     logger.info("Async components attached to FastAPI app")
+    
+    # Now create and attach the v1 router with async_storage available
+    try:
+        from .routers.v1 import create_v1_router
+        v1_router = create_v1_router(app)
+        app.include_router(v1_router, prefix="/api/v1")
+        logger.info("API v1 router included successfully at /api/v1")
+    except ImportError as e:
+        logger.error(f"Failed to import v1 router: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+    except Exception as e:
+        logger.error(f"Failed to include v1 router: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")

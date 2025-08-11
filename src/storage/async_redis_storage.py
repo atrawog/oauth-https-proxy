@@ -538,8 +538,8 @@ class AsyncRedisStorage:
         try:
             targets = []
             async for key in self.redis_client.scan_iter(match="proxy:*"):
-                # Skip client info keys (proxy:client:*)
-                if ":client:" in key:
+                # Skip client info keys (proxy:client:*) and event streams
+                if ":client:" in key or key == "proxy:events:stream":
                     continue
                 hostname = key.split(":", 1)[1]
                 target = await self.get_proxy_target(hostname)
@@ -809,6 +809,9 @@ class AsyncRedisStorage:
         try:
             count = 0
             async for key in self.redis_client.scan_iter(match="proxy:*"):
+                # Skip client info keys and event streams
+                if ":client:" in key or key == "proxy:events:stream":
+                    continue
                 proxy_data = await self.redis_client.get(key)
                 if proxy_data:
                     proxy_dict = json.loads(proxy_data)
@@ -818,6 +821,24 @@ class AsyncRedisStorage:
         except Exception as e:
             logger.error(f"Failed to count proxies by owner: {e}")
             return 0
+    
+    async def list_certificates_by_owner(self, owner_token_hash: str) -> List[Dict]:
+        """List certificates owned by a specific token."""
+        try:
+            certificates = []
+            async for key in self.redis_client.scan_iter(match="cert:*"):
+                # Skip domain mappings (cert:domain:*)
+                if key.startswith("cert:domain:"):
+                    continue
+                cert_data = await self.redis_client.get(key)
+                if cert_data:
+                    cert_dict = json.loads(cert_data)
+                    if cert_dict.get('owner_token_hash') == owner_token_hash:
+                        certificates.append(cert_dict)
+            return certificates
+        except Exception as e:
+            logger.error(f"Failed to list certificates by owner: {e}")
+            return []
     
     async def list_certificate_names_by_owner(self, owner_token_hash: str) -> List[str]:
         """List certificate names owned by a specific token."""
@@ -837,11 +858,32 @@ class AsyncRedisStorage:
             logger.error(f"Failed to list certificate names by owner: {e}")
             return []
     
+    async def list_proxies_by_owner(self, owner_token_hash: str) -> List[Dict]:
+        """List proxy targets owned by a specific token."""
+        try:
+            proxies = []
+            async for key in self.redis_client.scan_iter(match="proxy:*"):
+                # Skip client info keys and event streams
+                if ":client:" in key or key == "proxy:events:stream":
+                    continue
+                proxy_data = await self.redis_client.get(key)
+                if proxy_data:
+                    proxy_dict = json.loads(proxy_data)
+                    if proxy_dict.get('owner_token_hash') == owner_token_hash:
+                        proxies.append(proxy_dict)
+            return proxies
+        except Exception as e:
+            logger.error(f"Failed to list proxies by owner: {e}")
+            return []
+    
     async def list_proxy_names_by_owner(self, owner_token_hash: str) -> List[str]:
         """List proxy hostnames owned by a specific token."""
         try:
             names = []
             async for key in self.redis_client.scan_iter(match="proxy:*"):
+                # Skip client info keys and event streams
+                if ":client:" in key or key == "proxy:events:stream":
+                    continue
                 proxy_data = await self.redis_client.get(key)
                 if proxy_data:
                     proxy_dict = json.loads(proxy_data)

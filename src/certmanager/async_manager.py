@@ -572,6 +572,17 @@ class AsyncCertificateManager:
             "message": "Certificate not found"
         }
     
+    async def get_certificate(self, cert_name: str) -> Optional[Dict]:
+        """Get certificate by name.
+        
+        Args:
+            cert_name: Name of the certificate
+            
+        Returns:
+            Certificate data or None if not found
+        """
+        return await self.storage.get_certificate(cert_name)
+    
     async def delete_certificate(self, cert_name: str) -> bool:
         """Delete a certificate with event publishing.
         

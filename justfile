@@ -185,16 +185,17 @@ proxy-show hostname token="${ADMIN_TOKEN}":
 
 # Delete a proxy
 proxy-delete hostname delete-cert="false" force="false" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client proxy delete {{hostname}} \
+    TOKEN={{token}} pixi run proxy-client proxy delete {{hostname}} --force \
         {{ if delete-cert == "true" { "--delete-cert" } else { "" } }} \
         {{ if force == "true" { "--force" } else { "" } }}
 
 # Enable authentication for a proxy
-proxy-auth-enable hostname auth-proxy="" mode="forward" allowed-scopes="" token="${ADMIN_TOKEN}":
+proxy-auth-enable hostname auth-proxy="auth.localhost" mode="forward" allowed-scopes="" allowed-audiences="" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client proxy auth enable {{hostname}} \
-        {{ if auth-proxy != "" { auth-proxy } else { "auth.${BASE_DOMAIN}" } }} \
+        {{auth-proxy}} \
         {{mode}} \
-        {{ if allowed-scopes != "" { "--scopes " + allowed-scopes } else { "" } }}
+        {{ if allowed-scopes != "" { "--allowed-scopes " + allowed-scopes } else { "" } }} \
+        {{ if allowed-audiences != "" { "--allowed-audiences " + allowed-audiences } else { "" } }}
 
 # Disable authentication for a proxy
 proxy-auth-disable hostname token="${ADMIN_TOKEN}":
@@ -242,11 +243,11 @@ proxy-resource-list token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Create a new route
-route-create path target-type target-value priority="50" methods="*" description="" token="${ADMIN_TOKEN}":
+route-create path target-type target-value priority="50" methods="ALL" is-regex="false" description="" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client route create {{path}} {{target-type}} {{target-value}} \
         --priority {{priority}} \
-        {{ if methods != "*" { "--methods " + methods } else { "" } }} \
-        {{ if description != "" { "--description '" + description + "'" } else { "" } }}
+        {{ if methods != "ALL" { "--methods " + methods } else { "" } }} \
+        {{ if is-regex == "true" { "--regex" } else { "" } }}
 
 # Create a global route
 route-create-global path target-type target-value priority="50" methods="*" is-regex="false" description="" token="${ADMIN_TOKEN}":
@@ -497,7 +498,7 @@ logs-search query="" hours="24" event="" level="" hostname="" limit="100" token=
 
 # Log statistics
 logs-stats hours="24" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log stats --hours {{hours}}
+    TOKEN={{token}} pixi run proxy-client log events --hours {{hours}}
 
 # Clear logs
 logs-clear token="${ADMIN_TOKEN}":

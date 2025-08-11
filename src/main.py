@@ -14,7 +14,10 @@ from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
 from .dispatcher import UnifiedMultiInstanceServer
 from .api.server import create_api_app
+from .api.async_init import init_async_components, attach_to_app
 from .orchestration.instance_workflow import InstanceWorkflowOrchestrator
+from .docker.async_manager import AsyncDockerManager
+from .certmanager.async_manager import AsyncCertificateManager
 
 logger = logging.getLogger(__name__)
 
@@ -28,13 +31,19 @@ request_logger: Optional[RequestLogger] = None
 workflow_orchestrator: Optional[InstanceWorkflowOrchestrator] = None
 
 
-def initialize_components(config: Config) -> None:
-    """Initialize all system components."""
-    global manager, https_server, scheduler, proxy_handler, logging_components, request_logger, workflow_orchestrator
+async def initialize_components(config: Config) -> tuple:
+    """Initialize all system components with async architecture.
     
+    Returns:
+        Tuple of (storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components)
+    """
     # Initialize storage with Redis URL
     redis_url = config.get_redis_url_with_password()
     storage = RedisStorage(redis_url)
+    
+    # Initialize async components
+    async_components = await init_async_components(redis_url)
+    logger.info("Async components initialized")
     
     # Initialize request logger with async Redis first
     request_logger = RequestLogger(redis_url)
@@ -47,7 +56,7 @@ def initialize_components(config: Config) -> None:
     set_request_logger(request_logger)
     logger.info("Request logger initialized with Redis indexing")
     
-    # Initialize certificate manager
+    # Initialize certificate manager (sync for now, will be replaced by async)
     manager = CertificateManager(storage)
     
     # Initialize HTTPS server
@@ -66,7 +75,8 @@ def initialize_components(config: Config) -> None:
         redis_url=redis_url,
         storage=storage,
         cert_manager=manager,
-        dispatcher=None  # Will be set later when dispatcher is created
+        dispatcher=None,  # Will be set later when dispatcher is created
+        async_components=async_components
     )
     logger.info(f"InstanceWorkflowOrchestrator created: {workflow_orchestrator}")
     
@@ -77,20 +87,20 @@ def initialize_components(config: Config) -> None:
     storage.initialize_default_proxies()
     
     logger.info("All components initialized successfully")
+    
+    return storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server
 
 
 async def run_server(config: Config) -> None:
-    """Run the unified multi-instance server."""
-    # Initialize components
-    initialize_components(config)
+    """Run the unified multi-instance server with async architecture."""
+    # Initialize all components
+    storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
     
-    # Start async Redis log handler if available
-    if logging_components and logging_components.get("redis_handler"):
-        await logging_components["redis_handler"].start()
-        logger.info("Async Redis log handler started")
+    # Create FastAPI app with async components attached
+    app = create_api_app(storage, manager, scheduler)
     
-    # Create FastAPI app
-    app = create_api_app(manager.storage, manager, scheduler)
+    # Attach async components to app
+    attach_to_app(app, async_components)
     
     # Start scheduler
     scheduler.start()
@@ -129,7 +139,7 @@ async def run_server(config: Config) -> None:
             backend_port=9001,
             listen_host="127.0.0.1", 
             listen_port=10001,
-            redis_client=manager.storage.redis_client
+            redis_client=async_components.redis_clients.async_redis
         )
         proxy_task = asyncio.create_task(proxy_server.serve_forever())
         
@@ -137,11 +147,11 @@ async def run_server(config: Config) -> None:
         unified_server = UnifiedMultiInstanceServer(
             https_server_instance=https_server,
             app=None,  # No app needed - just proxy instances
-            host=config.SERVER_HOST
+            host=config.SERVER_HOST,
+            async_components=async_components
         )
         
-        # Set server reference in workflow orchestrator (not just dispatcher)
-        # The workflow needs access to the server's create_instance_for_proxy method
+        # Set server reference in workflow orchestrator
         workflow_orchestrator.dispatcher = unified_server
         logger.info("Workflow orchestrator linked to unified server")
         
@@ -158,10 +168,9 @@ async def run_server(config: Config) -> None:
         await workflow_orchestrator.close()
         logger.info("Workflow orchestrator stopped")
         
-        # Stop async Redis log handler
-        if logging_components and logging_components.get("redis_handler"):
-            await logging_components["redis_handler"].stop()
-            logger.info("Async Redis log handler stopped")
+        # Shutdown async components
+        await async_components.shutdown()
+        logger.info("Async components shut down")
 
 
 def main() -> None:
