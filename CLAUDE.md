@@ -393,7 +393,7 @@ just cert-show <name> [pem] [token]
 ```json
 {
   "hostname": "api.example.com",
-  "target_url": "http://backend:8080",
+  "target_url": "http://backend:3000",
   "cert_name": "proxy-api-example-com",
   "owner_token_hash": "sha256:...",
   "created_by": "token-name",
@@ -455,10 +455,10 @@ Priority-based path routing with Redis storage and scope support:
 ```
 
 #### Route Target Types
-- **port**: Forward to `localhost:<port>` (e.g., `8080`)
+- **port**: Forward to `localhost:<port>` (e.g., `3000`)
 - **service**: Forward to named service - Docker, external, or internal (e.g., `auth`, `api-gateway`)
 - **hostname**: Forward to proxy handling that hostname (e.g., `api.example.com`)
-- **url**: Forward to any URL directly (e.g., `http://backend:8080` or `https://api.example.com`)
+- **url**: Forward to any URL directly (e.g., `http://backend:3000` or `https://api.example.com`)
 
 #### Route Scopes
 Routes can be scoped to control their applicability:
@@ -613,8 +613,8 @@ The system automatically registers these internal services:
   "service_type": "docker",
   "image": "nginx:latest",  // OR use dockerfile_path
   "dockerfile_path": "./dockerfiles/custom.Dockerfile",
-  "internal_port": 8080,  // Port inside container (auto-detected from image if not specified)
-  "external_port": 8080,  // DEPRECATED - use port_configs for multi-port support
+  "internal_port": 3000,  // Port inside container (auto-detected from image if not specified)
+  "external_port": 3000,  // DEPRECATED - use port_configs for multi-port support
   "memory_limit": "512m",
   "cpu_limit": 1.0,
   "environment": {"KEY": "value"},
@@ -625,8 +625,8 @@ The system automatically registers these internal services:
   "port_configs": [  // Multi-port configuration
     {
       "name": "http",
-      "host": 8080,
-      "container": 8080,
+      "host": 3000,
+      "container": 3000,
       "bind": "127.0.0.1",  // or "0.0.0.0" for all interfaces
       "protocol": "tcp",
       "source_token": "optional_access_token"  // For port access control
@@ -725,8 +725,8 @@ The port management system provides comprehensive control over port allocation a
 {
   "service_name": "my-app",
   "port_name": "http",
-  "host_port": 8080,
-  "container_port": 8080,
+  "host_port": 3000,
+  "container_port": 3000,
   "bind_address": "127.0.0.1",  // or "0.0.0.0"
   "protocol": "tcp",            // or "udp"
   "source_token_hash": "sha256:...",  // Optional access control
