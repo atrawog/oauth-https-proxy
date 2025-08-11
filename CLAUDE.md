@@ -209,6 +209,71 @@ For PROXY protocol support:
 External LB → Port 10001 → PROXY Handler → Port 9000 → UnifiedDispatcher
 ```
 
+### Workflow Orchestrator Architecture (Zero-Restart)
+**CRITICAL**: All proxy instances are created dynamically via events - NO startup creation!
+
+#### Event-Driven Instance Lifecycle
+The system uses Redis Streams for reliable event processing with exactly-once semantics:
+
+```
+API/Certificate Manager → Redis Stream Event → Workflow Orchestrator → Create/Update/Delete Instance
+                                ↓
+                        Consumer Group (workflow-group)
+                                ↓
+                        Exactly-once processing
+```
+
+#### Redis Streams Configuration
+- **Stream**: `events:workflow` - Main event stream for instance lifecycle
+- **Consumer Group**: `workflow-group` - Ensures exactly-once processing
+- **Events**:
+  - `proxy_created` - New proxy needs instance creation
+  - `certificate_ready` - Certificate available, upgrade to HTTPS
+  - `proxy_updated` - Proxy configuration changed
+  - `proxy_deleted` - Proxy removed, cleanup instance
+
+#### Event Schema
+```json
+{
+  "event_type": "proxy_created",
+  "hostname": "api.example.com",
+  "data": {
+    "enable_http": true,
+    "enable_https": false,
+    "cert_name": null
+  },
+  "timestamp": "2024-01-15T10:00:00Z"
+}
+```
+
+#### Workflow Orchestrator Flow
+1. **Proxy Creation**:
+   - API creates proxy → publishes `proxy_created` event
+   - Orchestrator creates HTTP-only instance immediately
+   - Proxy works instantly without restart
+
+2. **Certificate Ready**:
+   - Certificate manager obtains cert → publishes `certificate_ready` event
+   - Orchestrator upgrades instance to HTTPS
+   - Zero downtime transition
+
+3. **Proxy Updates**:
+   - Configuration changes → publishes `proxy_updated` event
+   - Orchestrator updates instance in-place
+   - No restart required
+
+4. **Proxy Deletion**:
+   - API deletes proxy → publishes `proxy_deleted` event
+   - Orchestrator cleanly shuts down instance
+   - Resources properly released
+
+#### Key Benefits
+- **Zero-Restart**: Proxies work immediately upon creation
+- **Reliability**: Redis Streams with consumer groups ensure no events are lost
+- **Idempotency**: Exactly-once processing prevents duplicate instances
+- **Clean Separation**: API doesn't know about instances, orchestrator doesn't know about API
+- **Scalability**: Can run multiple orchestrator consumers for high availability
+
 ### Dual App Architecture
 
 #### API App (FastAPI) - localhost only
@@ -996,6 +1061,14 @@ service:ports:{service}     # Hash of service port configurations
 resource:{uri}              # Protected resource configuration
 ```
 
+### Workflow Stream Keys
+```
+events:workflow             # Main event stream for instance lifecycle
+workflow:state:{hostname}   # Current state of workflow for each hostname
+workflow:pending            # Set of pending workflow tasks
+workflow:consumer:info      # Consumer group metadata
+```
+
 ## Key Implementation Insights
 
 1. **Dispatcher-Centric**: UnifiedDispatcher owns ports, routes all traffic
@@ -1020,6 +1093,11 @@ resource:{uri}              # Protected resource configuration
 20. **Unified IP Handling**: Same mechanism works for HTTP header injection and HTTPS
 21. **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist via `auth_required_users`, overriding the global `OAUTH_ALLOWED_GITHUB_USERS` setting
 22. **Smart Certificate Handling**: Proxy creation automatically detects existing certificates and creates new ones when needed using environment defaults
+23. **Zero-Restart Architecture**: Workflow orchestrator enables proxies to work immediately without service restarts
+24. **Event-Driven Instances**: All proxy instances created dynamically via Redis Streams events, no startup creation
+25. **Exactly-Once Processing**: Redis Streams with consumer groups ensure reliable event handling
+26. **Clean Lifecycle Management**: Instances created, updated, and deleted via workflow events
+27. **HTTPS Upgrade Path**: Proxies start HTTP-only, seamlessly upgrade to HTTPS when certificate ready
 
 ## MCP 2025-06-18 Compliance Summary
 
