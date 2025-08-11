@@ -22,9 +22,10 @@
 - `LOG_LEVEL` - Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
 
 ### Advanced Logging Architecture
-The system uses a dual-Redis architecture for high-performance logging:
-- **Async Redis**: For high-frequency request/response logging with minimal latency
-- **Sync Redis**: For configuration and slower operations
+The system uses a fully async Redis architecture for high-performance logging:
+- **Async Redis Primary**: High-frequency request/response logging with minimal latency
+- **Async Redis Storage**: All configuration and state management operations
+- **Unified Async Layer**: Single async Redis client pool for all operations
 
 #### RequestLogger System
 The RequestLogger provides efficient HTTP request/response logging with multiple indexes:
@@ -99,7 +100,19 @@ just logs-help                                                # Show logging com
 ./scripts/     # All executable scripts
 ./docs/        # JupyterBook documentation only
 ./tests/       # Pytest tests only
-./src/middleware/  # Middleware components including PROXY protocol handler
+./src/          # Main source code
+  ├── api/         # API routers and async operations
+  ├── auth/        # OAuth authentication implementation
+  ├── certificates/# Certificate management with async ACME
+  ├── consumers/   # Redis Streams consumers
+  ├── core/        # Core async utilities and helpers
+  ├── dispatcher/  # Unified async dispatcher
+  ├── middleware/  # Middleware components including PROXY protocol handler
+  ├── orchestration/# Workflow orchestrator for instance management
+  ├── proxies/     # Proxy management with async forwarding
+  ├── services/    # Service management (Docker, external, internal)
+  └── storage/     # Async Redis storage layer
+./oauth-https-proxy-client/  # Python CLI client with enhanced formatting
 ```
 
 ### Root Cause Analysis (Required Before any Code or Configuration Change)
@@ -209,6 +222,26 @@ For PROXY protocol support:
 External LB → Port 10001 → PROXY Handler → Port 9000 → UnifiedDispatcher
 ```
 
+### Async Architecture Overview
+The entire system has been migrated to a fully asynchronous architecture for improved performance and scalability:
+
+#### Async Components
+- **AsyncRedisStorage**: Central async storage layer with connection pooling
+- **Async API Routers**: All FastAPI endpoints use async handlers
+- **Async Certificate Manager**: Non-blocking ACME operations
+- **Async Proxy Forwarding**: Streaming request/response handling
+- **Async Service Manager**: Docker operations via async python-on-whales
+- **Async Consumers**: Redis Streams consumers with async processing
+- **Unified Consumer**: Single consumer handles all workflow events
+- **Instance Workflow**: Async orchestration of proxy instances
+- **Async Initialization**: Background tasks for service startup
+
+#### Async Benefits
+- **Improved Concurrency**: Handle thousands of simultaneous connections
+- **Reduced Latency**: Non-blocking I/O for all operations
+- **Better Resource Utilization**: Single process handles more requests
+- **Streaming Support**: Efficient WebSocket and SSE handling
+
 ### Workflow Orchestrator Architecture (Zero-Restart)
 **CRITICAL**: All proxy instances are created dynamically via events - NO startup creation!
 
@@ -277,18 +310,20 @@ API/Certificate Manager → Redis Stream Event → Workflow Orchestrator → Cre
 ### Dual App Architecture
 
 #### API App (FastAPI) - localhost only
-- Full FastAPI with lifespan management
-- API endpoints, Web GUI, certificate management
+- Full FastAPI with async lifespan management
+- Async API endpoints, Web GUI, certificate management
 - Integrated OAuth 2.1 server functionality
-- Global resources (scheduler, Redis)
+- Global resources (scheduler, Redis) with async initialization
 - Runs on internal port 9000
+- Background tasks for certificate renewal and cleanup
 
 #### Proxy App (Minimal ASGI) - all proxy domains
-- Lightweight Starlette app
+- Lightweight Starlette app with async handlers
 - ONLY proxy forwarding, no API
-- Per-instance httpx client (isolated)
+- Per-instance async httpx client (isolated)
 - NO lifespan side effects
 - Clean shutdown without affecting others
+- Streaming response handling for large payloads
 
 ### Service Management
 ```python
@@ -940,6 +975,12 @@ Response:
 - `GET /api/v1/oauth/proxies` - OAuth status for proxies
 - `GET /api/v1/oauth/proxies/{hostname}/sessions` - Proxy sessions
 
+### OAuth Status API Endpoints
+- `GET /api/v1/oauth/status` - Overall OAuth system status
+- `GET /api/v1/oauth/status/clients` - Client statistics
+- `GET /api/v1/oauth/status/tokens` - Token statistics
+- `GET /api/v1/oauth/status/sessions` - Session statistics
+
 ### Protected Resource Management API Endpoints
 **Note**: These management endpoints are optional conveniences, not MCP requirements.
 - `GET /api/v1/resources/` - List registered protected resources (requires trailing slash)
@@ -1006,6 +1047,13 @@ resource:{resource_uri} = {
 
 ## Redis Storage Schema
 
+### Async Redis Architecture
+All Redis operations now use async/await patterns through the AsyncRedisStorage class:
+- **Connection Pooling**: Maintains efficient connection pool for high concurrency
+- **Pipeline Operations**: Batch operations for improved performance
+- **Atomic Operations**: Lua scripts for complex atomic operations
+- **Stream Processing**: Async consumers for Redis Streams events
+
 ### Service Keys
 ```
 service:url:{name}          # Service name to URL mapping (all service types)
@@ -1071,33 +1119,39 @@ workflow:consumer:info      # Consumer group metadata
 
 ## Key Implementation Insights
 
-1. **Dispatcher-Centric**: UnifiedDispatcher owns ports, routes all traffic
-2. **Service Isolation**: Each proxy domain gets its own ASGI app instance
-3. **Redis-Only**: All configuration and state in Redis
-4. **Async Operations**: Certificate generation non-blocking
-5. **Token Authentication**: All write operations require bearer tokens
-6. **Route Priority**: Higher priority routes checked first
-7. **Certificate Sharing**: Multi-domain certs reduce overhead
-8. **OAuth Integration**: Integrated into proxy service, accessed via routes
-9. **Unified Service Model**: Single API for Docker, external, and internal services
-10. **Docker Management**: Dynamic container creation via Docker socket
-11. **MCP Metadata**: Automatic metadata endpoints for MCP compliance
-12. **Resource Limits**: CPU and memory limits for Docker services
-13. **Port Management**: Comprehensive port allocation with bind address control
-14. **Multi-Port Services**: Services can expose multiple ports with different access controls
-15. **Port Access Control**: Simple source_token-based access control for exposed ports
-16. **Service Port Binding**: Choose between localhost-only or public access per port
-17. **Python-on-whales**: Uses tuples for port publishing: `("host_ip:port", container_port)`
-18. **PROXY Protocol**: TCP-level handler preserves client IPs for both HTTP and HTTPS
-19. **Redis Side Channel**: Connection-based client info storage with 60s TTL
-20. **Unified IP Handling**: Same mechanism works for HTTP header injection and HTTPS
-21. **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist via `auth_required_users`, overriding the global `OAUTH_ALLOWED_GITHUB_USERS` setting
-22. **Smart Certificate Handling**: Proxy creation automatically detects existing certificates and creates new ones when needed using environment defaults
-23. **Zero-Restart Architecture**: Workflow orchestrator enables proxies to work immediately without service restarts
-24. **Event-Driven Instances**: All proxy instances created dynamically via Redis Streams events, no startup creation
-25. **Exactly-Once Processing**: Redis Streams with consumer groups ensure reliable event handling
-26. **Clean Lifecycle Management**: Instances created, updated, and deleted via workflow events
-27. **HTTPS Upgrade Path**: Proxies start HTTP-only, seamlessly upgrade to HTTPS when certificate ready
+1. **Fully Async Architecture**: All components use async/await for non-blocking operations
+2. **Unified Async Storage**: Single AsyncRedisStorage class handles all Redis operations
+3. **Service Isolation**: Each proxy domain gets its own ASGI app instance
+4. **Redis-Only**: All configuration and state in Redis
+5. **Async Certificate Operations**: Non-blocking ACME certificate generation
+6. **Token Authentication**: All write operations require bearer tokens
+7. **Route Priority**: Higher priority routes checked first
+8. **Certificate Sharing**: Multi-domain certs reduce overhead
+9. **OAuth Integration**: Integrated into proxy service, accessed via routes
+10. **Unified Service Model**: Single API for Docker, external, and internal services
+11. **Docker Management**: Dynamic container creation via Docker socket
+12. **MCP Metadata**: Automatic metadata endpoints for MCP compliance
+13. **Resource Limits**: CPU and memory limits for Docker services
+14. **Port Management**: Comprehensive port allocation with bind address control
+15. **Multi-Port Services**: Services can expose multiple ports with different access controls
+16. **Port Access Control**: Simple source_token-based access control for exposed ports
+17. **Service Port Binding**: Choose between localhost-only or public access per port
+18. **Python-on-whales**: Uses tuples for port publishing: `("host_ip:port", container_port)`
+19. **PROXY Protocol**: TCP-level handler preserves client IPs for both HTTP and HTTPS
+20. **Redis Side Channel**: Connection-based client info storage with 60s TTL
+21. **Unified IP Handling**: Same mechanism works for HTTP header injection and HTTPS
+22. **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist via `auth_required_users`, overriding the global `OAUTH_ALLOWED_GITHUB_USERS` setting
+23. **Smart Certificate Handling**: Proxy creation automatically detects existing certificates and creates new ones when needed using environment defaults
+24. **Zero-Restart Architecture**: Workflow orchestrator enables proxies to work immediately without service restarts
+25. **Event-Driven Instances**: All proxy instances created dynamically via Redis Streams events, no startup creation
+26. **Exactly-Once Processing**: Redis Streams with consumer groups ensure reliable event handling
+27. **Clean Lifecycle Management**: Instances created, updated, and deleted via workflow events
+28. **HTTPS Upgrade Path**: Proxies start HTTP-only, seamlessly upgrade to HTTPS when certificate ready
+29. **Enhanced CLI Client**: Smart table formatting with context-aware data display
+30. **Async Redis Storage**: Unified async storage layer with connection pooling
+31. **Streaming Response Handling**: Efficient handling of large responses and real-time data
+32. **Async Certificate Operations**: Non-blocking ACME certificate generation and renewal
+33. **Parallel Request Processing**: Async architecture enables true parallel processing
 
 ## MCP 2025-06-18 Compliance Summary
 
@@ -1126,6 +1180,131 @@ To ensure MCP compliance for any proxy:
 1. Set protected resource metadata: `just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]`
 2. Enable auth on proxy: `just proxy-auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]`
 3. Verify metadata endpoint: `curl https://<proxy>/.well-known/oauth-protected-resource`
+
+## OAuth HTTPS Proxy Client
+
+### Overview
+The `oauth-https-proxy-client` is a Python CLI tool that provides enhanced interaction with the proxy system. It features intelligent table formatting, context-aware data display, and comprehensive command coverage.
+
+### Installation
+```bash
+# Install via pixi (recommended)
+pixi install
+
+# Or install directly
+pip install -e ./oauth-https-proxy-client
+```
+
+### Client Features
+- **Enhanced Table Formatting**: Smart type detection with contextual column layouts
+- **Visual Status Indicators**: Color-coded statuses with icons (● active, ◌ pending, ✗ error)
+- **Relative Time Display**: Shows "5m ago" instead of timestamps for recent events
+- **Smart Data Summaries**: Complex objects shown with meaningful summaries
+- **Empty State Messages**: Helpful commands shown when no data exists
+- **Multiple Output Formats**: JSON, YAML, CSV, and enhanced tables
+- **Alternating Row Colors**: Improved readability with subtle row striping
+- **Context-Aware Columns**: Different layouts for tokens, proxies, services, routes, logs
+- **HTTP Status Coloring**: 2xx green, 3xx yellow, 4xx red, 5xx bold red
+- **Port Mapping Display**: Clear visualization of port mappings (3000→80)
+- **Resource Summaries**: CPU/memory limits shown concisely (512m/1cpu)
+
+### Client Configuration
+The client can be configured via:
+- **Environment Variables**: `TOKEN`, `ADMIN_TOKEN`, `API_URL`
+- **Command Line Options**: `--token`, `--base-url`, `--format`
+- **Configuration File**: `~/.config/proxy-client/config.yml`
+
+### Enhanced Display Examples
+
+#### Token List Display
+```
+┌──────────────┬──────────────────────┬──────────┬────────┐
+│ Token Name   │ Certificate Email    │ Created  │ Owner  │
+├──────────────┼──────────────────────┼──────────┼────────┤
+│ admin        │ admin@example.com    │ 2d ago   │ —      │
+│ developer    │ dev@example.com      │ 5h ago   │ admin  │
+└──────────────┴──────────────────────┴──────────┴────────┘
+```
+
+#### Proxy Status Display
+```
+┌─────────────────┬──────────────────┬──────────────┬──────┬──────────────┐
+│ Hostname        │ Target           │ Status       │ Auth │ Certificate  │
+├─────────────────┼──────────────────┼──────────────┼──────┼──────────────┤
+│ api.example.com │ backend:3000     │ HTTP | HTTPS✓│ ✓    │ api-cert     │
+│ app.example.com │ localhost:8080   │ HTTP | HTTPS⚠│ ✗    │ —            │
+└─────────────────┴──────────────────┴──────────────┴──────┴──────────────┘
+Summary: 2 proxies | 1 HTTPS | 1 with auth
+```
+
+#### Service Display with Ports
+```
+┌─────────────┬──────────┬──────────┬─────────────┬───────────┐
+│ Service     │ Type     │ Status   │ Ports       │ Resources │
+├─────────────┼──────────┼──────────┼─────────────┼───────────┤
+│ my-app      │ docker   │ ● running│ 3000→80     │ 512m/1cpu │
+│ redis       │ docker   │ ● running│ 6379→6379   │ 256m/0.5cpu│
+│ api-gateway │ external │ ● active │ —           │ —         │
+└─────────────┴──────────┴──────────┴─────────────┴───────────┘
+Summary: 2 Docker | 1 External
+```
+
+### Enhanced Table Formatter Architecture
+
+The client includes an intelligent table formatting system that automatically detects data types and applies appropriate formatting:
+
+#### Type Detection
+The formatter automatically detects these data types:
+- **tokens**: Detected by presence of `token` or `cert_email` fields
+- **certificates**: Detected by `cert_name` or `fullchain_pem` fields  
+- **proxies**: Detected by `hostname` and `target_url` fields
+- **services**: Detected by `service_name` or `image` fields
+- **routes**: Detected by `route_id` or `path_pattern` fields
+- **oauth_clients**: Detected by `client_id` and `client_secret` fields
+- **logs**: Detected by `client_ip` or `request_path` fields
+
+#### Column Configurations
+Each data type has custom column configurations:
+```python
+{
+  'columns': ['name', 'status', 'created_at'],  # Fields to display
+  'headers': ['Name', 'Status', 'Created'],      # Column headers
+  'styles': ['bold cyan', 'status', 'date'],     # Formatting styles
+  'box': ROUNDED,                                # Table border style
+}
+```
+
+#### Smart Formatting Styles
+- **status**: Color-coded with icons (● green, ◌ yellow, ✗ red)
+- **date**: Relative time for recent dates (5m ago, 2h ago, 3d ago)
+- **bool**: Checkmarks ✓ or crosses ✗ with colors
+- **number**: K/M suffixes for large numbers
+- **status_code**: HTTP status code coloring
+- **mono**: Monospace font for IDs and tokens
+
+### Client Usage Examples
+```bash
+# Use with environment variable
+export TOKEN=acm_your_token_here
+proxy-client token list
+
+# Use with command line option
+proxy-client --token acm_your_token_here proxy list
+
+# Different output formats
+proxy-client --format json service list
+proxy-client --format yaml cert list
+proxy-client --format csv route list
+
+# Interactive commands with prompts
+proxy-client proxy create api.example.com http://backend:3000
+proxy-client service create my-app nginx:latest --port 80
+
+# Advanced filtering and searching
+proxy-client log search --query "status:500" --hours 24
+proxy-client service list --type docker
+proxy-client route list-by-scope proxy
+```
 
 ## System Commands
 
@@ -1183,4 +1362,11 @@ just config-load <filename> [force]  # Load configuration from YAML backup
 just token-admin            # Generate admin token
 just docs-build            # Build documentation
 just oauth-test-tokens <server-url> [token]  # Generate test OAuth tokens for MCP client
+
+# Client commands (via proxy-client CLI)
+proxy-client --help         # Show all client commands
+proxy-client token list     # List tokens with enhanced formatting
+proxy-client proxy list     # List proxies with status indicators
+proxy-client service list   # List services with port mappings
+proxy-client log search     # Search logs with smart filtering
 ```
