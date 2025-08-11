@@ -32,7 +32,7 @@ def list_certificates(ctx, token):
             token_hash = token_info.get('hash')
             certs = [c for c in certs if c.get('owner_token_hash') == token_hash]
         
-        ctx.output(certs, title="Certificates")
+        ctx.output(certs, title="Certificates", data_type='certificates')
     except Exception as e:
         ctx.handle_error(e)
 

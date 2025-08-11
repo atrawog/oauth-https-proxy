@@ -6,10 +6,15 @@ from rich.table import Table
 from rich.text import Text
 from io import StringIO
 from .base import OutputFormatter
+from .enhanced_table import EnhancedTableFormatter
 
 
 class TableFormatter(OutputFormatter):
     """Format output as a rich table."""
+    
+    def __init__(self):
+        """Initialize formatter with enhanced capabilities."""
+        self.enhanced = EnhancedTableFormatter()
     
     def format(self, data: Any, **kwargs) -> str:
         """Format data as a table.
@@ -23,10 +28,19 @@ class TableFormatter(OutputFormatter):
                 - max_width: Maximum column width (default: None)
                 - style: Table style (default: 'bold cyan')
                 - highlight: Highlight rows (default: True)
+                - data_type: Hint for data type ('tokens', 'proxies', etc.)
+                - enhanced: Use enhanced formatting (default: True)
         
         Returns:
             Table formatted string
         """
+        # Use enhanced formatter if available and not explicitly disabled
+        if kwargs.get('enhanced', True):
+            try:
+                return self.enhanced.format(data, **kwargs)
+            except Exception:
+                # Fall back to basic formatter on any error
+                pass
         # Convert single dict to list
         if isinstance(data, dict) and not any(isinstance(v, (list, dict)) for v in data.values()):
             data = [data]

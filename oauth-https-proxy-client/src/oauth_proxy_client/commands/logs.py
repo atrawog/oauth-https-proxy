@@ -42,7 +42,7 @@ def search_logs(ctx, query, hours, hostname, status, limit):
             params['status'] = status
         
         logs = client.get_sync('/api/v1/logs/search', params)
-        ctx.output(logs, title="Log Search Results")
+        ctx.output(logs, title="Log Search Results", data_type='logs')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -63,7 +63,7 @@ def logs_by_ip(ctx, ip, hours, limit):
         }
         
         logs = client.get_sync(f'/api/v1/logs/ip/{ip}', params)
-        ctx.output(logs, title=f"Logs from IP: {ip}")
+        ctx.output(logs, title=f"Logs from IP: {ip}", data_type='logs')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -84,7 +84,7 @@ def logs_by_client(ctx, client_id, hours, limit):
         }
         
         logs = client.get_sync(f'/api/v1/logs/client/{client_id}', params)
-        ctx.output(logs, title=f"Logs from Client: {client_id}")
+        ctx.output(logs, title=f"Logs from Client: {client_id}", data_type='logs')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -106,7 +106,7 @@ def show_errors(ctx, hours, include_warnings, limit):
         }
         
         errors = client.get_sync('/api/v1/logs/errors', params)
-        ctx.output(errors, title="Recent Errors")
+        ctx.output(errors, title="Recent Errors", data_type='logs')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -222,7 +222,7 @@ def logs_by_host(ctx, hostname, hours, limit):
         }
         
         logs = client.get_sync(f'/api/v1/logs/host/{hostname}', params)
-        ctx.output(logs, title=f"Logs for hostname: {hostname}")
+        ctx.output(logs, title=f"Logs for hostname: {hostname}", data_type='logs')
     except Exception as e:
         ctx.handle_error(e)
 

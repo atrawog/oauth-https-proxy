@@ -28,7 +28,7 @@ def list_tokens(ctx):
             if 'token' in token:
                 token['token'] = token['token'][:20] + '...' if len(token['token']) > 20 else token['token']
         
-        ctx.output(tokens, title="API Tokens")
+        ctx.output(tokens, title="API Tokens", data_type='tokens')
     except Exception as e:
         ctx.handle_error(e)
 

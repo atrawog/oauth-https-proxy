@@ -20,7 +20,7 @@ def list_proxies(ctx):
     try:
         client = ctx.ensure_client()
         proxies = client.get_sync('/api/v1/proxy/targets/')
-        ctx.output(proxies, title="Proxy Targets")
+        ctx.output(proxies, title="Proxy Targets", data_type='proxies')
     except Exception as e:
         ctx.handle_error(e)
 

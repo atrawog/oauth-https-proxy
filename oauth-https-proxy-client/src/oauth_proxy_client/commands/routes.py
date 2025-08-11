@@ -33,7 +33,7 @@ def list_routes(ctx, scope, formatted):
             if scope != 'all':
                 routes = [r for r in routes if r.get('scope') == scope]
             
-            ctx.output(routes, title=f"Routes ({scope})")
+            ctx.output(routes, title=f"Routes ({scope})", data_type='routes')
     except Exception as e:
         ctx.handle_error(e)
 

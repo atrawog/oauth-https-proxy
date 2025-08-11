@@ -28,7 +28,7 @@ def list_services(ctx, service_type):
         else:  # external
             services = client.get_sync('/api/v1/services/external')
         
-        ctx.output(services, title=f"Services ({service_type})")
+        ctx.output(services, title=f"Services ({service_type})", data_type='services')
     except Exception as e:
         ctx.handle_error(e)
 

@@ -33,7 +33,7 @@ def list_clients(ctx, active_only):
             params['active_only'] = 'true'
         
         clients = client.get_sync('/api/v1/oauth/clients', params)
-        ctx.output(clients, title="OAuth Clients")
+        ctx.output(clients, title="OAuth Clients", data_type='oauth_clients')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -65,7 +65,7 @@ def list_sessions(ctx):
     try:
         client = ctx.ensure_client()
         sessions = client.get_sync('/api/v1/oauth/sessions')
-        ctx.output(sessions, title="Active OAuth Sessions")
+        ctx.output(sessions, title="Active OAuth Sessions", data_type='oauth_sessions')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -283,7 +283,7 @@ def list_oauth_tokens(ctx, client_id, username):
             params['username'] = username
         
         tokens = client.get_sync('/api/v1/oauth/tokens', params)
-        ctx.output(tokens, title="OAuth Access Tokens")
+        ctx.output(tokens, title="OAuth Access Tokens", data_type='oauth_tokens')
     except Exception as e:
         ctx.handle_error(e)
 
@@ -310,7 +310,7 @@ def list_client_tokens(ctx, client_id):
     try:
         client = ctx.ensure_client()
         tokens = client.get_sync(f'/api/v1/oauth/clients/{client_id}/tokens')
-        ctx.output(tokens, title=f"Tokens for client: {client_id}")
+        ctx.output(tokens, title=f"Tokens for client: {client_id}", data_type='oauth_tokens')
     except Exception as e:
         ctx.handle_error(e)
 
