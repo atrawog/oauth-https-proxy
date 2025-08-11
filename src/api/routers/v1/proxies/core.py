@@ -160,7 +160,7 @@ def create_core_router(storage, cert_manager):
         # Use workflow orchestrator for complete instance creation
         logger.info(f"Initiating workflow for proxy creation: {request.hostname}")
         try:
-            from src.async_storage.redis_stream_publisher import RedisStreamPublisher
+            from src.storage.redis_stream_publisher import RedisStreamPublisher
             
             redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
             publisher = RedisStreamPublisher(redis_url=redis_url)

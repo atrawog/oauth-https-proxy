@@ -109,9 +109,59 @@ class InstanceWorkflowOrchestrator:
         )
         logger.info("[WORKFLOW] Pending task created")
         
+        # CRITICAL FIX: Publish events for all existing proxies on startup
+        await self._publish_events_for_existing_proxies()
+        
         logger.info("[WORKFLOW] Instance workflow orchestrator started with event processing")
         sys.stderr.flush()
         sys.stdout.flush()
+    
+    async def _publish_events_for_existing_proxies(self):
+        """Publish proxy_creation_requested events for all existing proxies on startup."""
+        logger.info("[WORKFLOW] Publishing events for existing proxies...")
+        
+        try:
+            # Get all existing proxies
+            all_proxies = []
+            if self.async_storage:
+                all_proxies = await self.async_storage.list_proxy_targets()
+            elif self.storage:
+                all_proxies = self.storage.list_proxy_targets()
+            
+            # Skip localhost and other special proxies
+            skip_hostnames = ['localhost', '127.0.0.1']
+            
+            count = 0
+            for proxy in all_proxies:
+                hostname = proxy.hostname if hasattr(proxy, 'hostname') else proxy.get('hostname')
+                
+                if hostname in skip_hostnames:
+                    logger.debug(f"[WORKFLOW] Skipping special hostname: {hostname}")
+                    continue
+                
+                logger.info(f"[WORKFLOW] Publishing proxy_creation_requested for existing proxy: {hostname}")
+                
+                # Publish event to trigger instance creation
+                event_data = {
+                    "hostname": hostname,
+                    "target_url": proxy.target_url if hasattr(proxy, 'target_url') else proxy.get('target_url'),
+                    "enable_http": proxy.enable_http if hasattr(proxy, 'enable_http') else proxy.get('enable_http', True),
+                    "enable_https": proxy.enable_https if hasattr(proxy, 'enable_https') else proxy.get('enable_https', True),
+                    "cert_name": proxy.cert_name if hasattr(proxy, 'cert_name') else proxy.get('cert_name'),
+                    "owner_token_hash": proxy.owner_token_hash if hasattr(proxy, 'owner_token_hash') else proxy.get('owner_token_hash'),
+                    "created_by": proxy.created_by if hasattr(proxy, 'created_by') else proxy.get('created_by')
+                }
+                
+                await self.publisher.publish_event("proxy_creation_requested", event_data)
+                count += 1
+                
+                # Small delay to avoid overwhelming the system
+                await asyncio.sleep(0.1)
+            
+            logger.info(f"[WORKFLOW] Published events for {count} existing proxies")
+            
+        except Exception as e:
+            logger.error(f"[WORKFLOW] Error publishing events for existing proxies: {e}", exc_info=True)
     
     async def handle_workflow_event(self, event: Dict[str, Any]):
         """

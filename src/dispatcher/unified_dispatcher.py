@@ -1066,19 +1066,66 @@ class UnifiedMultiInstanceServer:
         logger.info(f"[STREAM_EVENT] Processing {event_type} for {hostname}")
         
         try:
-            # REMOVED: Legacy proxy_created handler - workflow orchestrator handles this now
+            if event_type == 'proxy_created':
+                # Create instance for new proxy
+                logger.info(f"[STREAM_EVENT] Creating instance for {hostname}")
+                await self.create_instance_for_proxy(hostname)
+                logger.info(f"[STREAM_EVENT] Instance created for {hostname}")
             
-            if event_type == 'proxy_deleted':
+            elif event_type == 'proxy_deleted':
                 # Remove instance for deleted proxy
                 logger.info(f"[STREAM_EVENT] Removing instance for {hostname}")
                 await self.remove_instance_for_proxy(hostname)
                 logger.info(f"[STREAM_EVENT] Instance removed for {hostname}")
                 
-            # REMOVED: Legacy certificate_ready handler - workflow orchestrator handles this now
+            elif event_type == 'certificate_ready':
+                # Update instance when certificate becomes available
+                logger.info(f"[STREAM_EVENT] Certificate ready for {hostname}")
+                await self.update_instance_certificate(hostname)
+                logger.info(f"[STREAM_EVENT] Certificate applied for {hostname}")
             
-            # REMOVED: Legacy create_http_instance handler - workflow orchestrator handles this now
+            elif event_type == 'create_http_instance':
+                # The workflow orchestrator wants us to create an HTTP instance
+                logger.info(f"[STREAM_EVENT] Creating HTTP instance for {hostname}")
+                await self.create_instance_for_proxy(hostname)
+                
+                # Publish confirmation event
+                from ..storage.redis_stream_publisher import RedisStreamPublisher
+                redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+                publisher = RedisStreamPublisher(redis_url=redis_url)
+                await publisher.publish_event("http_instance_started", {
+                    "hostname": hostname,
+                    "port": self.next_http_port - 1  # Last allocated port
+                })
+                await publisher.close()
+                logger.info(f"[STREAM_EVENT] HTTP instance created for {hostname}")
                     
-            # REMOVED: Legacy create_https_instance handler - workflow orchestrator handles this now
+            elif event_type == 'create_https_instance':
+                # The workflow orchestrator wants us to create an HTTPS instance
+                # This typically happens when a certificate becomes ready
+                logger.info(f"[STREAM_EVENT] Creating HTTPS instance for {hostname}")
+                
+                # Find existing instance and update it with HTTPS
+                for instance in self.instances:
+                    if hostname in instance.domains:
+                        # Get certificate
+                        proxy_target = self.https_server.manager.storage.get_proxy_target(hostname)
+                        if proxy_target and proxy_target.cert_name:
+                            cert = self.https_server.manager.get_certificate(proxy_target.cert_name)
+                            if cert:
+                                instance.cert = cert
+                                await instance.start_https()
+                                
+                                # Update dispatcher registration
+                                self.dispatcher.register_domain(
+                                    [hostname],
+                                    instance.http_port,
+                                    instance.https_port,
+                                    enable_http=proxy_target.enable_http,
+                                    enable_https=True
+                                )
+                                logger.info(f"[STREAM_EVENT] HTTPS instance created for {hostname}")
+                        break
                 
             elif event_type == 'proxy_updated':
                 # Handle proxy updates
