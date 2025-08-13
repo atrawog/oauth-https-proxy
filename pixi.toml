@@ -44,6 +44,7 @@ mcp-echo-streamablehttp-server-stateful = { path = "./mcp-echo-streamablehttp-se
 mcp-echo-streamablehttp-server-stateless = { path = "./mcp-echo-streamablehttp-server-stateless", editable = true }
 mcp-http-validator = { path = "./mcp-http-validator", editable = true }
 oauth-https-proxy-client = { path = "./oauth-https-proxy-client", editable = true }
+mcp-http-echo-server = { path = "./mcp-http-echo-server", editable = true }
 
 [tasks]
 test = "pytest tests/ -v"
