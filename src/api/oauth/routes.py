@@ -46,7 +46,13 @@ def get_external_url(request: Request, settings: Settings) -> str:
 
 
 def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthManager) -> APIRouter:
-    """Create OAuth router with all endpoints using Authlib ResourceProtector"""
+    """Create OAuth router with all endpoints using Authlib ResourceProtector
+    
+    Args:
+        settings: OAuth settings
+        redis_manager: Redis manager for state management
+        auth_manager: Authentication manager
+    """
     router = APIRouter()
 
     # Create AsyncResourceProtector instance - defer Redis client access until runtime
@@ -102,7 +108,21 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     @router.get("/.well-known/oauth-authorization-server")
     async def oauth_metadata(request: Request):
         """Server metadata shrine - reveals our OAuth capabilities"""
-        # Get the external URL for this service
+        # Try to get storage from app state for proxy-specific configuration
+        storage = getattr(request.app.state, 'storage', None)
+        if storage:
+            # Use metadata handler for proxy-specific configuration
+            from .metadata_handler import OAuthMetadataHandler
+            metadata_handler = OAuthMetadataHandler(settings, storage)
+            
+            # Extract hostname from request headers to get proxy-specific config
+            hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+            if not hostname:
+                hostname = request.headers.get("host", "").split(":")[0]
+            
+            return await metadata_handler.get_authorization_server_metadata(request, hostname)
+        
+        # Fall back to default metadata if no storage
         api_url = get_external_url(request, settings)
         
         return {

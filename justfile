@@ -238,6 +238,34 @@ proxy-resource-clear hostname token="${ADMIN_TOKEN}":
 proxy-resource-list token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client proxy resource list
 
+# OAuth Authorization Server Management
+# ============================================
+
+# Set OAuth authorization server metadata for a proxy
+proxy-oauth-server-set hostname issuer="" scopes="" grant-types="" response-types="" token-auth-methods="" claims="" pkce-required="false" custom-metadata="{}" override-defaults="false" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client proxy oauth-server set {{hostname}} \
+        {{ if issuer != "" { "--issuer " + issuer } else { "" } }} \
+        {{ if scopes != "" { "--scopes '" + scopes + "'" } else { "" } }} \
+        {{ if grant-types != "" { "--grant-types '" + grant-types + "'" } else { "" } }} \
+        {{ if response-types != "" { "--response-types '" + response-types + "'" } else { "" } }} \
+        {{ if token-auth-methods != "" { "--token-auth-methods '" + token-auth-methods + "'" } else { "" } }} \
+        {{ if claims != "" { "--claims '" + claims + "'" } else { "" } }} \
+        {{ if pkce-required == "true" { "--pkce-required" } else { "--no-pkce-required" } }} \
+        {{ if custom-metadata != "{}" { "--custom-metadata '" + custom-metadata + "'" } else { "" } }} \
+        {{ if override-defaults == "true" { "--override-defaults" } else { "--no-override-defaults" } }}
+
+# Show OAuth server configuration for a proxy
+proxy-oauth-server-show hostname token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client proxy oauth-server show {{hostname}}
+
+# Clear OAuth server configuration for a proxy
+proxy-oauth-server-clear hostname token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client proxy oauth-server clear {{hostname}} --force
+
+# List proxies with custom OAuth server configurations
+proxy-oauth-server-list token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client proxy oauth-server list
+
 # ============================================================================
 # ROUTE MANAGEMENT (Migrated to proxy-client)
 # ============================================================================

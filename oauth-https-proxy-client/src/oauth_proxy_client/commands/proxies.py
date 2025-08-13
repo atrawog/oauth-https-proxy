@@ -273,28 +273,28 @@ def set_resource(ctx, hostname, endpoint, scopes, stateful, override_backend, be
         client = ctx.ensure_client()
         
         data = {
-            'resource_endpoint': endpoint,
-            'resource_scopes': [s.strip() for s in scopes.split(',')],
-            'resource_stateful': stateful,
-            'resource_override_backend': override_backend,
-            'resource_bearer_methods': [m.strip() for m in bearer_methods.split(',')],
-            'resource_documentation_suffix': doc_suffix,
+            'endpoint': endpoint,
+            'scopes': [s.strip() for s in scopes.split(',')],
+            'stateful': stateful,
+            'override_backend': override_backend,
+            'bearer_methods': [m.strip() for m in bearer_methods.split(',')],
+            'documentation_suffix': doc_suffix,
         }
         
         # Parse JSON fields
         try:
-            data['resource_server_info'] = json.loads(server_info) if server_info != '{}' else {}
+            data['server_info'] = json.loads(server_info) if server_info != '{}' else {}
         except json.JSONDecodeError:
             console.print(f"[red]Invalid JSON for server-info: {server_info}[/red]")
             return
             
         try:
-            data['resource_custom_metadata'] = json.loads(custom_metadata) if custom_metadata != '{}' else {}
+            data['custom_metadata'] = json.loads(custom_metadata) if custom_metadata != '{}' else {}
         except json.JSONDecodeError:
             console.print(f"[red]Invalid JSON for custom-metadata: {custom_metadata}[/red]")
             return
         
-        result = client.post_sync(f'/api/v1/proxy/targets/{hostname}/mcp', data)
+        result = client.post_sync(f'/api/v1/proxy/targets/{hostname}/resource', data)
         
         console.print(f"[green]Protected resource metadata configured for {hostname}![/green]")
         ctx.output(result)
@@ -309,7 +309,7 @@ def show_resource(ctx, hostname):
     """Show protected resource metadata for a proxy."""
     try:
         client = ctx.ensure_client()
-        resource_config = client.get_sync(f'/api/v1/proxy/targets/{hostname}/mcp')
+        resource_config = client.get_sync(f'/api/v1/proxy/targets/{hostname}/resource')
         ctx.output(resource_config, title=f"Protected Resource Config: {hostname}")
     except Exception as e:
         ctx.handle_error(e)
@@ -327,7 +327,7 @@ def clear_resource(ctx, hostname, force):
                 return
         
         client = ctx.ensure_client()
-        client.delete_sync(f'/api/v1/proxy/targets/{hostname}/mcp')
+        client.delete_sync(f'/api/v1/proxy/targets/{hostname}/resource')
         
         console.print(f"[green]Protected resource metadata cleared for {hostname}![/green]")
     except Exception as e:
@@ -342,6 +342,121 @@ def list_resources(ctx):
         client = ctx.ensure_client()
         resources = client.get_sync('/api/v1/resources/')
         ctx.output(resources, title="Protected Resources")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+# OAuth Server subcommands
+@proxy_group.group('oauth-server')
+def proxy_oauth_server():
+    """Manage OAuth authorization server configuration."""
+    pass
+
+
+@proxy_oauth_server.command('set')
+@click.argument('hostname')
+@click.option('--issuer', help='Custom issuer URL')
+@click.option('--scopes', help='Comma-separated supported scopes')
+@click.option('--grant-types', help='Comma-separated grant types')
+@click.option('--response-types', help='Comma-separated response types')
+@click.option('--token-auth-methods', help='Comma-separated token auth methods')
+@click.option('--claims', help='Comma-separated supported claims')
+@click.option('--pkce-required/--no-pkce-required', default=False, help='Require PKCE')
+@click.option('--custom-metadata', help='JSON string of custom metadata')
+@click.option('--override-defaults/--no-override-defaults', default=False, help='Override all defaults')
+@click.pass_obj
+def set_oauth_server(ctx, hostname, issuer, scopes, grant_types, response_types, 
+                     token_auth_methods, claims, pkce_required, custom_metadata, override_defaults):
+    """Configure OAuth authorization server metadata for a proxy."""
+    try:
+        import json
+        client = ctx.ensure_client()
+        
+        data = {
+            'pkce_required': pkce_required,
+            'override_defaults': override_defaults
+        }
+        
+        if issuer:
+            data['issuer'] = issuer
+        if scopes:
+            data['scopes'] = scopes.split(',')
+        if grant_types:
+            data['grant_types'] = grant_types.split(',')
+        if response_types:
+            data['response_types'] = response_types.split(',')
+        if token_auth_methods:
+            data['token_auth_methods'] = token_auth_methods.split(',')
+        if claims:
+            data['claims'] = claims.split(',')
+        if custom_metadata:
+            data['custom_metadata'] = json.loads(custom_metadata)
+        
+        result = client.post_sync(f'/api/v1/proxy/targets/{hostname}/oauth-server', data)
+        
+        console.print(f"[green]✓ OAuth server configuration updated for {hostname}![/green]")
+        if result.get('oauth_server_config'):
+            config = result['oauth_server_config']
+            if config.get('issuer'):
+                console.print(f"  Issuer: {config['issuer']}")
+            if config.get('scopes'):
+                console.print(f"  Scopes: {', '.join(config['scopes'])}")
+            if config.get('override_defaults'):
+                console.print(f"  [yellow]Override defaults: Enabled[/yellow]")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_oauth_server.command('show')
+@click.argument('hostname')
+@click.pass_obj
+def show_oauth_server(ctx, hostname):
+    """Show OAuth server configuration for a proxy."""
+    try:
+        client = ctx.ensure_client()
+        result = client.get_sync(f'/api/v1/proxy/targets/{hostname}/oauth-server')
+        
+        if result.get('status') == 'not_configured':
+            console.print(f"[yellow]No custom OAuth server configuration for {hostname}[/yellow]")
+        else:
+            ctx.output(result.get('oauth_server_config', {}), 
+                      title=f"OAuth Server Config: {hostname}")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_oauth_server.command('clear')
+@click.argument('hostname')
+@click.option('--force', '-f', is_flag=True, help='Skip confirmation')
+@click.pass_obj
+def clear_oauth_server(ctx, hostname, force):
+    """Clear OAuth server configuration for a proxy."""
+    try:
+        if not force:
+            if not Confirm.ask(f"Clear OAuth server configuration for '{hostname}'?", default=False):
+                return
+        
+        client = ctx.ensure_client()
+        client.delete_sync(f'/api/v1/proxy/targets/{hostname}/oauth-server')
+        
+        console.print(f"[green]OAuth server configuration cleared for {hostname}![/green]")
+    except Exception as e:
+        ctx.handle_error(e)
+
+
+@proxy_oauth_server.command('list')
+@click.pass_obj
+def list_oauth_servers(ctx):
+    """List proxies with custom OAuth server configurations."""
+    try:
+        client = ctx.ensure_client()
+        result = client.get_sync('/api/v1/proxy/targets/oauth-servers/configured')
+        
+        if result.get('count', 0) == 0:
+            console.print("[yellow]No proxies with custom OAuth server configurations[/yellow]")
+        else:
+            ctx.output(result.get('proxies', []), 
+                      title="Proxies with OAuth Server Config")
     except Exception as e:
         ctx.handle_error(e)
 

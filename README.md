@@ -21,6 +21,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Token-Based API**: All administrative operations require bearer tokens
 - **OAuth Protection**: Protect any proxied service with OAuth authentication
 - **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist
+- **Per-Proxy OAuth Metadata**: Each proxy can serve custom OAuth authorization server metadata
 - **Certificate Isolation**: Multi-domain certificates with ownership tracking
 - **Redis-Only Storage**: No filesystem persistence for enhanced security
 - **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
@@ -262,6 +263,10 @@ just proxy-resource-set mcp.yourdomain.com [token] [endpoint] [scopes]
 
 # Your protected resource is now accessible at https://mcp.yourdomain.com/mcp
 # with full OAuth protection and MCP compliance!
+
+# IMPORTANT: Do NOT create specific routes for paths that proxies already handle!
+# The proxy automatically forwards ALL paths to the backend - adding routes
+# for specific paths like /mcp will bypass OAuth protection.
 ```
 
 ### For Claude Desktop
@@ -341,6 +346,37 @@ just route-list
 ```
 
 ## Advanced Usage
+
+### Per-Proxy OAuth Server Metadata
+
+Each proxy can serve its own OAuth authorization server metadata with custom configuration:
+
+```bash
+# Configure custom OAuth server metadata for a proxy
+just proxy-oauth-server-set everything.yourdomain.com \
+  "https://auth.yourdomain.com" \                    # Custom issuer
+  "mcp:read,mcp:write,everything:admin" \            # Custom scopes
+  "authorization_code,refresh_token" \               # Grant types
+  "code" \                                           # Response types
+  "client_secret_post,client_secret_basic" \        # Token auth methods
+  "sub,name,email,preferred_username" \             # Claims
+  true \                                             # PKCE required
+  '{"custom_field": "value"}' \                     # Custom metadata
+  true \                                             # Override defaults
+  [token]
+
+# View OAuth server configuration
+just proxy-oauth-server-show everything.yourdomain.com [token]
+
+# Clear custom OAuth server metadata (revert to defaults)
+just proxy-oauth-server-clear everything.yourdomain.com [token]
+```
+
+This allows different proxies to:
+- Use different OAuth issuers
+- Support different scopes per environment (dev vs prod)
+- Require PKCE for specific proxies
+- Add custom metadata fields for specific clients
 
 ### Multi-Domain Certificates
 
@@ -462,7 +498,13 @@ Authorization: Bearer your-admin-token
 #### Proxy Management (`/api/v1/proxy/targets/*`)
 - Create and manage reverse proxy configurations
 - OAuth authentication settings per proxy
+- Protected resource metadata configuration (RFC 9728)
+- OAuth authorization server metadata per proxy
 - Route filtering configuration
+- Key endpoints:
+  - `POST /api/v1/proxy/targets/{hostname}/resource` - Configure protected resource metadata
+  - `POST /api/v1/proxy/targets/{hostname}/oauth-server` - Configure OAuth server metadata
+  - `POST /api/v1/proxy/targets/{hostname}/auth` - Configure authentication
 
 #### Token Management (`/api/v1/tokens/*`)
 - API token creation and management
@@ -572,6 +614,13 @@ mcp-http-proxy/
 
 ## Recent Updates
 
+### Per-Proxy OAuth Server Metadata (NEW)
+- **Custom OAuth Metadata**: Each proxy can now serve its own OAuth authorization server metadata
+- **Environment-Specific Scopes**: Different scopes for dev/staging/production environments
+- **PKCE Control**: Require PKCE for specific proxies
+- **Custom Issuers**: Override the default issuer URL per proxy
+- **Flexible Configuration**: Mix and match OAuth settings across different proxies
+
 ### PROXY Protocol Support (NEW)
 - **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
 - **Unified HTTP/HTTPS**: Same mechanism works for both HTTP and HTTPS traffic
@@ -639,6 +688,22 @@ mcp-http-proxy/
    # Update DOCKER_GID in .env to match
    # Restart the proxy service
    just restart
+   ```
+
+5. **OAuth Protection Bypassed**
+   ```bash
+   # IMPORTANT: Never create specific routes for paths already handled by proxies!
+   # Example of WRONG approach:
+   # just route-create /mcp url http://backend:3000  # DON'T DO THIS!
+   
+   # The proxy already forwards ALL paths to the backend.
+   # Adding specific routes creates a bypass that skips OAuth.
+   
+   # Check for redundant routes:
+   just route-list | grep "your-path"
+   
+   # Delete any redundant routes:
+   just route-delete <route-id>
    ```
 
 ### Debugging Commands

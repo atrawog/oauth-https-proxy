@@ -50,6 +50,17 @@ class ProxyTarget(BaseModel):
     resource_documentation_suffix: Optional[str] = None  # Documentation URL suffix
     resource_custom_metadata: Optional[Dict[str, Any]] = None  # Custom metadata fields
     
+    # OAuth Authorization Server Metadata fields (configurable per-proxy)
+    oauth_server_issuer: Optional[str] = None  # Custom issuer URL
+    oauth_server_scopes: Optional[List[str]] = None  # Supported scopes
+    oauth_server_grant_types: Optional[List[str]] = None  # Grant types
+    oauth_server_response_types: Optional[List[str]] = None  # Response types
+    oauth_server_token_auth_methods: Optional[List[str]] = None  # Token auth methods
+    oauth_server_claims: Optional[List[str]] = None  # Supported claims
+    oauth_server_pkce_required: bool = False  # Require PKCE
+    oauth_server_custom_metadata: Optional[Dict[str, Any]] = None  # Custom fields
+    oauth_server_override_defaults: bool = False  # Use proxy config instead of defaults
+    
     @field_validator('auth_mode')
     @classmethod
     def validate_auth_mode(cls, v):
@@ -147,6 +158,16 @@ class ProxyTargetUpdate(BaseModel):
     resource_bearer_methods: Optional[List[str]] = None
     resource_documentation_suffix: Optional[str] = None
     resource_custom_metadata: Optional[Dict[str, Any]] = None
+    # OAuth Authorization Server Metadata fields
+    oauth_server_issuer: Optional[str] = None
+    oauth_server_scopes: Optional[List[str]] = None
+    oauth_server_grant_types: Optional[List[str]] = None
+    oauth_server_response_types: Optional[List[str]] = None
+    oauth_server_token_auth_methods: Optional[List[str]] = None
+    oauth_server_claims: Optional[List[str]] = None
+    oauth_server_pkce_required: Optional[bool] = None
+    oauth_server_custom_metadata: Optional[Dict[str, Any]] = None
+    oauth_server_override_defaults: Optional[bool] = None
     
     @field_validator('target_url')
     @classmethod
@@ -253,8 +274,10 @@ class ProxyResourceConfig(BaseModel):
     @field_validator('scopes')
     @classmethod
     def validate_scopes(cls, v):
+        # Allow any scope format for maximum flexibility
+        # OAuth 2.0 doesn't restrict scope formats
         for scope in v:
-            if not any(scope.startswith(prefix) for prefix in ["mcp:", "openid", "profile", "email", "read", "write", "admin"]):
+            if not scope or not isinstance(scope, str):
                 raise ValueError(f"Invalid scope: {scope}")
         return v
     
@@ -265,6 +288,50 @@ class ProxyResourceConfig(BaseModel):
         for method in v:
             if method not in valid_methods:
                 raise ValueError(f"Invalid bearer method: {method}")
+        return v
+
+
+class ProxyOAuthServerConfig(BaseModel):
+    """Request model for configuring proxy OAuth authorization server metadata."""
+    issuer: Optional[str] = None
+    scopes: Optional[List[str]] = None
+    grant_types: Optional[List[str]] = None
+    response_types: Optional[List[str]] = None
+    token_auth_methods: Optional[List[str]] = None
+    claims: Optional[List[str]] = None
+    pkce_required: bool = False
+    custom_metadata: Optional[Dict[str, Any]] = None
+    override_defaults: bool = False
+    
+    @field_validator('scopes')
+    @classmethod
+    def validate_scopes(cls, v):
+        # Allow any scope format for maximum flexibility
+        # OAuth 2.0 doesn't restrict scope formats
+        if v is not None:
+            for scope in v:
+                if not scope or not isinstance(scope, str):
+                    raise ValueError(f"Invalid scope: {scope}")
+        return v
+    
+    @field_validator('grant_types')
+    @classmethod
+    def validate_grant_types(cls, v):
+        if v is not None:
+            valid_types = ["authorization_code", "refresh_token", "client_credentials", "implicit"]
+            for grant_type in v:
+                if grant_type not in valid_types:
+                    raise ValueError(f"Invalid grant type: {grant_type}")
+        return v
+    
+    @field_validator('response_types')
+    @classmethod
+    def validate_response_types(cls, v):
+        if v is not None:
+            valid_types = ["code", "token", "id_token"]
+            for response_type in v:
+                if response_type not in valid_types:
+                    raise ValueError(f"Invalid response type: {response_type}")
         return v
 
 

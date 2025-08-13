@@ -468,7 +468,18 @@ just cert-show <name> [pem] [token]
   "resource_override_backend": false,
   "resource_bearer_methods": null,
   "resource_documentation_suffix": null,
-  "resource_custom_metadata": null
+  "resource_custom_metadata": null,
+  
+  // OAuth Authorization Server Metadata (per-proxy configuration)
+  "oauth_server_issuer": null,  // Custom issuer URL
+  "oauth_server_scopes": null,  // Supported scopes
+  "oauth_server_grant_types": null,  // Grant types
+  "oauth_server_response_types": null,  // Response types
+  "oauth_server_token_auth_methods": null,  // Token auth methods
+  "oauth_server_claims": null,  // Supported claims
+  "oauth_server_pkce_required": false,  // Require PKCE
+  "oauth_server_custom_metadata": null,  // Custom fields
+  "oauth_server_override_defaults": false  // Use proxy config instead of defaults
 }
 ```
 
@@ -557,9 +568,12 @@ When enabled, the proxy automatically serves:
 - `POST /api/v1/proxy/targets/{hostname}/auth` - Configure auth
 - `DELETE /api/v1/proxy/targets/{hostname}/auth` - Remove auth
 - `GET /api/v1/proxy/targets/{hostname}/auth` - Get auth config
-- `POST /api/v1/proxy/targets/{hostname}/mcp` - Configure MCP metadata
-- `DELETE /api/v1/proxy/targets/{hostname}/mcp` - Remove MCP metadata
-- `GET /api/v1/proxy/targets/{hostname}/mcp` - Get MCP configuration
+- `POST /api/v1/proxy/targets/{hostname}/resource` - Configure protected resource metadata (RFC 9728)
+- `DELETE /api/v1/proxy/targets/{hostname}/resource` - Remove protected resource metadata
+- `GET /api/v1/proxy/targets/{hostname}/resource` - Get protected resource configuration
+- `POST /api/v1/proxy/targets/{hostname}/oauth-server` - Configure OAuth authorization server metadata
+- `DELETE /api/v1/proxy/targets/{hostname}/oauth-server` - Remove OAuth server metadata
+- `GET /api/v1/proxy/targets/{hostname}/oauth-server` - Get OAuth server configuration
 - `GET /api/v1/proxy/targets/{hostname}/routes` - Get proxy routes
 - `PUT /api/v1/proxy/targets/{hostname}/routes` - Update proxy routes
 
@@ -590,6 +604,11 @@ just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-back
 just proxy-resource-clear <hostname> [token]
 just proxy-resource-show <hostname> [token]
 just proxy-resource-list [token]           # List protected resources
+
+# OAuth authorization server metadata configuration (per-proxy)
+just proxy-oauth-server-set <hostname> [issuer] [scopes] [grant-types] [response-types] [token-auth-methods] [claims] [pkce-required] [custom-metadata] [override-defaults] [token]
+just proxy-oauth-server-clear <hostname> [token]
+just proxy-oauth-server-show <hostname> [token]
 ```
 
 ### Route API Endpoints
@@ -1152,6 +1171,8 @@ workflow:consumer:info      # Consumer group metadata
 31. **Streaming Response Handling**: Efficient handling of large responses and real-time data
 32. **Async Certificate Operations**: Non-blocking ACME certificate generation and renewal
 33. **Parallel Request Processing**: Async architecture enables true parallel processing
+34. **Per-Proxy OAuth Server Metadata**: Each proxy can serve its own OAuth authorization server metadata with custom configuration
+35. **Route Bypass Protection**: Never create specific routes for paths that proxies already handle with OAuth protection
 
 ## MCP 2025-06-18 Compliance Summary
 
