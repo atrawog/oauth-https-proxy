@@ -1,0 +1,241 @@
+# Proxy Manager Documentation
+
+## Overview
+
+The Proxy Manager provides dynamic reverse proxy functionality with SSL termination, WebSocket support, and OAuth integration.
+
+## Core Features
+
+- Dynamic reverse proxy with SSL termination
+- WebSocket and SSE streaming support
+- Per-request certificate provisioning
+- Redis-backed configuration
+- OAuth authentication integration
+- Custom header injection
+- Route-based request handling
+
+## Configuration
+
+### Proxy Configuration
+- `PROXY_REQUEST_TIMEOUT` - Proxy request timeout in seconds (default: 120)
+- `PROXY_CONNECT_TIMEOUT` - Proxy connection timeout in seconds (default: 30)
+- `FETCHER_NAVIGATION_TIMEOUT` - Navigation timeout for fetcher service (default: 25)
+
+**Timeout Hierarchy**: The timeout values follow a hierarchy to prevent cascade failures:
+1. `FETCHER_NAVIGATION_TIMEOUT` (25s) - Shortest, for browser operations
+2. `PROXY_CONNECT_TIMEOUT` (30s) - For establishing proxy connections
+3. `PROXY_REQUEST_TIMEOUT` (120s) - Longest, for complete proxy requests
+
+## Proxy Target Schema
+
+```json
+{
+  "hostname": "api.example.com",
+  "target_url": "http://backend:3000",
+  "cert_name": "proxy-api-example-com",
+  "owner_token_hash": "sha256:...",
+  "created_by": "token-name",
+  "created_at": "2024-01-15T10:00:00Z",
+  "enabled": true,
+  "enable_http": true,
+  "enable_https": true,
+  "preserve_host_header": true,
+  "custom_headers": {"X-Custom": "value"},
+  "custom_response_headers": {"X-Response": "value"},
+  
+  // Authentication configuration
+  "auth_enabled": false,
+  "auth_proxy": null,
+  "auth_mode": "forward",
+  "auth_required_users": null,  // Per-proxy GitHub user allowlist
+  "auth_required_emails": null,
+  "auth_required_groups": null,
+  "auth_allowed_scopes": null,
+  "auth_allowed_audiences": null,
+  "auth_pass_headers": true,
+  "auth_cookie_name": "unified_auth_token",
+  "auth_header_prefix": "X-Auth-",
+  "auth_excluded_paths": null,
+  
+  // Route control
+  "route_mode": "all",
+  "enabled_routes": [],
+  "disabled_routes": [],
+  
+  // Protected resource metadata (optional)
+  "resource_endpoint": null,
+  "resource_scopes": null,
+  "resource_stateful": false,
+  "resource_versions": null,
+  "resource_server_info": null,
+  "resource_override_backend": false,
+  "resource_bearer_methods": null,
+  "resource_documentation_suffix": null,
+  "resource_custom_metadata": null,
+  
+  // OAuth Authorization Server Metadata (per-proxy configuration)
+  "oauth_server_issuer": null,  // Custom issuer URL
+  "oauth_server_scopes": null,  // Supported scopes
+  "oauth_server_grant_types": null,  // Grant types
+  "oauth_server_response_types": null,  // Response types
+  "oauth_server_token_auth_methods": null,  // Token auth methods
+  "oauth_server_claims": null,  // Supported claims
+  "oauth_server_pkce_required": false,  // Require PKCE
+  "oauth_server_custom_metadata": null,  // Custom fields
+  "oauth_server_override_defaults": false  // Use proxy config instead of defaults
+}
+```
+
+## Route Management
+
+Priority-based path routing with Redis storage and scope support:
+
+### Route Target Types
+- **port**: Forward to `localhost:<port>` (e.g., `3000`)
+- **service**: Forward to named service - Docker, external, or internal (e.g., `auth`, `api-gateway`)
+- **hostname**: Forward to proxy handling that hostname (e.g., `api.example.com`)
+- **url**: Forward to any URL directly (e.g., `http://backend:3000` or `https://api.example.com`)
+
+### Route Scopes
+Routes can be scoped to control their applicability:
+- **global**: Route applies to all proxies (default)
+- **proxy**: Route applies only to specified proxy hostnames
+
+When multiple routes match a request, they are evaluated by:
+1. Filtering by scope (global routes + proxy-specific routes for current proxy)
+2. Sorting by priority (higher values checked first)
+3. Matching path and methods
+
+## OAuth Integration
+
+```json
+{
+  "auth_enabled": true,
+  "auth_proxy": "auth.example.com",
+  "auth_mode": "forward",  // forward|redirect|passthrough
+  "auth_required_users": ["alice", "bob"],  // Per-proxy GitHub user allowlist (null=global default, ["*"]=all users)
+  "auth_required_emails": ["*@example.com"],
+  "auth_allowed_scopes": ["mcp:read", "mcp:write"],  // Optional: restrict token scopes
+  "auth_allowed_audiences": ["https://api.example.com"],  // Optional: restrict token audiences
+  "auth_pass_headers": true
+}
+```
+
+### Per-Proxy User Allowlists
+The `auth_required_users` field controls which GitHub users can authenticate for each proxy:
+- `null` - Use global default from `OAUTH_ALLOWED_GITHUB_USERS` environment variable
+- `["*"]` - Allow all GitHub users to authenticate
+- `["user1", "user2"]` - Allow only specific GitHub users
+
+This provides granular control over authentication at the proxy level. The field is checked at two points:
+1. **During OAuth callback** - GitHub users not in the list are rejected during authentication
+2. **During proxy access** - Token validation ensures the authenticated user is in the allowed list
+
+This dual-check ensures consistent access control throughout the authentication flow.
+
+## Protected Resource Metadata Configuration
+
+Enable protected resource metadata endpoints for proxies:
+```json
+{
+  "mcp_enabled": true,
+  "mcp_endpoint": "/mcp",  // MCP protocol endpoint path
+  "mcp_scopes": ["mcp:read", "mcp:write"],
+  "mcp_stateful": false,  // Whether server maintains session state
+  "mcp_override_backend": false  // Override backend's metadata endpoint
+}
+```
+
+When enabled, the proxy automatically serves:
+- `/.well-known/oauth-protected-resource` - Protected resource metadata
+- Proper WWW-Authenticate headers on 401 responses
+- Integration with OAuth for token validation
+
+## API Endpoints
+
+- `POST /api/v1/proxy/targets/` - Create proxy target
+- `GET /api/v1/proxy/targets/` - List all proxies (requires trailing slash)
+- `GET /api/v1/proxy/targets/{hostname}` - Get proxy details
+- `PUT /api/v1/proxy/targets/{hostname}` - Update proxy
+- `DELETE /api/v1/proxy/targets/{hostname}` - Delete proxy
+- `POST /api/v1/proxy/targets/{hostname}/auth` - Configure auth
+- `DELETE /api/v1/proxy/targets/{hostname}/auth` - Remove auth
+- `GET /api/v1/proxy/targets/{hostname}/auth` - Get auth config
+- `POST /api/v1/proxy/targets/{hostname}/resource` - Configure protected resource metadata (RFC 9728)
+- `DELETE /api/v1/proxy/targets/{hostname}/resource` - Remove protected resource metadata
+- `GET /api/v1/proxy/targets/{hostname}/resource` - Get protected resource configuration
+- `POST /api/v1/proxy/targets/{hostname}/oauth-server` - Configure OAuth authorization server metadata
+- `DELETE /api/v1/proxy/targets/{hostname}/oauth-server` - Remove OAuth server metadata
+- `GET /api/v1/proxy/targets/{hostname}/oauth-server` - Get OAuth server configuration
+- `GET /api/v1/proxy/targets/{hostname}/routes` - Get proxy routes
+- `PUT /api/v1/proxy/targets/{hostname}/routes` - Update proxy routes
+
+## Proxy Commands
+
+```bash
+# Create proxy with automatic certificate handling
+just proxy-create <hostname> <target-url> [staging] [preserve-host] [enable-http] [enable-https] [email] [token]
+just proxy-delete <hostname> [delete-cert] [force] [token]
+just proxy-list [token]
+just proxy-show <hostname> [token]
+
+# OAuth proxy authentication
+just proxy-auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]
+just proxy-auth-disable <hostname> [token]
+just proxy-auth-config <hostname> [users] [emails] [groups] [allowed-scopes] [allowed-audiences] [token]
+just proxy-auth-show <hostname> [token]
+
+# Examples of per-proxy user configuration:
+# Allow specific GitHub users:
+just proxy-auth-config api.example.com "alice,bob,charlie" "" "" "" "" $TOKEN
+# Allow all GitHub users:
+just proxy-auth-config api.example.com "*" "" "" "" "" $TOKEN
+# Use global default (OAUTH_ALLOWED_GITHUB_USERS):
+just proxy-auth-config api.example.com "" "" "" "" "" $TOKEN
+
+# Protected resource metadata configuration (OAuth 2.0 RFC 9728)
+just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]
+just proxy-resource-clear <hostname> [token]
+just proxy-resource-show <hostname> [token]
+just proxy-resource-list [token]           # List protected resources
+
+# OAuth authorization server metadata configuration (per-proxy)
+just proxy-oauth-server-set <hostname> [issuer] [scopes] [grant-types] [response-types] [token-auth-methods] [claims] [pkce-required] [custom-metadata] [override-defaults] [token]
+just proxy-oauth-server-clear <hostname> [token]
+just proxy-oauth-server-show <hostname> [token]
+```
+
+## Proxy App Architecture
+
+### Proxy App (Minimal ASGI)
+- Lightweight Starlette app with async handlers
+- ONLY proxy forwarding, no API
+- Per-instance async httpx client (isolated)
+- NO lifespan side effects
+- Clean shutdown without affecting others
+- Streaming response handling for large payloads
+
+### Request Flow
+
+1. **Request Reception**: Incoming request to proxy hostname
+2. **Route Matching**: Check routes by priority and scope
+3. **Authentication**: If auth enabled, validate via OAuth
+4. **Header Processing**: Add custom headers, preserve/modify host header
+5. **Target Resolution**: Resolve target URL from configuration
+6. **Request Forwarding**: Forward to backend with httpx
+7. **Response Streaming**: Stream response back to client
+8. **Header Injection**: Add custom response headers
+
+## Smart Certificate Handling
+
+Proxy creation automatically:
+1. Checks for existing certificates matching the hostname
+2. Creates new certificate if none exists (using environment defaults)
+3. Associates certificate with proxy for SSL termination
+
+## Related Documentation
+
+- [OAuth Service](../api/oauth/CLAUDE.md) - OAuth integration details
+- [Certificate Manager](../certmanager/CLAUDE.md) - SSL certificate management
+- [Routes](../api/routers/v1/routes.py) - Route management
+- [Dispatcher](../dispatcher/CLAUDE.md) - How proxies are served
