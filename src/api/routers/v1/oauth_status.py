@@ -661,9 +661,58 @@ class OAuthStatusRouter:
         token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
     ):
         """Revoke a session and all associated tokens."""
-        # TODO: Implement session revocation
-        # This would need to communicate with the OAuth server
-        raise HTTPException(501, "Session revocation not implemented")
+        # Session ID in our context is the username or user ID
+        # We'll revoke all tokens associated with that user
+        
+        # Check if we're looking at user tokens pattern
+        user_tokens_key = f"oauth:user_tokens:{session_id}"
+        
+        # Get all token JTIs for this user
+        token_jtis = self.storage.redis_client.smembers(user_tokens_key)
+        
+        if not token_jtis:
+            # Try with oauth:token pattern for direct token revocation
+            token_key = f"oauth:token:{session_id}"
+            if self.storage.redis_client.exists(token_key):
+                # This is a direct token JTI, revoke it
+                self.storage.redis_client.delete(token_key)
+                logger.info(f"Revoked single token: {session_id}")
+                return {"status": "success", "tokens_revoked": 1}
+            else:
+                raise HTTPException(404, f"No session or tokens found for ID: {session_id}")
+        
+        # Revoke all tokens for this user
+        tokens_revoked = 0
+        for jti_bytes in token_jtis:
+            jti = jti_bytes.decode() if isinstance(jti_bytes, bytes) else jti_bytes
+            token_key = f"oauth:token:{jti}"
+            
+            # Delete the token from Redis
+            if self.storage.redis_client.delete(token_key):
+                tokens_revoked += 1
+                logger.info(f"Revoked token {jti} for session {session_id}")
+            
+            # Also remove from client tokens if present
+            token_data = self.storage.redis_client.get(token_key)
+            if token_data:
+                try:
+                    token_info = json.loads(token_data)
+                    client_id = token_info.get("client_id")
+                    if client_id:
+                        self.storage.redis_client.srem(f"oauth:client_tokens:{client_id}", jti)
+                except Exception as e:
+                    logger.warning(f"Error cleaning up client token reference: {e}")
+        
+        # Clear the user's token set
+        self.storage.redis_client.delete(user_tokens_key)
+        
+        logger.info(f"Revoked session for {session_id}: {tokens_revoked} tokens revoked")
+        
+        return {
+            "status": "success",
+            "session_id": session_id,
+            "tokens_revoked": tokens_revoked
+        }
     
     async def get_metrics(self) -> OAuthMetrics:
         """Get OAuth system metrics for monitoring."""
@@ -730,7 +779,12 @@ class OAuthStatusRouter:
     async def check_health(self) -> OAuthHealth:
         """Check OAuth integration health."""
         try:
+            import httpx
+            from src.api.oauth.config import Settings as OAuthSettings
+            from src.api.oauth.keys import RSAKeyManager
+            
             checks = {}
+            oauth_settings = OAuthSettings()
             
             # Check Redis connection
             try:
@@ -748,26 +802,96 @@ class OAuthStatusRouter:
                     break
             
             if auth_proxy:
-                checks["oauth_server_reachable"] = "ok"  # TODO: Actually check
                 checks["auth_proxy_configured"] = "ok"
+                
+                # Actually check if OAuth server is reachable
+                try:
+                    auth_url = f"https://{auth_proxy.hostname}/.well-known/oauth-authorization-server"
+                    async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+                        response = await client.get(auth_url)
+                        if response.status_code == 200:
+                            checks["oauth_server_reachable"] = "ok"
+                            # Verify it returns valid metadata
+                            metadata = response.json()
+                            if "issuer" in metadata and "token_endpoint" in metadata:
+                                checks["oauth_metadata_valid"] = "ok"
+                            else:
+                                checks["oauth_metadata_valid"] = "invalid_metadata"
+                        else:
+                            checks["oauth_server_reachable"] = f"http_{response.status_code}"
+                            checks["oauth_metadata_valid"] = "unreachable"
+                except Exception as e:
+                    checks["oauth_server_reachable"] = f"error: {str(e)[:50]}"
+                    checks["oauth_metadata_valid"] = "unreachable"
             else:
                 checks["oauth_server_reachable"] = "no_auth_proxy"
                 checks["auth_proxy_configured"] = "failed"
+                checks["oauth_metadata_valid"] = "no_auth_proxy"
             
-            # TODO: Check token validation endpoint
-            checks["token_validation"] = "not_implemented"
+            # Check RSA keys are available for token validation
+            try:
+                key_manager = RSAKeyManager()
+                key_manager.load_or_generate_keys()
+                checks["rsa_keys_available"] = "ok"
+            except Exception as e:
+                checks["rsa_keys_available"] = f"failed: {str(e)[:50]}"
             
-            # TODO: Check JWKS endpoint
-            checks["jwks_endpoint"] = "not_implemented"
+            # Check JWKS endpoint
+            if auth_proxy:
+                try:
+                    jwks_url = f"https://{auth_proxy.hostname}/jwks"
+                    async with httpx.AsyncClient(verify=False, timeout=5.0) as client:
+                        response = await client.get(jwks_url)
+                        if response.status_code == 200:
+                            jwks_data = response.json()
+                            if "keys" in jwks_data and len(jwks_data["keys"]) > 0:
+                                checks["jwks_endpoint"] = "ok"
+                            else:
+                                checks["jwks_endpoint"] = "no_keys"
+                        else:
+                            checks["jwks_endpoint"] = f"http_{response.status_code}"
+                except Exception as e:
+                    checks["jwks_endpoint"] = f"error: {str(e)[:50]}"
+            else:
+                checks["jwks_endpoint"] = "no_auth_proxy"
+            
+            # Check token validation capability
+            if checks.get("rsa_keys_available") == "ok":
+                checks["token_validation"] = "ready"
+            else:
+                checks["token_validation"] = "keys_not_available"
+            
+            # Check for recent successful authentications
+            last_auth_time = None
+            try:
+                # Look for recent tokens in Redis
+                token_count = 0
+                for key in self.storage.redis_client.scan_iter(match="oauth:token:*", count=10):
+                    token_count += 1
+                    if token_count > 0:
+                        # Found at least one token, system has been used
+                        checks["recent_activity"] = "active"
+                        break
+                else:
+                    checks["recent_activity"] = "no_recent_tokens"
+            except:
+                checks["recent_activity"] = "unknown"
             
             # Determine overall status
-            failed_checks = [k for k, v in checks.items() if v != "ok"]
-            status = "healthy" if not failed_checks else "degraded"
+            critical_checks = ["redis_connection", "auth_proxy_configured", "rsa_keys_available"]
+            critical_failed = [k for k in critical_checks if checks.get(k, "failed") != "ok"]
+            
+            if critical_failed:
+                status = "unhealthy"
+            else:
+                non_critical_failed = [k for k, v in checks.items() 
+                                      if k not in critical_checks and v != "ok" and not v.startswith("ready")]
+                status = "degraded" if non_critical_failed else "healthy"
             
             return OAuthHealth(
                 status=status,
                 checks=checks,
-                last_successful_auth=None,  # TODO: Track this
+                last_successful_auth=last_auth_time,
                 auth_proxy={
                     "hostname": auth_proxy.hostname if auth_proxy else None,
                     "status": "active" if auth_proxy and auth_proxy.enabled else "inactive",

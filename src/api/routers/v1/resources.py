@@ -4,8 +4,13 @@ import logging
 from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel, Field, field_validator
+from authlib.jose import JsonWebToken
+from authlib.jose.errors import JoseError
+import redis
 
 from src.api.auth import get_current_token_info, require_admin
+from src.api.oauth.config import Settings as OAuthSettings
+from src.api.oauth.keys import RSAKeyManager
 
 logger = logging.getLogger(__name__)
 
@@ -171,18 +176,120 @@ def create_router(storage):
         if not storage.redis_client.exists(resource_key):
             raise HTTPException(404, f"Resource {full_uri} not found")
         
-        # This is a simplified validation - in production you would:
-        # 1. Decode the JWT token
-        # 2. Verify the signature using the OAuth server's public key
-        # 3. Check the 'aud' claim contains this resource URI
-        # 4. Check the token hasn't expired
-        # 5. Verify the requested scopes are included in the token
+        # Initialize OAuth components for validation
+        oauth_settings = OAuthSettings()
+        key_manager = RSAKeyManager()
+        try:
+            key_manager.load_or_generate_keys()
+        except Exception as e:
+            logger.error(f"Failed to load RSA keys for token validation: {e}")
+            return TokenValidationResponse(
+                valid=False,
+                reason="Internal error: Unable to load validation keys"
+            )
         
-        # For now, just return a basic response
-        return TokenValidationResponse(
-            valid=False,
-            reason="Token validation not implemented"
-        )
+        # Initialize JWT decoder
+        jwt = JsonWebToken(algorithms=[oauth_settings.jwt_algorithm])
+        
+        try:
+            # Decode and validate token
+            claims = None
+            if oauth_settings.jwt_algorithm == "RS256":
+                # Use RSA public key for RS256 verification
+                claims = jwt.decode(
+                    request.token,
+                    key_manager.public_key,
+                    claims_options={
+                        "iss": {"essential": True},
+                        "exp": {"essential": True},
+                        "jti": {"essential": True},
+                    },
+                )
+            else:
+                # HS256 fallback
+                claims = jwt.decode(
+                    request.token,
+                    oauth_settings.jwt_secret,
+                    claims_options={
+                        "iss": {"essential": True},
+                        "exp": {"essential": True},
+                        "jti": {"essential": True},
+                    },
+                )
+            
+            # Validate issuer
+            issuer = claims.get("iss", "")
+            valid_issuer = (
+                issuer.endswith(f".{oauth_settings.base_domain}") or
+                issuer == f"https://auth.{oauth_settings.base_domain}" or
+                issuer == f"http://auth.{oauth_settings.base_domain}" or
+                (issuer.startswith("https://") and oauth_settings.base_domain in issuer) or
+                (issuer.startswith("http://") and oauth_settings.base_domain in issuer)
+            )
+            
+            if not valid_issuer:
+                logger.warning(f"Token has invalid issuer: {issuer}")
+                return TokenValidationResponse(
+                    valid=False,
+                    reason=f"Invalid token issuer"
+                )
+            
+            # Validate claims (including expiry)
+            claims.validate()
+            
+            # Check if token exists in Redis (not revoked)
+            jti = claims["jti"]
+            token_key = f"oauth:token:{jti}"
+            if not storage.redis_client.exists(token_key):
+                logger.warning(f"Token {jti} has been revoked or doesn't exist")
+                return TokenValidationResponse(
+                    valid=False,
+                    reason="Token has been revoked"
+                )
+            
+            # Check audience claim contains this resource URI
+            audience = claims.get("aud", [])
+            if isinstance(audience, str):
+                audience = [audience]
+            
+            if full_uri not in audience:
+                logger.warning(f"Token audience {audience} doesn't include resource {full_uri}")
+                return TokenValidationResponse(
+                    valid=False,
+                    reason="Token not authorized for this resource"
+                )
+            
+            # Check requested scopes are included in token
+            token_scopes = claims.get("scope", "").split()
+            if request.scopes:
+                missing_scopes = [s for s in request.scopes if s not in token_scopes]
+                if missing_scopes:
+                    logger.warning(f"Token missing required scopes: {missing_scopes}")
+                    return TokenValidationResponse(
+                        valid=False,
+                        reason=f"Missing required scopes: {', '.join(missing_scopes)}"
+                    )
+            
+            # Token is valid
+            logger.info(f"Token {jti} validated successfully for resource {full_uri}")
+            return TokenValidationResponse(
+                valid=True,
+                user_id=claims.get("sub"),
+                scopes=token_scopes
+            )
+            
+        except JoseError as e:
+            logger.error(f"JWT validation failed: {e}")
+            return TokenValidationResponse(
+                valid=False,
+                reason="Invalid token format or signature"
+            )
+        except Exception as e:
+            logger.error(f"Unexpected error during token validation: {e}")
+            return TokenValidationResponse(
+                valid=False,
+                reason="Internal validation error"
+            )
     
     @router.post("/auto-register")
     async def auto_register_proxy_resources(
