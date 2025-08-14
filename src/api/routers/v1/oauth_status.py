@@ -39,6 +39,8 @@ class ClientSummary(BaseModel):
     token_count: int = 0
     last_token_issued: Optional[str] = None
     registration_client_uri: Optional[str] = None
+    last_used: Optional[str] = None
+    usage_count: int = 0
 
 class ClientDetail(BaseModel):
     client_id: str
@@ -246,6 +248,14 @@ class OAuthStatusRouter:
                         if client.get("last_token_issued"):
                             last_token_issued = format_timestamp(parse_timestamp(client["last_token_issued"]))
                         
+                        # Get last used timestamp
+                        last_used = None
+                        if client.get("last_used"):
+                            last_used = format_timestamp(parse_timestamp(client["last_used"]))
+                        
+                        # Get usage count
+                        usage_count = client.get("usage_count", 0)
+                        
                         clients.append({
                             "client_id": client_id,
                             "client_name": client.get("client_name"),
@@ -255,20 +265,45 @@ class OAuthStatusRouter:
                             "days_until_expiry": days_until_expiry,
                             "token_count": token_count,
                             "last_token_issued": last_token_issued,
-                            "registration_client_uri": client.get("registration_client_uri")
+                            "registration_client_uri": client.get("registration_client_uri"),
+                            "last_used": last_used,
+                            "usage_count": usage_count
                         })
                     except Exception as e:
                         logger.error(f"Error parsing client data: {e}")
                         continue
             
-            # Sort clients
+            # Sort clients - primary by last_used (desc), secondary by created_at (desc)
+            # Clients with no last_used (never used) should appear after used clients
             reverse = (order == "desc")
-            if sort_by == "created_at":
-                clients.sort(key=lambda x: x["created_at"], reverse=reverse)
-            elif sort_by == "expires_at":
-                clients.sort(key=lambda x: x["expires_at"] or "", reverse=reverse)
-            elif sort_by == "name":
-                clients.sort(key=lambda x: x["client_name"] or "", reverse=reverse)
+            
+            # Custom sort: last_used first (most recent), then created_at
+            def sort_key(client):
+                # For last_used, None should sort last (treat as epoch 0)
+                last_used = client.get("last_used")
+                if last_used:
+                    # Convert ISO format back to timestamp for sorting
+                    try:
+                        dt = datetime.fromisoformat(last_used.replace('Z', '+00:00'))
+                        last_used_ts = dt.timestamp()
+                    except:
+                        last_used_ts = 0
+                else:
+                    last_used_ts = 0
+                
+                # For created_at, use as secondary sort
+                created_at = client.get("created_at", "")
+                try:
+                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    created_at_ts = dt.timestamp()
+                except:
+                    created_at_ts = 0
+                
+                # Return tuple for two-level sort
+                return (last_used_ts, created_at_ts)
+            
+            # Sort with most recently used first, then most recently created
+            clients.sort(key=sort_key, reverse=True)
             
             # Paginate
             total = len(clients)

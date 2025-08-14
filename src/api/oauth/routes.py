@@ -359,7 +359,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Log the rejection in RequestLogger
             await log_response(
                 logger,
-                None,
+                Response(status_code=400),
                 0,
                 ip=client_ip,
                 hostname=request.headers.get("host"),
@@ -437,6 +437,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             registered_redirect_uris=getattr(client, 'redirect_uris', [])
         )
         
+        # Track client usage
+        await auth_manager.track_client_usage(client_id, redis_client)
+        
         # Validate redirect_uri
         if not client.check_redirect_uri(redirect_uri):
             logger.warning(
@@ -450,7 +453,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             await log_response(
                 logger,
-                None,
+                Response(status_code=400),
                 0,
                 ip=client_ip,
                 hostname=request.headers.get("host"),
@@ -481,7 +484,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             await log_response(
                 logger,
-                None,
+                Response(status_code=400),
                 0,
                 ip=client_ip,
                 hostname=request.headers.get("host"),
@@ -508,7 +511,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             await log_response(
                 logger,
-                None,
+                Response(status_code=400),
                 0,
                 ip=client_ip,
                 hostname=request.headers.get("host"),
@@ -974,6 +977,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "error_description": f"Grant type '{grant_type}' is not supported",
                 },
             )
+
+        # Track client usage
+        await auth_manager.track_client_usage(client_id, redis_client)
 
         if grant_type == "authorization_code":
             if not code:
@@ -1510,6 +1516,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 client_id=client_id
             )
             return {"active": False}
+
+        # Track client usage
+        await auth_manager.track_client_usage(client_id, redis_client)
 
         # Introspect token
         introspection_result = await auth_manager.introspect_token(token, redis_client)

@@ -6,6 +6,7 @@ import base64
 import hashlib
 import json
 import secrets
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -408,6 +409,29 @@ class AuthManager:
             return None
 
         return OAuth2Client(json.loads(client_data))
+
+    async def track_client_usage(self, client_id: str, redis_client: redis.Redis) -> None:
+        """Track client usage by updating last_used timestamp and incrementing usage_count"""
+        try:
+            client_key = f"oauth:client:{client_id}"
+            client_data = await redis_client.get(client_key)
+            
+            if client_data:
+                client = json.loads(client_data)
+                # Update usage tracking
+                client["last_used"] = int(time.time())
+                client["usage_count"] = client.get("usage_count", 0) + 1
+                
+                # Preserve TTL if set
+                ttl = await redis_client.ttl(client_key)
+                if ttl > 0:
+                    await redis_client.setex(client_key, ttl, json.dumps(client))
+                else:
+                    await redis_client.set(client_key, json.dumps(client))
+                    
+                logger.debug(f"Updated usage tracking for client {client_id}: count={client['usage_count']}")
+        except Exception as e:
+            logger.warning(f"Failed to track usage for client {client_id}: {e}")
 
     def create_authorization_response(self, client: OAuth2Client, request: dict) -> dict:
         """Create authorization response using Authlib patterns"""
