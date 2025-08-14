@@ -130,20 +130,19 @@ class DynamicClientConfigurationEndpoint(BaseClientConfigurationEndpoint):
         # Delete client from Redis
         await self.redis_client.delete(f"oauth:client:{client_id}")
 
-        # Also delete any associated tokens (cleanup)
+        # Delete all tokens for this client efficiently using the client_tokens set
         # This is beyond RFC 7592 but good practice
-        pattern = "oauth:token:*"
-        cursor = 0
-        while True:
-            cursor, keys = await self.redis_client.scan(cursor, match=pattern, count=100)
-            for key in keys:
-                token_data = await self.redis_client.get(key)
-                if token_data:
-                    data = json.loads(token_data)
-                    if data.get("client_id") == client_id:
-                        await self.redis_client.delete(key)
-            if cursor == 0:
-                break
+        client_tokens_key = f"oauth:client_tokens:{client_id}"
+        token_jtis = await self.redis_client.smembers(client_tokens_key)
+        
+        if token_jtis:
+            # Delete all token data for this client
+            token_keys = [f"oauth:token:{jti}" for jti in token_jtis]
+            if token_keys:
+                await self.redis_client.delete(*token_keys)
+        
+        # Delete the client_tokens set itself
+        await self.redis_client.delete(client_tokens_key)
 
     async def revoke_access_token(self, client: OAuth2Client, token: str):
         """Revoke all access tokens for this client.

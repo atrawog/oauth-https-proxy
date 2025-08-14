@@ -38,6 +38,7 @@ class ClientSummary(BaseModel):
     days_until_expiry: Optional[int]
     token_count: int = 0
     last_token_issued: Optional[str] = None
+    registration_client_uri: Optional[str] = None
 
 class ClientDetail(BaseModel):
     client_id: str
@@ -230,17 +231,31 @@ class OAuthStatusRouter:
                         if active_only and not is_active:
                             continue
                         
-                        # TODO: Count tokens for this client (would need token storage pattern)
+                        # Count tokens for this client using the client_tokens set
+                        client_id = client.get("client_id")
+                        token_count = 0
+                        if client_id:
+                            token_key = f"oauth:client_tokens:{client_id}"
+                            token_count = self.storage.redis_client.scard(token_key)
+                            # Debug logging
+                            if client_id == "client_Ebb8g95l9shqpxykc0pmBg":
+                                logger.info(f"DEBUG: Token count for {client_id}: {token_count} (key: {token_key})")
+                        
+                        # Get last token issued timestamp
+                        last_token_issued = None
+                        if client.get("last_token_issued"):
+                            last_token_issued = format_timestamp(parse_timestamp(client["last_token_issued"]))
                         
                         clients.append({
-                            "client_id": client.get("client_id"),
+                            "client_id": client_id,
                             "client_name": client.get("client_name"),
                             "created_at": format_timestamp(created_at),
                             "expires_at": format_timestamp(expires_at) if expires_at else None,
                             "is_active": is_active,
                             "days_until_expiry": days_until_expiry,
-                            "token_count": 0,  # TODO: Implement token counting
-                            "last_token_issued": None  # TODO: Track last token
+                            "token_count": token_count,
+                            "last_token_issued": last_token_issued,
+                            "registration_client_uri": client.get("registration_client_uri")
                         })
                     except Exception as e:
                         logger.error(f"Error parsing client data: {e}")

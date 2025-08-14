@@ -188,6 +188,28 @@ class AuthManager:
         # Track user's tokens if username present
         if "username" in claims:
             await redis_client.sadd(f"oauth:user_tokens:{claims['username']}", jti)
+        
+        # Track client's tokens if client_id present
+        if "client_id" in claims:
+            await redis_client.sadd(f"oauth:client_tokens:{claims['client_id']}", jti)
+            # Set expiry on the set to match token lifetime (in case tokens aren't properly cleaned up)
+            await redis_client.expire(f"oauth:client_tokens:{claims['client_id']}", self.settings.access_token_lifetime * 2)
+            
+            # Update last token issued timestamp for the client
+            client_key = f"oauth:client:{claims['client_id']}"
+            client_data = await redis_client.get(client_key)
+            if client_data:
+                try:
+                    client = json.loads(client_data)
+                    client["last_token_issued"] = int(now.timestamp())
+                    # Get TTL to preserve expiration
+                    ttl = await redis_client.ttl(client_key)
+                    if ttl > 0:
+                        await redis_client.setex(client_key, ttl, json.dumps(client))
+                    else:
+                        await redis_client.set(client_key, json.dumps(client))
+                except Exception as e:
+                    logger.warning(f"Failed to update last_token_issued for client {claims['client_id']}: {e}")
 
         return token.decode("utf-8") if isinstance(token, bytes) else token
 
@@ -362,6 +384,11 @@ class AuthManager:
                 username = claims.get("username")
                 if username:
                     await redis_client.srem(f"oauth:user_tokens:{username}", jti)
+                
+                # Remove from client's token set if client_id present
+                client_id = claims.get("client_id")
+                if client_id:
+                    await redis_client.srem(f"oauth:client_tokens:{client_id}", jti)
 
                 return True
 

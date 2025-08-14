@@ -436,9 +436,10 @@ oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="mcp:r
     TOKEN={{token}} pixi run proxy-client oauth register {{name}} \
         --redirect-uri {{redirect-uri}} --scope "{{scope}}"
 
-# List OAuth clients
-oauth-clients-list active-only="" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client oauth client list \
+# List OAuth clients (default: 50 per page, use page parameter for pagination)
+oauth-clients-list active-only="" page="1" per-page="50" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client --format table oauth client list \
+        --page {{page}} --per-page {{per-page}} \
         {{ if active-only == "true" { "--active-only" } else { "" } }}
 
 # List OAuth sessions

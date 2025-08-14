@@ -232,6 +232,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         registration_access_token = f"reg-{secrets.token_urlsafe(32)}"
 
         # Store client in Redis
+        # Get the actual registration endpoint URL used by the client
+        registration_client_uri = f"{get_external_url(request, settings)}/register/{client_id}"
+        
         client_data = {
             "client_id": client_id,
             "client_secret": client_secret,
@@ -244,6 +247,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             "response_types": json.dumps(["code"]),
             "grant_types": json.dumps(["authorization_code", "refresh_token"]),
             "registration_access_token": registration_access_token,
+            "registration_client_uri": registration_client_uri,
         }
 
         # Store with expiration matching client lifetime
@@ -266,7 +270,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             "client_name": registration.client_name,
             "scope": registration.scope,
             "registration_access_token": registration_access_token,
-            "registration_client_uri": f"https://auth.{settings.base_domain}/register/{client_id}",  # TODO: Break long line
+            "registration_client_uri": registration_client_uri,
         }
 
         # Echo back all registered metadata
@@ -1092,7 +1096,6 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             await redis_client.delete(f"oauth:code:{code}")
 
             # Extract token claims for detailed logging
-            import jwt
             token_claims = jwt.decode(access_token, options={"verify_signature": False})
             
             logger.info(
