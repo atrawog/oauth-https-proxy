@@ -1197,6 +1197,33 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
             refresh_data = json.loads(refresh_data_str)
 
+            # Track refresh token usage
+            try:
+                usage_key = f"oauth:refresh_usage:{refresh_token}"
+                usage_data = await redis_client.get(usage_key)
+                
+                if usage_data:
+                    usage = json.loads(usage_data)
+                    usage["last_used"] = int(time.time())
+                    usage["usage_count"] = usage.get("usage_count", 0) + 1
+                else:
+                    usage = {
+                        "last_used": int(time.time()),
+                        "usage_count": 1
+                    }
+                
+                # Store usage data with same TTL as refresh token
+                ttl = await redis_client.ttl(f"oauth:refresh:{refresh_token}")
+                if ttl > 0:
+                    await redis_client.setex(usage_key, ttl, json.dumps(usage))
+                else:
+                    # Use default refresh token lifetime
+                    await redis_client.setex(usage_key, settings.refresh_token_lifetime, json.dumps(usage))
+                
+                logger.debug(f"Updated refresh token usage: count={usage['usage_count']}")
+            except Exception as e:
+                logger.warning(f"Failed to track refresh token usage: {e}")
+
             # Validate resource parameters if provided (RFC 8707)
             if resource:
                 authorized_resources = refresh_data.get("resources", [])

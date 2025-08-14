@@ -7,7 +7,7 @@ by directly accessing Redis data from the OAuth server.
 import asyncio
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 import hashlib
@@ -54,14 +54,19 @@ class ClientDetail(BaseModel):
 
 class TokenSummary(BaseModel):
     jti: str
-    token_type: str
+    token_type: str  # "access" or "refresh"
+    client_id: Optional[str]
+    client_name: Optional[str]
     user_id: Optional[str]
     username: Optional[str]
     issued_at: str
     expires_at: str
     is_expired: bool
+    time_remaining: Optional[str]  # e.g., "5m", "2h", "expired"
     scope: Optional[str]
-    used_by_proxies: List[str] = []
+    audience: Optional[List[str]] = []  # Resource URIs
+    last_used: Optional[str] = None
+    usage_count: int = 0
 
 class TokenDetail(BaseModel):
     jti: str
@@ -179,7 +184,7 @@ class OAuthStatusRouter:
         self.router.get("/clients/{client_id}/tokens", response_model=Dict)(self.list_client_tokens)
         
         # Token status endpoints
-        self.router.get("/tokens", response_model=Dict)(self.get_token_stats)
+        self.router.get("/tokens", response_model=Dict)(self.list_tokens)
         self.router.get("/tokens/{jti}", response_model=TokenDetail)(self.get_token_detail)
         
         # Session management endpoints
@@ -411,28 +416,222 @@ class OAuthStatusRouter:
             }
         }
     
-    async def get_token_stats(
+    async def list_tokens(
         self,
-        token_type: Optional[str] = Query(None, description="Filter by token type"),
+        token_type: Optional[str] = Query(None, description="Filter by token type (access/refresh)"),
         include_expired: bool = Query(False, description="Include expired tokens"),
-        user_id: Optional[str] = Query(None, description="Filter by user ID"),
-        client_id: Optional[str] = Query(None, description="Filter by client ID")
+        username: Optional[str] = Query(None, description="Filter by username"),
+        client_id: Optional[str] = Query(None, description="Filter by client ID"),
+        page: int = Query(1, ge=1, description="Page number"),
+        per_page: int = Query(50, ge=1, le=100, description="Items per page")
     ) -> Dict:
-        """Get OAuth token statistics and overview."""
-        # TODO: Implement when token storage pattern is known
-        return {
-            "summary": {
-                "total_access_tokens": 0,
-                "active_access_tokens": 0,
-                "total_refresh_tokens": 0,
-                "active_refresh_tokens": 0,
-                "tokens_expiring_soon": 0,
-                "average_token_lifetime": 1800
-            },
-            "by_client": [],
-            "by_user": [],
-            "recent_activity": []
-        }
+        """List all OAuth tokens with detailed information."""
+        try:
+            tokens = []
+            now = datetime.now(timezone.utc)
+            
+            # Get client mapping for names
+            client_names = {}
+            for key in self.storage.redis_client.scan_iter(match="oauth:client:*"):
+                client_data = self.storage.redis_client.get(key)
+                if client_data:
+                    try:
+                        client = json.loads(client_data)
+                        client_names[client.get("client_id")] = client.get("client_name", "Unknown")
+                    except:
+                        pass
+            
+            # Scan for access tokens
+            if not token_type or token_type == "access":
+                for key in self.storage.redis_client.scan_iter(match="oauth:token:*"):
+                    token_data = self.storage.redis_client.get(key)
+                    if token_data:
+                        try:
+                            token = json.loads(token_data)
+                            jti = key.decode() if isinstance(key, bytes) else key
+                            jti = jti.replace("oauth:token:", "")
+                            
+                            # Parse timestamps
+                            issued_at = parse_timestamp(token.get("iat", token.get("created_at", 0)))
+                            expires_at = parse_timestamp(token.get("exp", token.get("expires_at", 0)))
+                            is_expired = expires_at <= now
+                            
+                            # Skip expired tokens if not requested
+                            if not include_expired and is_expired:
+                                continue
+                            
+                            # Apply filters
+                            if username and token.get("username") != username:
+                                continue
+                            if client_id and token.get("client_id") != client_id:
+                                continue
+                            
+                            # Calculate time remaining
+                            time_remaining = None
+                            if is_expired:
+                                time_remaining = "expired"
+                            else:
+                                diff = expires_at - now
+                                if diff.days > 0:
+                                    time_remaining = f"{diff.days}d"
+                                elif diff.seconds > 3600:
+                                    time_remaining = f"{diff.seconds // 3600}h"
+                                else:
+                                    time_remaining = f"{diff.seconds // 60}m"
+                            
+                            # Get audience (resource URIs)
+                            audience = token.get("aud", [])
+                            if isinstance(audience, str):
+                                audience = [audience]
+                            
+                            # Get usage data for this token
+                            last_used = None
+                            usage_count = 0
+                            usage_key = f"oauth:token_usage:{jti}"
+                            usage_data = self.storage.redis_client.get(usage_key)
+                            if usage_data:
+                                try:
+                                    usage = json.loads(usage_data)
+                                    if usage.get("last_used"):
+                                        last_used = format_timestamp(parse_timestamp(usage["last_used"]))
+                                    usage_count = usage.get("usage_count", 0)
+                                except:
+                                    pass
+                            
+                            tokens.append({
+                                "jti": jti,
+                                "token_type": "access",
+                                "client_id": token.get("client_id"),
+                                "client_name": client_names.get(token.get("client_id"), None),
+                                "user_id": token.get("sub", token.get("user_id")),
+                                "username": token.get("username"),
+                                "issued_at": format_timestamp(issued_at),
+                                "expires_at": format_timestamp(expires_at),
+                                "is_expired": is_expired,
+                                "time_remaining": time_remaining,
+                                "scope": token.get("scope"),
+                                "audience": audience,
+                                "last_used": last_used,
+                                "usage_count": usage_count,
+                                "_sort_key": expires_at.timestamp()  # For sorting
+                            })
+                        except Exception as e:
+                            logger.error(f"Error parsing token data: {e}")
+                            continue
+            
+            # Scan for refresh tokens
+            if not token_type or token_type == "refresh":
+                for key in self.storage.redis_client.scan_iter(match="oauth:refresh:*"):
+                    refresh_data = self.storage.redis_client.get(key)
+                    if refresh_data:
+                        try:
+                            refresh = json.loads(refresh_data)
+                            token_id = key.decode() if isinstance(key, bytes) else key
+                            token_id = token_id.replace("oauth:refresh:", "")
+                            
+                            # Parse timestamps - refresh tokens have different structure
+                            created_at = parse_timestamp(refresh.get("created_at", 0))
+                            # Refresh tokens typically expire in 1 year
+                            expires_at = created_at + timedelta(days=365)  # TODO: Get actual lifetime from config
+                            is_expired = expires_at <= now
+                            
+                            # Skip expired tokens if not requested
+                            if not include_expired and is_expired:
+                                continue
+                            
+                            # Apply filters
+                            if username and refresh.get("username") != username:
+                                continue
+                            if client_id and refresh.get("client_id") != client_id:
+                                continue
+                            
+                            # Calculate time remaining
+                            time_remaining = None
+                            if is_expired:
+                                time_remaining = "expired"
+                            else:
+                                diff = expires_at - now
+                                if diff.days > 0:
+                                    time_remaining = f"{diff.days}d"
+                                elif diff.seconds > 3600:
+                                    time_remaining = f"{diff.seconds // 3600}h"
+                                else:
+                                    time_remaining = f"{diff.seconds // 60}m"
+                            
+                            # Get usage data for this refresh token
+                            last_used = None
+                            usage_count = 0
+                            usage_key = f"oauth:refresh_usage:{token_id}"
+                            usage_data = self.storage.redis_client.get(usage_key)
+                            if usage_data:
+                                try:
+                                    usage = json.loads(usage_data)
+                                    if usage.get("last_used"):
+                                        last_used = format_timestamp(parse_timestamp(usage["last_used"]))
+                                    usage_count = usage.get("usage_count", 0)
+                                except:
+                                    pass
+                            
+                            tokens.append({
+                                "jti": f"rfr_{token_id[:16]}",  # Prefix to distinguish refresh tokens
+                                "token_type": "refresh",
+                                "client_id": refresh.get("client_id"),
+                                "client_name": client_names.get(refresh.get("client_id"), None),
+                                "user_id": refresh.get("user_id", refresh.get("sub")),
+                                "username": refresh.get("username"),
+                                "issued_at": format_timestamp(created_at),
+                                "expires_at": format_timestamp(expires_at),
+                                "is_expired": is_expired,
+                                "time_remaining": time_remaining,
+                                "scope": refresh.get("scope"),
+                                "audience": refresh.get("resources", []),
+                                "last_used": last_used,
+                                "usage_count": usage_count,
+                                "_sort_key": expires_at.timestamp()  # For sorting
+                            })
+                        except Exception as e:
+                            logger.error(f"Error parsing refresh token data: {e}")
+                            continue
+            
+            # Sort tokens by expiration time (expiring soon first)
+            tokens.sort(key=lambda x: x["_sort_key"])
+            
+            # Remove sort key from results
+            for token in tokens:
+                token.pop("_sort_key", None)
+            
+            # Calculate statistics
+            total = len(tokens)
+            active_count = sum(1 for t in tokens if not t["is_expired"])
+            expired_count = total - active_count
+            access_count = sum(1 for t in tokens if t["token_type"] == "access")
+            refresh_count = sum(1 for t in tokens if t["token_type"] == "refresh")
+            
+            # Paginate
+            start = (page - 1) * per_page
+            end = start + per_page
+            paginated_tokens = tokens[start:end]
+            
+            return {
+                "tokens": paginated_tokens,
+                "pagination": {
+                    "total": total,
+                    "page": page,
+                    "per_page": per_page,
+                    "pages": (total + per_page - 1) // per_page
+                },
+                "summary": {
+                    "total_tokens": total,
+                    "active_tokens": active_count,
+                    "expired_tokens": expired_count,
+                    "access_tokens": access_count,
+                    "refresh_tokens": refresh_count
+                }
+            }
+            
+        except Exception as e:
+            logger.error(f"Error listing OAuth tokens: {e}")
+            raise HTTPException(500, f"Failed to list OAuth tokens: {str(e)}")
     
     async def get_token_detail(self, jti: str) -> TokenDetail:
         """Get specific token information."""

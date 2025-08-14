@@ -442,6 +442,15 @@ oauth-clients-list active-only="" page="1" per-page="50" token="${ADMIN_TOKEN}":
         --page {{page}} --per-page {{per-page}} \
         {{ if active-only == "true" { "--active-only" } else { "" } }}
 
+# List OAuth tokens (access and refresh tokens)
+oauth-token-list token_type="" client_id="" username="" page="1" per_page="50" include_expired="false" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client --format table oauth token list \
+        --page {{page}} --per-page {{per_page}} \
+        {{ if token_type != "" { "--token-type " + token_type } else { "" } }} \
+        {{ if client_id != "" { "--client-id " + client_id } else { "" } }} \
+        {{ if username != "" { "--username " + username } else { "" } }} \
+        {{ if include_expired == "true" { "--include-expired" } else { "" } }}
+
 # List OAuth sessions
 oauth-sessions-list token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client oauth session list

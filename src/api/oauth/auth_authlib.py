@@ -257,6 +257,35 @@ class AuthManager:
             if not token_data:
                 return None  # Token revoked or expired
 
+            # Track token usage
+            try:
+                # Update usage tracking for this token
+                usage_key = f"oauth:token_usage:{jti}"
+                usage_data = await redis_client.get(usage_key)
+                
+                if usage_data:
+                    usage = json.loads(usage_data)
+                    usage["last_used"] = int(time.time())
+                    usage["usage_count"] = usage.get("usage_count", 0) + 1
+                else:
+                    usage = {
+                        "last_used": int(time.time()),
+                        "usage_count": 1
+                    }
+                
+                # Store usage data with same TTL as token
+                ttl = await redis_client.ttl(f"oauth:token:{jti}")
+                if ttl > 0:
+                    await redis_client.setex(usage_key, ttl, json.dumps(usage))
+                else:
+                    # Token doesn't expire or already expired, store with default lifetime
+                    await redis_client.setex(usage_key, self.settings.access_token_lifetime, json.dumps(usage))
+                
+                logger.debug(f"Updated token usage for JTI {jti}: count={usage['usage_count']}")
+            except Exception as e:
+                # Don't fail token validation if usage tracking fails
+                logger.warning(f"Failed to track token usage for {jti}: {e}")
+
             return dict(claims)
 
         except JoseError as e:
