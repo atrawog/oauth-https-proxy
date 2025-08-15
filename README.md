@@ -592,7 +592,7 @@ just test-mcp-compliance # MCP specification tests
 ### Project Structure
 
 ```
-mcp-http-proxy/
+oauth-https-proxy/
 ├── src/
 │   ├── api/            # FastAPI application
 │   │   ├── oauth/      # OAuth server implementation

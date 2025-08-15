@@ -8,7 +8,7 @@ from datetime import datetime
 def main():
     # Get recent logs
     result = subprocess.run(
-        ["docker", "logs", "mcp-http-proxy-acme-certmanager-1", "--since=5m"],
+        ["docker", "logs", "oauth-https-proxy-api-1", "--since=5m"],
         capture_output=True,
         text=True
     )

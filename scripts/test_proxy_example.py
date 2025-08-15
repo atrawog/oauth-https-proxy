@@ -23,7 +23,7 @@ def test_proxy_example():
     # Create a token
     token_name = f"proxy-example-test-{int(time.time())}"
     result = subprocess.run(
-        ["docker", "exec", "mcp-http-proxy-acme-certmanager-1", 
+        ["docker", "exec", "oauth-https-proxy-api-1", 
          "pixi", "run", "python", "scripts/generate_token.py", token_name],
         capture_output=True, text=True
     )
@@ -116,7 +116,7 @@ def test_proxy_example():
         
         # Delete token
         subprocess.run(
-            ["docker", "exec", "-i", "mcp-http-proxy-acme-certmanager-1",
+            ["docker", "exec", "-i", "oauth-https-proxy-api-1",
              "pixi", "run", "python", "scripts/delete_token.py", token_name],
             input="yes\n", text=True, capture_output=True
         )
@@ -129,7 +129,7 @@ def test_proxy_example():
         # Clean up
         try:
             subprocess.run(
-                ["docker", "exec", "-i", "mcp-http-proxy-acme-certmanager-1",
+                ["docker", "exec", "-i", "oauth-https-proxy-api-1",
                  "pixi", "run", "python", "scripts/delete_token.py", token_name],
                 input="yes\n", text=True, capture_output=True
             )

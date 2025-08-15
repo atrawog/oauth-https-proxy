@@ -212,7 +212,7 @@ curl -fsSL https://pixi.sh/install.sh | bash
 
 # Clone repository
 git clone <repository>
-cd mcp-http-proxy
+cd oauth-https-proxy
 
 # Set up development environment
 pixi install
@@ -295,7 +295,7 @@ just logs-follow | grep TEST
 ## Project Structure
 
 ```
-mcp-http-proxy/
+oauth-https-proxy/
 ├── src/                    # Source code (see src/CLAUDE.md)
 │   ├── api/               # FastAPI application and routers
 │   ├── certmanager/       # ACME certificate management
