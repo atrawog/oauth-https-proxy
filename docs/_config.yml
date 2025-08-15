@@ -1,6 +1,6 @@
 # Book settings
-title: ACME Certificate Manager Documentation
-author: ACME CertManager Team
+title: OAuth HTTPS Proxy Documentation
+author: OAuth HTTPS Proxy Team
 logo: ""
 
 # Force re-execution of notebooks on each build
@@ -18,7 +18,7 @@ bibtex_bibfiles:
 
 # Information about where the book exists on the web
 repository:
-  url: https://github.com/acme-certmanager/acme-certmanager
+  url: https://github.com/atrawog/oauth-https-proxy
   path_to_book: docs
   branch: main
 
@@ -45,7 +45,7 @@ sphinx:
   config:
     html_theme: sphinx_book_theme
     html_theme_options:
-      repository_url: https://github.com/acme-certmanager/acme-certmanager
+      repository_url: https://github.com/atrawog/oauth-https-proxy
       use_repository_button: true
       use_issues_button: true
       use_edit_page_button: true

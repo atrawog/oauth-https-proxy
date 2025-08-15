@@ -1,2 +1,0 @@
-[console_scripts]
-acme-certmanager = acme_certmanager.server:run_server

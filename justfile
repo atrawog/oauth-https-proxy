@@ -2,7 +2,7 @@
 # All API operations now use the proxy-client CLI tool for better consistency and maintainability
 
 # Variables
-container_name := "mcp-http-proxy-api-1"
+container_name := "oauth-https-proxy-api-1"
 default_api_url := "http://localhost:80"
 staging_cert_email := env_var_or_default("TEST_EMAIL", env_var_or_default("ACME_EMAIL", "test@example.com"))
 

@@ -3,14 +3,14 @@ requires = ["setuptools>=68.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "acme-certmanager"
+name = "oauth-https-proxy"
 version = "0.1.0"
-description = "Pure Python HTTPS server with automatic ACME certificate management"
+description = "OAuth-protected HTTPS proxy with automatic ACME certificate management"
 readme = "README.md"
 requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
-    {name = "ACME CertManager Team", email = "admin@example.com"},
+    {name = "OAuth HTTPS Proxy Team", email = "admin@example.com"},
 ]
 keywords = ["acme", "letsencrypt", "https", "tls", "certificate", "ssl"]
 classifiers = [
@@ -55,19 +55,19 @@ docs = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/acme-certmanager/acme-certmanager"
-Documentation = "https://acme-certmanager.readthedocs.io"
-Repository = "https://github.com/acme-certmanager/acme-certmanager"
-Issues = "https://github.com/acme-certmanager/acme-certmanager/issues"
+Homepage = "https://github.com/atrawog/oauth-https-proxy"
+Documentation = "https://oauth-https-proxy.readthedocs.io"
+Repository = "https://github.com/atrawog/oauth-https-proxy"
+Issues = "https://github.com/atrawog/oauth-https-proxy/issues"
 
 [project.scripts]
-acme-certmanager = "acme_certmanager.server:run_server"
+oauth-https-proxy = "src.main:main"
 
 [tool.setuptools]
-packages = ["acme_certmanager"]
+packages = ["src"]
 
 [tool.setuptools.package-data]
-acme_certmanager = ["py.typed"]
+src = ["py.typed"]
 
 [tool.ruff]
 select = ["E", "F", "I", "N", "W"]

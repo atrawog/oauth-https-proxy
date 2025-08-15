@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run the MCP HTTP Proxy server."""
+"""Run the OAuth HTTPS Proxy server."""
 
 import sys
 import os

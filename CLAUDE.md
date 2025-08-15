@@ -1,6 +1,6 @@
 # HTTPS OAuth Proxy with Protected Resources - Development Guidelines
 
-This document provides comprehensive development and testing guidelines for the MCP HTTP/HTTPS OAuth Proxy system. For quick start and usage instructions, see [README.md](README.md).
+This document provides comprehensive development and testing guidelines for the OAuth HTTPS Proxy system. For quick start and usage instructions, see [README.md](README.md).
 
 ## General Development Guidelines
 

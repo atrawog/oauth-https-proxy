@@ -211,10 +211,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ee/ea/c67e1dee1ba208ed22c06d1d547ae5e293374bfc43e0eb0ef5e262b68561/werkzeug-3.1.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/78/58/e860788190eba3bcce367f74d29c4675466ce8dddfba85f7827588416f01/wsproto-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/54/647ade08bf0db230bfea292f893923872fd20be6ac6f53b2b936ba839d75/zipp-3.23.0-py3-none-any.whl
-      - pypi: ./mcp-echo-streamablehttp-server-stateful
-      - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-echo-server
-      - pypi: ./mcp-http-validator
       - pypi: ./oauth-https-proxy-client
       osx-64:
       - conda: https://conda.anaconda.org/conda-forge/osx-64/bzip2-1.0.8-hfdf4475_7.conda
@@ -407,10 +404,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ee/ea/c67e1dee1ba208ed22c06d1d547ae5e293374bfc43e0eb0ef5e262b68561/werkzeug-3.1.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/78/58/e860788190eba3bcce367f74d29c4675466ce8dddfba85f7827588416f01/wsproto-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/54/647ade08bf0db230bfea292f893923872fd20be6ac6f53b2b936ba839d75/zipp-3.23.0-py3-none-any.whl
-      - pypi: ./mcp-echo-streamablehttp-server-stateful
-      - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-echo-server
-      - pypi: ./mcp-http-validator
       - pypi: ./oauth-https-proxy-client
       osx-arm64:
       - conda: https://conda.anaconda.org/conda-forge/osx-arm64/bzip2-1.0.8-h99b78c6_7.conda
@@ -602,10 +596,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ee/ea/c67e1dee1ba208ed22c06d1d547ae5e293374bfc43e0eb0ef5e262b68561/werkzeug-3.1.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/78/58/e860788190eba3bcce367f74d29c4675466ce8dddfba85f7827588416f01/wsproto-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/54/647ade08bf0db230bfea292f893923872fd20be6ac6f53b2b936ba839d75/zipp-3.23.0-py3-none-any.whl
-      - pypi: ./mcp-echo-streamablehttp-server-stateful
-      - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-echo-server
-      - pypi: ./mcp-http-validator
       - pypi: ./oauth-https-proxy-client
       win-64:
       - conda: https://conda.anaconda.org/conda-forge/win-64/bzip2-1.0.8-h2466b09_7.conda
@@ -799,10 +790,7 @@ environments:
       - pypi: https://files.pythonhosted.org/packages/ee/ea/c67e1dee1ba208ed22c06d1d547ae5e293374bfc43e0eb0ef5e262b68561/werkzeug-3.1.1-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/78/58/e860788190eba3bcce367f74d29c4675466ce8dddfba85f7827588416f01/wsproto-1.2.0-py3-none-any.whl
       - pypi: https://files.pythonhosted.org/packages/2e/54/647ade08bf0db230bfea292f893923872fd20be6ac6f53b2b936ba839d75/zipp-3.23.0-py3-none-any.whl
-      - pypi: ./mcp-echo-streamablehttp-server-stateful
-      - pypi: ./mcp-echo-streamablehttp-server-stateless
       - pypi: ./mcp-http-echo-server
-      - pypi: ./mcp-http-validator
       - pypi: ./oauth-https-proxy-client
 packages:
 - conda: https://conda.anaconda.org/conda-forge/linux-64/_libgcc_mutex-0.1-conda_forge.tar.bz2
@@ -2546,32 +2534,6 @@ packages:
   - rich>=13.9.4 ; extra == 'rich'
   - websockets>=15.0.1 ; extra == 'ws'
   requires_python: '>=3.10'
-- pypi: ./mcp-echo-streamablehttp-server-stateful
-  name: mcp-echo-streamablehttp-server-stateful
-  version: 0.2.0
-  sha256: ec8204f1a903464ffe441b2dee86f0c0096396cffb438a3d4bf313e54be39a19
-  requires_dist:
-  - httpx>=0.27.0
-  - mcp>=1.3.0
-  - psutil>=5.9.0
-  - pydantic>=2.0.0
-  - python-dotenv>=1.0.0
-  - uvicorn>=0.30.0
-  requires_python: '>=3.10'
-  editable: true
-- pypi: ./mcp-echo-streamablehttp-server-stateless
-  name: mcp-echo-streamablehttp-server-stateless
-  version: 0.2.0
-  sha256: 5b6c462e69b2c1db846a7d3a21bd9abca472c1cedc0ccd4e34321f03b404074e
-  requires_dist:
-  - mcp>=1.3.0
-  - uvicorn>=0.30.0
-  - httpx>=0.27.0
-  - pydantic>=2.0.0
-  - python-dotenv>=1.0.0
-  - psutil>=5.9.0
-  requires_python: '>=3.10'
-  editable: true
 - pypi: ./mcp-http-echo-server
   name: mcp-http-echo-server
   version: 1.0.1
@@ -2587,27 +2549,6 @@ packages:
   - pytest-cov>=5.0.0 ; extra == 'dev'
   - redis>=5.0.0 ; extra == 'redis'
   requires_python: '>=3.10'
-  editable: true
-- pypi: ./mcp-http-validator
-  name: mcp-http-validator
-  version: 0.1.0
-  sha256: 4d2eb52c9b8ad892e61e3555c8c701ded1b28703a7de06fd9c8f6313be7ae122
-  requires_dist:
-  - httpx>=0.27.0
-  - pydantic>=2.0
-  - authlib>=1.3.0
-  - rich>=13.0
-  - click>=8.1
-  - python-dotenv>=1.0
-  - pyjwt[crypto]>=2.8
-  - cryptography>=42.0
-  - pytest>=8.0 ; extra == 'dev'
-  - pytest-asyncio>=0.23 ; extra == 'dev'
-  - pytest-cov>=5.0 ; extra == 'dev'
-  - ruff>=0.5 ; extra == 'dev'
-  - mypy>=1.10 ; extra == 'dev'
-  - black>=24.0 ; extra == 'dev'
-  requires_python: '>=3.11'
   editable: true
 - pypi: https://files.pythonhosted.org/packages/a7/f7/7782a043553ee469c1ff49cfa1cdace2d6bf99a1f333cf38676b3ddf30da/mdit_py_plugins-0.4.2-py3-none-any.whl
   name: mdit-py-plugins

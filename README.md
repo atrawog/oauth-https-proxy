@@ -1,4 +1,4 @@
-# MCP HTTP/HTTPS OAuth Proxy
+# OAuth HTTPS Proxy
 
 A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic ACME certificate management, and Model Context Protocol (MCP) compliance. This proxy provides secure, authenticated access to backend services with automatic SSL/TLS certificate provisioning.
 
@@ -45,8 +45,8 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 ### 1. Clone and Configure
 
 ```bash
-git clone https://github.com/yourusername/mcp-http-proxy
-cd mcp-http-proxy
+git clone https://github.com/atrawog/oauth-https-proxy
+cd oauth-https-proxy
 
 # Copy and edit environment file
 cp .env.example .env

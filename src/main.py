@@ -1,4 +1,4 @@
-"""Main entry point for MCP HTTP Proxy."""
+"""Main entry point for OAuth HTTPS Proxy."""
 
 import asyncio
 import logging
