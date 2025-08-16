@@ -30,7 +30,8 @@ The RequestLogger provides efficient HTTP request/response logging with multiple
 ```
 req:{timestamp}:{ip}         # Request/response data as hash
 idx:req:ip:{ip}              # Index by client IP
-idx:req:host:{hostname}      # Index by hostname
+idx:req:fqdn:{fqdn}          # Index by client FQDN (reverse DNS)
+idx:req:host:{hostname}      # Index by proxy hostname
 idx:req:user:{username}      # Index by authenticated user
 idx:req:status:{code}        # Index by HTTP status code
 idx:req:errors               # All error responses (4xx/5xx)
@@ -48,6 +49,7 @@ stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
 {
   "timestamp": "2024-01-15T10:30:45.123Z",
   "client_ip": "192.168.1.100",
+  "client_fqdn": "client.example.com",
   "hostname": "api.example.com",
   "method": "GET",
   "path": "/api/v1/users",
@@ -66,7 +68,8 @@ stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
 Access logs via the `/api/v1/logs` endpoints:
 
 ### Endpoints
-- `GET /api/v1/logs/ip/{ip}` - Query by IP address
+- `GET /api/v1/logs/ip/{ip}` - Query by client IP address
+- `GET /api/v1/logs/host/{hostname}` - Query by client FQDN (reverse DNS)
 - `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
 - `GET /api/v1/logs/search` - Search logs with filters
 - `GET /api/v1/logs/errors` - Recent errors
@@ -84,7 +87,8 @@ Access logs via the `/api/v1/logs` endpoints:
 ```bash
 just logs [hours] [event] [level] [hostname] [limit] [token]  # Show recent logs (default)
 just logs-ip <ip> [hours] [event] [level] [limit] [token]    # Query logs by client IP
-just logs-host <hostname> [hours] [limit] [token]             # Query logs by hostname
+just logs-host <fqdn> [hours] [limit] [token]                 # Query logs by client FQDN (reverse DNS)
+just logs-proxy <hostname> [hours] [limit] [token]            # Query logs by proxy hostname
 just logs-client <client-id> [hours] [event] [level] [limit] [token]  # Query logs by OAuth client
 just logs-search [query] [hours] [event] [level] [hostname] [limit] [token]  # Search logs with filters
 just logs-errors [hours] [limit] [token]                      # Show recent errors

@@ -14,6 +14,7 @@ import redis.asyncio as redis_async
 
 from .config import Config
 from .logging import get_logger
+from .dns_resolver import resolve_ip_to_fqdn
 
 logger = get_logger(__name__)
 
@@ -42,10 +43,14 @@ class RequestLogger:
         """Log HTTP request with multiple indexes for efficient querying."""
         timestamp = time.time()
         
+        # Perform reverse DNS lookup for client IP
+        client_fqdn = await resolve_ip_to_fqdn(ip)
+        
         # Create request data with proper serialization for Redis
         request_data = {
             "timestamp": str(timestamp),
             "ip": str(ip),
+            "client_fqdn": str(client_fqdn),  # Add client FQDN
             "hostname": str(hostname),
             "method": str(method),
             "path": str(path),
@@ -77,6 +82,10 @@ class RequestLogger:
         # Index by IP
         await self.redis.zadd(f"idx:req:ip:{ip}", {request_key: timestamp})
         await self.redis.expire(f"idx:req:ip:{ip}", self.ttl_seconds)
+        
+        # Index by client FQDN
+        await self.redis.zadd(f"idx:req:fqdn:{client_fqdn}", {request_key: timestamp})
+        await self.redis.expire(f"idx:req:fqdn:{client_fqdn}", self.ttl_seconds)
         
         # Index by hostname
         await self.redis.zadd(f"idx:req:host:{hostname}", {request_key: timestamp})
@@ -268,6 +277,28 @@ class RequestLogger:
         
         request_keys = await self.redis.zrangebyscore(
             f"idx:req:host:{hostname}",
+            min_timestamp,
+            "+inf",
+            start=0,
+            num=limit
+        )
+        
+        if not request_keys:
+            return []
+        
+        pipeline = self.redis.pipeline()
+        for key in request_keys:
+            pipeline.hgetall(key)
+        
+        requests = await pipeline.execute()
+        return [r for r in requests if r]
+    
+    async def query_by_fqdn(self, fqdn: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
+        """Query requests by client FQDN (reverse DNS of client IP)."""
+        min_timestamp = time.time() - (hours * 3600)
+        
+        request_keys = await self.redis.zrangebyscore(
+            f"idx:req:fqdn:{fqdn}",
             min_timestamp,
             "+inf",
             start=0,

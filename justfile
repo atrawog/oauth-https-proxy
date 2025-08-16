@@ -489,9 +489,13 @@ logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN}":
 logs-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client log by-ip {{ip}} --hours {{hours}} --limit {{limit}}
 
-# Query logs by hostname
-logs-host hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log by-host {{hostname}} --hours {{hours}} --limit {{limit}}
+# Query logs by proxy hostname
+logs-proxy hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client log by-proxy {{hostname}} --hours {{hours}} --limit {{limit}}
+
+# Query logs by client FQDN (reverse DNS of client IP)
+logs-host fqdn hours="24" limit="100" token="${ADMIN_TOKEN}":
+    TOKEN={{token}} pixi run proxy-client log by-host {{fqdn}} --hours {{hours}} --limit {{limit}}
 
 # Query logs by client
 logs-client client-id hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
@@ -564,8 +568,9 @@ logs-help:
     @echo ""
     @echo "Available log commands:"
     @echo "  logs              - Search application logs"
-    @echo "  logs-ip           - Query by IP address"
-    @echo "  logs-host         - Query by hostname"
+    @echo "  logs-ip           - Query by client IP address"
+    @echo "  logs-host         - Query by client FQDN (reverse DNS)"
+    @echo "  logs-proxy        - Query by proxy hostname"
     @echo "  logs-client       - Query by OAuth client"
     @echo "  logs-errors       - Show recent errors"
     @echo "  logs-oauth        - OAuth activity for an IP"
