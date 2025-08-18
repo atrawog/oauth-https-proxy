@@ -29,8 +29,10 @@ def create_router(storage, cert_manager):
         from src.certmanager.models import CertificateRequest
         
         try:
+            # Add cert_name if not provided
+            if 'cert_name' not in request:
+                request['cert_name'] = f"proxy-{request['domain'].replace('.', '-')}"
             cert_request = CertificateRequest(**request)
-            cert_request.cert_name = f"proxy-{cert_request.domain.replace('.', '-')}"
             
             # Get async components
             async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
@@ -68,11 +70,16 @@ def create_router(storage, cert_manager):
             
             # Start async generation
             from src.certmanager.async_acme import generate_certificate_async
+            logger.info(f"[API] Queuing background task for certificate {cert_request.cert_name}")
+            logger.info(f"[API] AsyncCertManager type: {type(async_cert_manager).__name__ if async_cert_manager else 'None'}")
             background_tasks.add_task(
                 generate_certificate_async,
-                cert_manager,
-                cert_request
+                async_cert_manager,
+                cert_request,
+                token_info['hash'],
+                token_info['name']
             )
+            logger.info(f"[API] Background task queued successfully for {cert_request.cert_name}")
             
             return {
                 "message": f"Certificate generation started for {cert_request.domain}",
@@ -88,6 +95,7 @@ def create_router(storage, cert_manager):
     
     @router.post("/multi-domain")
     async def create_multi_domain_certificate(
+        req: Request,
         request: dict,
         background_tasks: BackgroundTasks,
         token_info: dict = Depends(require_auth)
@@ -141,11 +149,16 @@ def create_router(storage, cert_manager):
             
             # Start async generation
             from src.certmanager.async_acme import generate_certificate_async
+            logger.info(f"[API] Queuing background task for multi-domain certificate {cert_request.cert_name}")
+            logger.info(f"[API] AsyncCertManager type: {type(async_cert_manager).__name__ if async_cert_manager else 'None'}")
             background_tasks.add_task(
                 generate_certificate_async,
-                cert_manager,
-                cert_request
+                async_cert_manager,
+                cert_request,
+                token_info['hash'],
+                token_info['name']
             )
+            logger.info(f"[API] Background task queued successfully for multi-domain {cert_request.cert_name}")
             
             return {
                 "message": f"Multi-domain certificate generation started",
@@ -180,7 +193,11 @@ def create_router(storage, cert_manager):
                 if token_info and token_info.get('name') == 'ADMIN':
                     certs_to_return = all_certs
                 else:
-                    certs_to_return = [cert for cert in all_certs if cert.get('owner_token_hash') == token_hash]
+                    certs_to_return = []
+                    for cert in all_certs:
+                        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
+                        if cert_owner == token_hash:
+                            certs_to_return.append(cert)
             
             # Remove private keys from all certificates in the list
             filtered_certs = []
@@ -237,7 +254,7 @@ def create_router(storage, cert_manager):
         max_attempts = 60 if wait else 1
         
         for attempt in range(max_attempts):
-            status_data = await async_async_storage.redis_client.get(f"cert:status:{cert_name}")
+            status_data = await async_storage.redis_client.get(f"cert:status:{cert_name}")
             if status_data:
                 import json
                 status = json.loads(status_data)
@@ -274,21 +291,23 @@ def create_router(storage, cert_manager):
             raise HTTPException(status_code=404, detail="Certificate not found")
         
         # Check ownership
-        if cert.owner_token_hash and cert.owner_token_hash != token_info['hash']:
+        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
+        if cert_owner and cert_owner != token_info['hash']:
             if token_info.get('name') != 'ADMIN':
                 raise HTTPException(status_code=403, detail="Access denied")
         
         # Check if renewal is needed
-        if not force and cert.expires_at:
+        cert_expires = cert.get('expires_at') if isinstance(cert, dict) else getattr(cert, 'expires_at', None)
+        if not force and cert_expires:
             from datetime import datetime, timedelta
-            if cert.expires_at > datetime.now() + timedelta(days=30):
+            if cert_expires > datetime.now() + timedelta(days=30):
                 return {
                     "message": "Certificate does not need renewal yet",
-                    "expires_at": cert.expires_at.isoformat()
+                    "expires_at": cert_expires.isoformat()
                 }
         
         # Start renewal
-        background_tasks.add_task(cert_manager.renew_certificate, cert_name, force)
+        background_tasks.add_task(cert_manager.renew_certificate, cert_name)
         
         return {
             "message": f"Certificate renewal started for {cert_name}",
@@ -311,15 +330,17 @@ def create_router(storage, cert_manager):
             raise HTTPException(status_code=404, detail="Certificate not found")
         
         # Check ownership
-        if cert.owner_token_hash and cert.owner_token_hash != token_info['hash']:
+        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
+        if cert_owner and cert_owner != token_info['hash']:
             if token_info.get('name') != 'ADMIN':
                 raise HTTPException(status_code=403, detail="Access denied")
         
         # Check if it's actually a staging certificate
-        if not cert.acme_directory_url or 'staging' not in cert.acme_directory_url.lower():
+        cert_acme_url = cert.get('acme_directory_url') if isinstance(cert, dict) else getattr(cert, 'acme_directory_url', None)
+        if not cert_acme_url or 'staging' not in cert_acme_url.lower():
             return {
                 "message": "Certificate is already a production certificate",
-                "acme_url": cert.acme_directory_url
+                "acme_url": cert_acme_url
             }
         
         # Get production ACME URL
@@ -327,16 +348,23 @@ def create_router(storage, cert_manager):
         
         # Create certificate request with production URL
         from src.certmanager.models import CertificateRequest
+        cert_domains = cert.get('domains') if isinstance(cert, dict) else getattr(cert, 'domains', [])
+        cert_email = cert.get('email') if isinstance(cert, dict) else getattr(cert, 'email', None)
+        cert_created_by = cert.get('created_by') if isinstance(cert, dict) else getattr(cert, 'created_by', None)
+        
         cert_request = CertificateRequest(
-            domain=cert.domains[0] if cert.domains else "",
-            domains=cert.domains,
-            email=cert.email,
+            domain=cert_domains[0] if cert_domains else "",
+            domains=cert_domains,
+            email=cert_email,
             acme_directory_url=production_url,
             cert_name=cert_name
         )
         
         # Mark old certificate as pending replacement
-        cert.status = "replacing"
+        if isinstance(cert, dict):
+            cert['status'] = "replacing"
+        else:
+            cert.status = "replacing"
         await async_storage.store_certificate(cert_name, cert)
         # Generate new production certificate (will replace the staging one)
         from src.certmanager.async_acme import generate_certificate_async
@@ -344,8 +372,8 @@ def create_router(storage, cert_manager):
             generate_certificate_async,
             cert_manager,
             cert_request,
-            cert.owner_token_hash,
-            cert.created_by
+            cert_owner,
+            cert_created_by
         )
         
         return {
@@ -370,19 +398,18 @@ def create_router(storage, cert_manager):
             raise HTTPException(status_code=404, detail="Certificate not found")
         
         # Check ownership
-        if cert.owner_token_hash and cert.owner_token_hash != token_info['hash']:
+        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
+        if cert_owner and cert_owner != token_info['hash']:
             if token_info.get('name') != 'ADMIN':
                 raise HTTPException(status_code=403, detail="Access denied")
         
         # Delete certificate
         success = await async_storage.delete_certificate(cert_name)
         if success:
-            # Update cert manager
+            # Update cert manager if it has ssl_contexts
             if async_cert_manager and hasattr(async_cert_manager, 'ssl_contexts'):
                 if cert_name in async_cert_manager.ssl_contexts:
                     del async_cert_manager.ssl_contexts[cert_name]
-            elif cert_name in cert_manager.ssl_contexts:
-                del cert_manager.ssl_contexts[cert_name]
             
             return {"message": f"Certificate {cert_name} deleted successfully"}
         else:

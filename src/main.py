@@ -105,11 +105,6 @@ async def run_server(config: Config) -> None:
     # Start scheduler
     scheduler.start()
     
-    # Start workflow orchestrator
-    logger.info("Starting workflow orchestrator...")
-    await workflow_orchestrator.start()
-    logger.info("Workflow orchestrator started successfully")
-    
     try:
         # Start the FastAPI app on dual ports
         from hypercorn.asyncio import serve
@@ -154,6 +149,11 @@ async def run_server(config: Config) -> None:
         # Set server reference in workflow orchestrator
         workflow_orchestrator.dispatcher = unified_server
         logger.info("Workflow orchestrator linked to unified server")
+        
+        # Start workflow orchestrator AFTER dispatcher is set
+        logger.info("Starting workflow orchestrator...")
+        await workflow_orchestrator.start()
+        logger.info("Workflow orchestrator started successfully")
         
         logger.info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)")
         logger.info("Each domain will have its own dedicated Hypercorn instance")

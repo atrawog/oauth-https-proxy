@@ -83,7 +83,7 @@ def create_core_router(storage, cert_manager):
             if async_cert_manager:
                 cert = await async_cert_manager.get_certificate(cert_name)
             else:
-                cert = cert_manager.get_certificate(cert_name)
+                cert = None  # No cert manager available
             if cert and cert.status == "active":
                 # Certificate already exists and is active - use it
                 cert_status = "existing"
@@ -131,7 +131,7 @@ def create_core_router(storage, cert_manager):
                     from src.certmanager.async_acme import create_certificate_task
                     asyncio.create_task(
                         create_certificate_task(
-                            cert_manager,
+                            async_cert_manager,
                             cert_request,
                             None,  # https_server will be imported inside the task
                             token_hash,
@@ -147,7 +147,7 @@ def create_core_router(storage, cert_manager):
                     target.enable_https = False
                     target.cert_name = None
                     # Update the stored proxy to reflect HTTPS disabled
-                    async_storage.store_proxy_target(request.hostname, target)
+                    await async_storage.store_proxy_target(request.hostname, target)
                     cert_status = "https_disabled_no_cert"
         else:
             logger.info(f"HTTPS disabled for {request.hostname}, skipping certificate generation")
@@ -155,7 +155,7 @@ def create_core_router(storage, cert_manager):
         # Update cert_name in target if we have one
         if actual_cert_name:
             target.cert_name = actual_cert_name
-            async_storage.store_proxy_target(request.hostname, target)
+            await async_storage.store_proxy_target(request.hostname, target)
         
         # Use workflow orchestrator for complete instance creation
         logger.info(f"Initiating workflow for proxy creation: {request.hostname}")
@@ -323,7 +323,7 @@ def create_core_router(storage, cert_manager):
             target.custom_headers = updates.custom_headers
         
         # Store updated target
-        if not async_storage.store_proxy_target(hostname, target):
+        if not await async_storage.store_proxy_target(hostname, target):
             raise HTTPException(500, "Failed to update proxy target")
         
         return target

@@ -30,19 +30,38 @@ async def generate_certificate_async(
     owner_token_hash: str = None,
     created_by: str = None
 ) -> Certificate:
-    """Generate certificate in a thread to avoid blocking."""
-    loop = asyncio.get_event_loop()
-    
-    # Run the blocking certificate generation in a thread
-    certificate = await loop.run_in_executor(
-        executor,
-        manager.create_certificate,
-        request,
-        owner_token_hash,
-        created_by
-    )
-    
-    return certificate
+    """Generate certificate asynchronously."""
+    try:
+        logger.info(f"[BACKGROUND_TASK] Starting certificate generation for {request.cert_name}")
+        logger.info(f"[BACKGROUND_TASK] Manager type: {type(manager).__name__}")
+        logger.info(f"[BACKGROUND_TASK] Request domain: {request.domain}, ACME URL: {request.acme_directory_url}")
+        
+        # Check if manager has async create_certificate method
+        if hasattr(manager, 'create_certificate') and asyncio.iscoroutinefunction(manager.create_certificate):
+            logger.info(f"[BACKGROUND_TASK] Using async create_certificate method")
+            # Use async method directly
+            certificate = await manager.create_certificate(
+                request,
+                owner_token_hash,
+                created_by
+            )
+        else:
+            logger.info(f"[BACKGROUND_TASK] Using sync create_certificate method in executor")
+            # Fall back to running sync method in executor
+            loop = asyncio.get_event_loop()
+            certificate = await loop.run_in_executor(
+                executor,
+                manager.create_certificate,
+                request,
+                owner_token_hash,
+                created_by
+            )
+        
+        logger.info(f"[BACKGROUND_TASK] Certificate generation completed for {request.cert_name}")
+        return certificate
+    except Exception as e:
+        logger.error(f"[BACKGROUND_TASK] Certificate generation failed for {request.cert_name}: {e}", exc_info=True)
+        raise
 
 
 async def generate_multi_domain_certificate_async(
@@ -97,15 +116,16 @@ async def create_certificate_task(
                 "started_at": asyncio.get_event_loop().time()
             }
             
-            # Generate certificate
-            certificate = await generate_certificate_async(manager, request)
-            
-            # Add ownership info
-            certificate.owner_token_hash = owner_token_hash
-            certificate.created_by = created_by
+            # Generate certificate with ownership info
+            certificate = await generate_certificate_async(
+                manager, 
+                request,
+                owner_token_hash,
+                created_by
+            )
             
             # Store certificate with ownership info
-            manager.storage.store_certificate(cert_name, certificate)
+            await manager.storage.store_certificate(cert_name, certificate)
             
             logger.info(f"Certificate generation completed for {cert_name}")
             
@@ -156,7 +176,7 @@ async def create_certificate_task(
             
             return certificate
         except Exception as e:
-            logger.error(f"Certificate generation failed for {cert_name}: {e}")
+            logger.error(f"[ASYNC_ACME_ERROR] Certificate generation failed for {cert_name}: {e}", exc_info=True)
             
             # Update status to failed
             generation_results[cert_name] = {

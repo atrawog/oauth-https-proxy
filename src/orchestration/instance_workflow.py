@@ -171,7 +171,7 @@ class InstanceWorkflowOrchestrator:
             event: Event data from Redis Stream
         """
         import sys
-        event_type = event.get('type')
+        event_type = event.get('event_type', event.get('type'))
         hostname = event.get('hostname')
         
         logger.info(f"[WORKFLOW] Processing {event_type} for {hostname}")
@@ -810,7 +810,8 @@ class InstanceWorkflowOrchestrator:
         
         # Verify certificate exists and is active
         cert = await self._get_certificate(cert_name)
-        if not cert or cert.status != 'active':
+        cert_status = cert.get('status') if isinstance(cert, dict) else getattr(cert, 'status', None)
+        if not cert or cert_status != 'active':
             logger.error(f"[WORKFLOW] Certificate {cert_name} not ready for {hostname}")
             await self.publisher.publish_instance_failed(
                 hostname=hostname,

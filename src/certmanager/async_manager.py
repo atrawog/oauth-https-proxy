@@ -47,7 +47,32 @@ class AsyncCertificateManager:
         self.logger.set_component("certificate_manager")
         
         # Initialize sync manager for ACME operations
-        self.sync_manager = SyncCertManager(storage)
+        # Need sync storage for sync manager
+        try:
+            from ..storage.redis_storage import RedisStorage
+            # Build Redis URL with password
+            redis_base = os.getenv('REDIS_URL', 'redis://redis:6379/0')
+            redis_password = os.getenv('REDIS_PASSWORD', '')
+            
+            # Parse and rebuild URL with password
+            if redis_password and '://' in redis_base:
+                # Insert password into URL: redis://:password@host:port/db
+                parts = redis_base.split('://', 1)
+                if '@' not in parts[1]:  # No password in URL yet
+                    host_part = parts[1]
+                    redis_url = f"{parts[0]}://:{redis_password}@{host_part}"
+                else:
+                    redis_url = redis_base
+            else:
+                redis_url = redis_base
+            
+            logger.info(f"Initializing sync RedisStorage with URL pattern: redis://:****@{redis_url.split('@')[-1] if '@' in redis_url else redis_url.split('//')[-1]}")
+            sync_storage = RedisStorage(redis_url)
+            self.sync_manager = SyncCertManager(sync_storage)
+            logger.info("Successfully initialized sync CertificateManager for ACME operations")
+        except Exception as e:
+            logger.error(f"Failed to initialize sync CertificateManager: {e}", exc_info=True)
+            self.sync_manager = None
         
         # Renewal configuration
         self.renewal_check_interval = int(os.getenv('RENEWAL_CHECK_INTERVAL', '86400'))
@@ -142,12 +167,13 @@ class AsyncCertificateManager:
         cert_name = request.cert_name
         
         # Start trace
+        is_staging = 'staging' in request.acme_directory_url.lower()
         trace_id = self.logger.start_trace(
             "certificate_generation",
             cert_name=cert_name,
             domain=request.domain,
             email=request.email,
-            is_staging=request.use_staging
+            is_staging=is_staging
         )
         
         try:
@@ -165,7 +191,7 @@ class AsyncCertificateManager:
                 event_type="generation_started",
                 domains=[request.domain],
                 trace_id=trace_id,
-                is_staging=request.use_staging
+                is_staging=is_staging
             )
             
             # Update generation status
@@ -182,6 +208,13 @@ class AsyncCertificateManager:
                 trace_id=trace_id
             )
             
+            if not self.sync_manager:
+                error_msg = "Sync CertificateManager not initialized - cannot generate certificates"
+                logger.error(f"[CERT_GEN_ERROR] {error_msg}")
+                await self.logger.error(error_msg, trace_id=trace_id)
+                raise RuntimeError(error_msg)
+            
+            logger.info(f"[CERT_GEN] Running sync certificate generation in executor for {cert_name}")
             loop = asyncio.get_event_loop()
             certificate = await loop.run_in_executor(
                 executor,
@@ -190,6 +223,7 @@ class AsyncCertificateManager:
                 owner_token_hash,
                 created_by
             )
+            logger.info(f"[CERT_GEN] Sync certificate generation completed for {cert_name}")
             
             # Add ownership info
             certificate.owner_token_hash = owner_token_hash
@@ -689,7 +723,7 @@ class AsyncCertificateManager:
                 cert_name=cert_name,
                 domain=existing_cert.domains[0],
                 email=existing_cert.email,
-                use_staging=False  # Production
+                acme_directory_url="https://acme-v02.api.letsencrypt.org/directory"  # Production
             )
             
             # Generate production certificate

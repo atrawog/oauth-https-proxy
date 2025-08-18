@@ -23,7 +23,7 @@ class RedisStreamConsumer:
             group_name: Consumer group name
         """
         self.redis_url = redis_url
-        self.stream_key = "proxy:events:stream"
+        self.stream_key = "events:all:stream"  # Changed to use unified event stream
         self.group_name = group_name
         self.consumer_name = f"dispatcher-{os.getpid()}"
         self.redis: Optional[redis_async.Redis] = None
@@ -97,7 +97,7 @@ class RedisStreamConsumer:
                             event = self._parse_event(data)
                             event['_message_id'] = message_id  # Add message ID for tracking
                             
-                            logger.info(f"[STREAM_CONSUMER] Processing event {message_id}: {event.get('type')} for {event.get('hostname', 'N/A')}")
+                            logger.info(f"[STREAM_CONSUMER] Processing event {message_id}: {event.get('event_type', event.get('type', 'unknown'))} for {event.get('hostname', event.get('cert_name', 'N/A'))}")
                             
                             # Process event
                             await handler(event)

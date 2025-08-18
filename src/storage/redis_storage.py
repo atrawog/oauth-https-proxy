@@ -107,8 +107,8 @@ class RedisStorage:
         try:
             certificates = []
             for key in self.redis_client.scan_iter(match="cert:*"):
-                # Skip domain mappings (cert:domain:*)
-                if key.startswith("cert:domain:"):
+                # Skip domain mappings and status keys
+                if key.startswith("cert:domain:") or key.startswith("cert:status"):
                     continue
                 cert_name = key.split(":", 1)[1]
                 cert = self.get_certificate(cert_name)
@@ -128,6 +128,9 @@ class RedisStorage:
             # First, find all proxy targets that reference this certificate
             proxy_targets_cleaned = 0
             for key in self.redis_client.scan_iter(match="proxy:*"):
+                # Skip non-proxy target keys (streams, client info, etc)
+                if ":" in key[6:]:  # Skip keys like proxy:events:stream, proxy:client:*, etc
+                    continue
                 proxy_json = self.redis_client.get(key)
                 if proxy_json:
                     proxy_data = json.loads(proxy_json)
@@ -161,8 +164,8 @@ class RedisStorage:
             threshold = datetime.now(timezone.utc) + timedelta(days=days)
             
             for key in self.redis_client.scan_iter(match="cert:*"):
-                # Skip domain mappings (cert:domain:*)
-                if key.startswith("cert:domain:"):
+                # Skip domain mappings and status keys
+                if key.startswith("cert:domain:") or key.startswith("cert:status"):
                     continue
                 cert_name = key.split(":", 1)[1]
                 cert = self.get_certificate(cert_name)
