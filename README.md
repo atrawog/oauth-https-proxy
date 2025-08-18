@@ -80,6 +80,203 @@ just token-admin
 
 Open http://localhost in your browser to access the management interface.
 
+## Production Deployment Guide
+
+This guide walks you through deploying a complete OAuth-protected infrastructure with automatic SSL certificates.
+
+### Prerequisites
+1. A domain name (e.g., `yourdomain.com`) with DNS control
+2. Server with Docker and Docker Compose installed
+3. GitHub OAuth App credentials
+4. Ports 80 and 443 open for HTTP/HTTPS traffic
+
+### Step 1: Environment Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/atrawog/oauth-https-proxy
+cd oauth-https-proxy
+
+# Create .env file with your configuration
+cat > .env << 'EOF'
+# Redis configuration
+REDIS_URL=redis://redis:6379/0
+REDIS_PASSWORD=$(openssl rand -hex 32)
+
+# Server configuration
+HTTP_PORT=80
+HTTPS_PORT=443
+BASE_DOMAIN=yourdomain.com
+
+# ACME configuration
+ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
+ACME_STAGING_URL=https://acme-staging-v02.api.letsencrypt.org/directory
+RENEWAL_CHECK_INTERVAL=86400
+RENEWAL_THRESHOLD_DAYS=30
+CERT_GEN_MAX_WORKERS=5
+
+# GitHub OAuth Configuration
+GITHUB_CLIENT_ID=your_github_client_id
+GITHUB_CLIENT_SECRET=your_github_client_secret
+
+# OAuth JWT Configuration
+OAUTH_JWT_ALGORITHM=RS256
+OAUTH_JWT_PRIVATE_KEY_B64=$(openssl genrsa 2048 2>/dev/null | base64 -w 0)
+OAUTH_ACCESS_TOKEN_LIFETIME=1800
+OAUTH_REFRESH_TOKEN_LIFETIME=31536000
+OAUTH_SESSION_TIMEOUT=300
+OAUTH_ALLOWED_GITHUB_USERS=*
+
+# Admin configuration
+ADMIN_EMAIL=admin@yourdomain.com
+
+# Docker configuration
+DOCKER_GID=$(getent group docker | cut -d: -f3)
+DOCKER_API_VERSION=1.41
+
+# Logging
+LOG_LEVEL=INFO
+EOF
+```
+
+### Step 2: Start Core Services
+
+```bash
+# Start Redis and API services
+docker-compose up -d
+
+# Wait for services to be healthy
+just health
+
+# Generate admin token (save this!)
+just token-admin
+# Add the token to your .env as ADMIN_TOKEN=<generated_token>
+```
+
+### Step 3: Setup OAuth Server
+
+```bash
+# Create OAuth server proxy with staging certificate (for testing)
+just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" --staging
+
+# Setup OAuth routes
+just oauth-routes-setup yourdomain.com
+
+# Configure OAuth server metadata
+just proxy-oauth-server-set auth.yourdomain.com "https://auth.yourdomain.com"
+
+# Once verified working, recreate with production certificate
+just proxy-delete auth.yourdomain.com
+just proxy-create auth.yourdomain.com "http://127.0.0.1:9000"
+```
+
+### Step 4: Create Main Website Proxy
+
+```bash
+# Create main website proxy with staging certificate
+just proxy-create yourdomain.com "http://127.0.0.1:9000" --staging
+
+# Once verified, switch to production
+just proxy-delete yourdomain.com
+just proxy-create yourdomain.com "http://127.0.0.1:9000"
+```
+
+### Step 5: Deploy Protected Services
+
+Example: Deploy an MCP echo server with OAuth protection
+
+```bash
+# Build the echo server image (if using local Dockerfile)
+cd mcp-http-echo-server
+docker build -t mcp-http-echo-server:latest .
+cd ..
+
+# Run the service
+docker run -d --name mcp-echo-server \
+  --network oauth-https-proxy_proxy_network \
+  -p 127.0.0.1:3000:3000 \
+  mcp-http-echo-server:latest
+
+# Register as external service
+just service-register mcp-echo-server "http://mcp-echo-server:3000" "MCP Echo Server"
+
+# Create proxy with staging certificate
+just proxy-create echo.yourdomain.com "http://mcp-echo-server:3000" --staging
+
+# Enable OAuth protection
+just proxy-auth-enable echo.yourdomain.com auth.yourdomain.com redirect
+
+# Once verified, switch to production certificate
+just cert-delete proxy-echo-yourdomain-com
+just proxy-update echo.yourdomain.com --production-cert
+```
+
+### Step 6: DNS Configuration
+
+Configure your DNS records:
+```
+A     @              → your_server_ip
+A     auth           → your_server_ip  
+A     echo           → your_server_ip
+A     www            → your_server_ip
+```
+
+### Step 7: Verify Setup
+
+```bash
+# Check system health
+just health
+
+# List all proxies
+just proxy-list
+
+# Test OAuth flow
+curl https://echo.yourdomain.com
+# Should redirect to GitHub OAuth
+
+# Check OAuth metadata
+curl https://auth.yourdomain.com/.well-known/oauth-authorization-server
+```
+
+### Migration from Staging to Production
+
+When ready to switch from staging to production certificates:
+
+```bash
+# For each proxy with staging certificate:
+just cert-delete <cert-name>
+just proxy-update <hostname> --production-cert
+
+# Or recreate the proxy:
+just proxy-delete <hostname>
+just proxy-create <hostname> <target-url>  # Without --staging flag
+```
+
+### Troubleshooting
+
+```bash
+# Check logs
+just logs-follow
+just logs-service api 100
+
+# Debug certificate issues
+just cert-show <cert-name>
+
+# Check proxy configuration
+just proxy-show <hostname>
+
+# Monitor OAuth activity
+just logs-oauth <ip>
+```
+
+### Security Considerations
+
+1. **Token Security**: Store admin tokens securely, rotate regularly
+2. **GitHub Users**: Configure `OAUTH_ALLOWED_GITHUB_USERS` to restrict access
+3. **Certificate Email**: Use a valid email for Let's Encrypt notifications
+4. **Redis Password**: Use a strong, randomly generated password
+5. **Network Isolation**: Use Docker networks to isolate services
+
 ## Basic Usage
 
 ### Create a Proxy

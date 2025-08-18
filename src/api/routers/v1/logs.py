@@ -1,21 +1,27 @@
 """Log query API endpoints.
 
-This module redirects to the modular log management structure.
+This module provides log query endpoints.
 """
 
-from .logs import create_logs_router
+from fastapi import APIRouter, HTTPException
+import logging
+
+logger = logging.getLogger(__name__)
 
 
-def create_router(storage):
+def create_logs_router(storage):
     """Create the logs API router.
     
-    This function maintains backward compatibility while using 
-    the new modular structure.
-    
     Args:
-        async_storage: Redis async_storage instance
+        storage: Redis storage instance
     
     Returns:
         APIRouter with all log endpoints
     """
-    return create_logs_router(async_storage)
+    router = APIRouter()
+    
+    # Log endpoints will be implemented here
+    # For now, return empty router to prevent startup failures
+    logger.warning("Log query endpoints not yet implemented")
+    
+    return router
