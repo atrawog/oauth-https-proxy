@@ -376,6 +376,29 @@ def create_router(storage, cert_manager):
             cert_created_by
         )
         
+        # Also trigger SSL context reload after certificate is generated
+        # This ensures the HTTPS instance uses the new production certificate
+        import asyncio
+        async def publish_cert_update_after_generation():
+            # Wait a bit for certificate generation to complete
+            await asyncio.sleep(60)
+            try:
+                # Publish event to update SSL context
+                await req.app.state.async_storage.redis_client.xadd(
+                    "events:all:stream",
+                    {
+                        "event_type": "certificate_updated",
+                        "hostname": cert_domains[0] if cert_domains else "",
+                        "cert_name": cert_name,
+                        "action": "reload_ssl_context"
+                    }
+                )
+            except Exception as e:
+                logger.error(f"Failed to publish certificate_updated event: {e}")
+        
+        # Schedule the update event
+        asyncio.create_task(publish_cert_update_after_generation())
+        
         return {
             "message": f"Converting {cert_name} from staging to production",
             "status": "pending",

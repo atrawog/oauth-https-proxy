@@ -226,6 +226,9 @@ class InstanceWorkflowOrchestrator:
             elif event_type == 'production_certificate_ready':
                 await self.handle_production_cert_ready(event)
                 
+            elif event_type == 'certificate_updated':
+                await self.handle_certificate_updated(event)
+                
             else:
                 logger.debug(f"[WORKFLOW] Unhandled event type: {event_type}")
                 
@@ -805,8 +808,9 @@ class InstanceWorkflowOrchestrator:
         https_port = event.get('https_port')
         https_internal_port = event.get('https_internal_port', https_port)
         cert_name = event.get('cert_name')
+        force_recreate = event.get('force_recreate', False)
         
-        logger.info(f"[WORKFLOW] Creating HTTPS instance for {hostname} on port {https_port} with cert {cert_name}")
+        logger.info(f"[WORKFLOW] {'Recreating' if force_recreate else 'Creating'} HTTPS instance for {hostname} on port {https_port} with cert {cert_name}")
         
         # Verify certificate exists and is active
         cert = await self._get_certificate(cert_name)
@@ -822,10 +826,16 @@ class InstanceWorkflowOrchestrator:
         
         if self.dispatcher:
             try:
-                # The dispatcher's create_instance_for_proxy only takes hostname
-                # If an HTTP instance already exists, it will upgrade it to HTTPS
-                # If not, it will create a new HTTPS-only instance
-                await self.dispatcher.create_instance_for_proxy(hostname)
+                # If this is a certificate update, call update_ssl_context on dispatcher
+                if force_recreate and hasattr(self.dispatcher, 'update_ssl_context'):
+                    logger.info(f"[WORKFLOW] Calling update_ssl_context for {hostname}")
+                    # Convert cert dict to object if needed
+                    self.dispatcher.update_ssl_context(cert)
+                else:
+                    # The dispatcher's create_instance_for_proxy only takes hostname
+                    # If an HTTP instance already exists, it will upgrade it to HTTPS
+                    # If not, it will create a new HTTPS-only instance
+                    await self.dispatcher.create_instance_for_proxy(hostname)
                 
                 # Publish success event
                 await self.publisher.publish_event("https_instance_started", {
@@ -835,7 +845,7 @@ class InstanceWorkflowOrchestrator:
                     "cert_name": cert_name
                 })
                 
-                logger.info(f"[WORKFLOW] HTTPS instance created for {hostname}")
+                logger.info(f"[WORKFLOW] HTTPS instance {'recreated' if force_recreate else 'created'} for {hostname}")
                 
             except Exception as e:
                 logger.error(f"[WORKFLOW] Failed to create HTTPS instance for {hostname}: {e}")
@@ -939,6 +949,48 @@ class InstanceWorkflowOrchestrator:
                     None
                 )
             )
+    
+    async def handle_certificate_updated(self, event: Dict):
+        """
+        Handle certificate update event (e.g., after staging to production conversion).
+        
+        This triggers the dispatcher to update the SSL context for the instance.
+        """
+        hostname = event.get('hostname')
+        cert_name = event.get('cert_name')
+        action = event.get('action', 'reload_ssl_context')
+        
+        logger.info(f"[WORKFLOW] Certificate updated for {hostname}, action: {action}")
+        
+        if action == 'reload_ssl_context':
+            # Get the updated certificate
+            cert = await self._get_certificate(cert_name)
+            if not cert:
+                logger.error(f"[WORKFLOW] Certificate {cert_name} not found for SSL context reload")
+                return
+            
+            cert_status = cert.get('status') if isinstance(cert, dict) else getattr(cert, 'status', None)
+            if cert_status != 'active':
+                logger.warning(f"[WORKFLOW] Certificate {cert_name} not active, skipping SSL reload")
+                return
+            
+            # Trigger instance recreation with new certificate
+            # The dispatcher's update_ssl_context method requires direct access
+            # So we'll trigger a create_https_instance event which will recreate with new cert
+            logger.info(f"[WORKFLOW] Triggering HTTPS instance recreation for {hostname} with updated cert {cert_name}")
+            
+            # Get current state to preserve port allocation
+            state_data = await self.state_tracker.get_instance_state(hostname)
+            https_port = state_data.get('details', {}).get('https_port', 443) if state_data else 443
+            
+            # Recreate HTTPS instance with updated certificate
+            await self.publisher.publish_event("create_https_instance", {
+                "hostname": hostname,
+                "cert_name": cert_name,
+                "https_port": https_port,
+                "https_internal_port": https_port + 2000 if https_port != 443 else 11443,
+                "force_recreate": True  # Signal to force recreation
+            })
     
     async def handle_production_cert_ready(self, event: Dict):
         """

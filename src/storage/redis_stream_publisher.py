@@ -16,7 +16,7 @@ class RedisStreamPublisher:
         """Initialize with either a Redis client or URL."""
         self.redis = redis_client
         self.redis_url = redis_url
-        self.stream_key = "proxy:events:stream"
+        self.stream_key = "events:all:stream"  # FIXED: Use the unified event stream
         self.max_stream_length = 10000  # Keep last 10k events
         
     async def _ensure_connection(self):
@@ -47,7 +47,8 @@ class RedisStreamPublisher:
             
             # Build event with metadata
             event = {
-                "type": event_type,
+                "event_type": event_type,  # FIXED: Use event_type for consistency
+                "type": event_type,  # Keep for backward compatibility
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 **data
             }
