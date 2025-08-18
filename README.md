@@ -97,11 +97,16 @@ This guide walks you through deploying a complete OAuth-protected infrastructure
 git clone https://github.com/atrawog/oauth-https-proxy
 cd oauth-https-proxy
 
+# Generate required secrets first
+REDIS_PASSWORD=$(openssl rand -hex 32)
+JWT_KEY_B64=$(openssl genrsa 2048 2>/dev/null | base64 -w 0)
+DOCKER_GID=$(getent group docker | cut -d: -f3)
+
 # Create .env file with your configuration
-cat > .env << 'EOF'
+cat > .env << EOF
 # Redis configuration
 REDIS_URL=redis://redis:6379/0
-REDIS_PASSWORD=$(openssl rand -hex 32)
+REDIS_PASSWORD=$REDIS_PASSWORD
 
 # Server configuration
 HTTP_PORT=80
@@ -121,17 +126,18 @@ GITHUB_CLIENT_SECRET=your_github_client_secret
 
 # OAuth JWT Configuration
 OAUTH_JWT_ALGORITHM=RS256
-OAUTH_JWT_PRIVATE_KEY_B64=$(openssl genrsa 2048 2>/dev/null | base64 -w 0)
+OAUTH_JWT_PRIVATE_KEY_B64=$JWT_KEY_B64
 OAUTH_ACCESS_TOKEN_LIFETIME=1800
 OAUTH_REFRESH_TOKEN_LIFETIME=31536000
 OAUTH_SESSION_TIMEOUT=300
+OAUTH_CLIENT_LIFETIME=7776000
 OAUTH_ALLOWED_GITHUB_USERS=*
 
 # Admin configuration
 ADMIN_EMAIL=admin@yourdomain.com
 
 # Docker configuration
-DOCKER_GID=$(getent group docker | cut -d: -f3)
+DOCKER_GID=$DOCKER_GID
 DOCKER_API_VERSION=1.41
 
 # Logging
@@ -149,25 +155,29 @@ docker-compose up -d
 just health
 
 # Generate admin token (save this!)
-just token-admin
-# Add the token to your .env as ADMIN_TOKEN=<generated_token>
+ADMIN_TOKEN=$(just token-admin | grep "acm_" | awk '{print $NF}')
+echo "ADMIN_TOKEN=$ADMIN_TOKEN" >> .env
+echo "Admin token saved to .env: $ADMIN_TOKEN"
 ```
 
 ### Step 3: Setup OAuth Server
 
 ```bash
+# Source the .env to get ADMIN_TOKEN
+source .env
+
 # Create OAuth server proxy with staging certificate (for testing)
-just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" --staging
+just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" true true true true "$ADMIN_EMAIL" "$ADMIN_TOKEN"
 
 # Setup OAuth routes
-just oauth-routes-setup yourdomain.com
+just oauth-routes-setup yourdomain.com "$ADMIN_TOKEN"
 
 # Configure OAuth server metadata
-just proxy-oauth-server-set auth.yourdomain.com "https://auth.yourdomain.com"
+just proxy-oauth-server-set auth.yourdomain.com "https://auth.yourdomain.com" "" "" "" "" "" "" "" "" "$ADMIN_TOKEN"
 
 # Once verified working, recreate with production certificate
-just proxy-delete auth.yourdomain.com
-just proxy-create auth.yourdomain.com "http://127.0.0.1:9000"
+just proxy-delete auth.yourdomain.com "$ADMIN_TOKEN"
+just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" false true true true "$ADMIN_EMAIL" "$ADMIN_TOKEN"
 ```
 
 ### Step 4: Create Main Website Proxy
