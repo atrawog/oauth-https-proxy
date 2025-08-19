@@ -627,6 +627,18 @@ test *files="":
 test-all:
     pixi run pytest tests/ -v --tb=short
 
+# Test MCP tools
+test-mcp:
+    pixi run pytest tests/test_mcp_tools.py -v -s
+
+# Test MCP endpoint (quick test)
+test-mcp-quick:
+    pixi run pytest tests/test_mcp.py -v
+
+# Check if MCP server is working
+test-mcp-server:
+    pixi run python scripts/test_mcp_server.py
+
 # Build documentation
 docs-build:
     pixi run jupyter-book build docs

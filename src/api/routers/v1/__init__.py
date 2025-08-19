@@ -126,4 +126,32 @@ def create_v1_router(app) -> APIRouter:
     except Exception as e:
         logger.warning(f"Log query endpoints not available: {e}")
     
+    # MCP endpoints: /api/v1/mcp/*
+    try:
+        # Get unified logger from app if available
+        unified_logger = None
+        if hasattr(app.state, 'async_components') and app.state.async_components:
+            unified_logger = app.state.async_components.unified_logger
+        
+        if unified_logger:
+            logger.info("Attempting to import MCP router...")
+            from src.mcp.router import create_mcp_router
+            logger.info("MCP router module imported successfully")
+            mcp_router = create_mcp_router(async_storage, unified_logger)
+            v1_router.include_router(
+                mcp_router,
+                prefix="/mcp"
+            )
+            logger.info("Included MCP router in v1")
+        else:
+            logger.warning("MCP endpoints not available: unified_logger not initialized")
+    except ImportError as e:
+        logger.warning(f"MCP endpoints not available: {e}")
+        import traceback
+        logger.debug(f"Import traceback: {traceback.format_exc()}")
+    except Exception as e:
+        logger.warning(f"Error initializing MCP endpoints: {e}")
+        import traceback
+        logger.debug(f"Error traceback: {traceback.format_exc()}")
+    
     return v1_router

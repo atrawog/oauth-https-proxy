@@ -6,6 +6,7 @@ platforms = ["linux-64", "osx-64", "osx-arm64", "win-64"]
 [dependencies]
 python = ">=3.10,<3.13"
 pip = "*"
+httpx = ">=0.28.1,<0.29"
 
 [pypi-dependencies]
 fastapi = ">=0.104.1"
@@ -44,6 +45,7 @@ pyyaml = ">=6.0"
 python-dateutil = ">=2.8.0"
 oauth-https-proxy-client = { path = "./oauth-https-proxy-client", editable = true }
 mcp-http-echo-server = { path = "./mcp-http-echo-server", editable = true }
+mcp = ">=0.1.0"
 
 [tasks]
 test = "pytest tests/ -v"
