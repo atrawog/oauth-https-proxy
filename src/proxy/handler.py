@@ -549,8 +549,17 @@ class EnhancedProxyHandler:
     async def _stream_response(self, response: httpx.Response) -> AsyncIterator[bytes]:
         """Stream response body."""
         try:
-            async for chunk in response.aiter_bytes(chunk_size=8192):
-                yield chunk
+            # For SSE, use smaller chunks and yield immediately
+            content_type = response.headers.get("content-type", "")
+            if "text/event-stream" in content_type:
+                # SSE needs smaller chunks and immediate yielding
+                async for chunk in response.aiter_bytes(chunk_size=1):
+                    if chunk:
+                        yield chunk
+            else:
+                # Regular streaming with larger chunks
+                async for chunk in response.aiter_bytes(chunk_size=8192):
+                    yield chunk
         finally:
             await response.aclose()
     
@@ -653,12 +662,20 @@ class EnhancedProxyHandler:
     
     def _filter_response_headers(self, headers: Dict[str, str]) -> Dict[str, str]:
         """Filter hop-by-hop headers from response."""
+        # Check if this is SSE response
+        content_type = headers.get("content-type", "")
+        is_sse = "text/event-stream" in content_type
+        
         # Remove hop-by-hop headers from response
         hop_by_hop = [
             "connection", "keep-alive", "proxy-authenticate",
-            "proxy-authorization", "te", "trailers", "transfer-encoding",
+            "proxy-authorization", "te", "trailers",
             "upgrade", "content-length", "content-encoding"
         ]
+        
+        # For SSE, don't remove transfer-encoding as it might be needed
+        if not is_sse:
+            hop_by_hop.append("transfer-encoding")
         
         # Parse Connection header for additional hop-by-hop headers
         connection_header = headers.get("connection", "")
@@ -671,6 +688,11 @@ class EnhancedProxyHandler:
         for name, value in headers.items():
             if name.lower() not in hop_by_hop:
                 filtered[name] = value
+        
+        # For SSE, ensure proper headers are set
+        if is_sse:
+            filtered["cache-control"] = "no-cache, no-store, must-revalidate"
+            filtered["x-accel-buffering"] = "no"  # Disable nginx buffering
         
         return filtered
     

@@ -348,21 +348,26 @@ class IPLogCapture:
         """Asynchronously log a batch of entries to RequestLogger."""
         for log_data in items:
             try:
-                await self.request_logger.log_request(
-                    ip=log_data["ip"],
-                    hostname=log_data["hostname"],
-                    method=log_data["method"],
-                    path=log_data["path"],
-                    query="",
-                    user_agent="system-logger",
-                    auth_user=None,
-                    referer=None,
-                    log_level=log_data["log_level"],
-                    component=log_data["component"],
-                    message=log_data["message"],
-                    system_log=True,
-                    **log_data["full_event"]
-                )
+                # Create a dictionary with all log data
+                request_data = {
+                    "ip": log_data["ip"],
+                    "hostname": log_data["hostname"],
+                    "method": log_data["method"],
+                    "path": log_data["path"],
+                    "query": "",
+                    "user_agent": "system-logger",
+                    "auth_user": None,
+                    "referer": None,
+                    "log_level": log_data["log_level"],
+                    "component": log_data["component"],
+                    "message": log_data["message"],
+                    "system_log": True,
+                }
+                # Add all fields from full_event
+                request_data.update(log_data["full_event"])
+                
+                # Pass as single dictionary parameter
+                await self.request_logger.log_request(request_data)
             except Exception:
                 # Silently fail for individual items
                 pass
@@ -607,25 +612,31 @@ async def log_request(
     request_key = None
     if request_logger:
         try:
-            # Pass ALL log_data to RequestLogger for full visibility in app-logs-by-ip
-            request_key = await request_logger.log_request(
-                ip=ip,
-                hostname=log_data.get("hostname", ""),
-                method=log_data.get("method", ""),
-                path=log_data.get("path", ""),
-                query=log_data.get("query", ""),
-                user_agent=log_data.get("user_agent", ""),
-                auth_user=extra_context.get("auth_user"),
-                referer=log_data.get("referer", ""),
+            # Create a dictionary with all request data
+            request_data = {
+                "ip": ip,
+                "hostname": log_data.get("hostname", ""),
+                "method": log_data.get("method", ""),
+                "path": log_data.get("path", ""),
+                "query": log_data.get("query", ""),
+                "user_agent": log_data.get("user_agent", ""),
+                "auth_user": extra_context.get("auth_user"),
+                "referer": log_data.get("referer", ""),
                 # Include ALL enhanced logging data for OAuth debugging
-                request_body=log_data.get("request_body", ""),
-                request_body_size=log_data.get("request_body_size", 0),
-                request_body_truncated=log_data.get("request_body_truncated", False),
-                request_form_data=log_data.get("request_form_data", {}),
-                critical_headers=log_data.get("critical_headers", {}),
-                is_critical_endpoint=log_data.get("is_critical_endpoint", False),
-                **{k: v for k, v in extra_context.items() if k not in ["hostname", "auth_user"]}
-            )
+                "request_body": log_data.get("request_body", ""),
+                "request_body_size": log_data.get("request_body_size", 0),
+                "request_body_truncated": log_data.get("request_body_truncated", False),
+                "request_form_data": log_data.get("request_form_data", {}),
+                "critical_headers": log_data.get("critical_headers", {}),
+                "is_critical_endpoint": log_data.get("is_critical_endpoint", False),
+            }
+            # Add extra context fields
+            for k, v in extra_context.items():
+                if k not in ["hostname", "auth_user"]:
+                    request_data[k] = v
+            
+            # Pass as single dictionary parameter
+            request_key = await request_logger.log_request(request_data)
             log_data["_request_key"] = request_key  # Store for later use
         except Exception as e:
             logger.error(f"Failed to log request to RequestLogger: {e}")
@@ -745,7 +756,7 @@ async def log_response(
     
     getattr(logger, level)(message, **log_data)
     
-    # Log to RequestLogger if available
+    # Log to RequestLogger if available (as response data)
     request_logger = get_request_logger()
     if request_logger:
         try:
@@ -759,27 +770,35 @@ async def log_response(
                     "message": log_data.get("response_body", "")[:200]  # Limit error message length
                 }
             
-            # Pass ALL enhanced OAuth response data for app-logs-by-ip visibility
-            await request_logger.log_response(
-                ip=ip,
-                status=log_data.get("status", 0),
-                duration_ms=duration_ms,
-                response_size=len(log_data.get("response_body", "")),
-                error=error,
-                request_key=request_key,  # Pass the request_key for unified entries
+            # Create a dictionary with all response data
+            response_data = {
+                "ip": ip,
+                "status": log_data.get("status", 0),
+                "duration_ms": duration_ms,
+                "response_size": len(log_data.get("response_body", "")),
+                "error": error,
+                "request_key": request_key,  # Pass the request_key for unified entries
                 # Include ALL enhanced OAuth debugging data
-                response_body=log_data.get("response_body", ""),
-                response_body_size=log_data.get("response_body_size", 0),
-                response_body_truncated=log_data.get("response_body_truncated", False),
-                response_json=log_data.get("response_json", {}),
-                response_json_masked=log_data.get("response_json_masked", {}),
-                critical_response_headers=log_data.get("critical_response_headers", {}),
-                oauth_failure_analysis=log_data.get("oauth_failure_analysis", {}),
-                is_critical_endpoint=log_data.get("is_critical_endpoint", False),
-                hostname=extra_context.get("hostname", ""),
-                path=extra_context.get("path", ""),
-                **{k: v for k, v in extra_context.items() if k not in ["ip", "status", "hostname", "path"]}
-            )
+                "response_body": log_data.get("response_body", ""),
+                "response_body_size": log_data.get("response_body_size", 0),
+                "response_body_truncated": log_data.get("response_body_truncated", False),
+                "response_json": log_data.get("response_json", {}),
+                "response_json_masked": log_data.get("response_json_masked", {}),
+                "critical_response_headers": log_data.get("critical_response_headers", {}),
+                "oauth_failure_analysis": log_data.get("oauth_failure_analysis", {}),
+                "is_critical_endpoint": log_data.get("is_critical_endpoint", False),
+                "hostname": extra_context.get("hostname", ""),
+                "path": extra_context.get("path", ""),
+                "method": extra_context.get("method", ""),
+                "response_type": "response",  # Mark this as response data
+            }
+            # Add extra context fields
+            for k, v in extra_context.items():
+                if k not in ["ip", "status", "hostname", "path", "method"]:
+                    response_data[k] = v
+            
+            # Log as request data (but marked as response)
+            await request_logger.log_request(response_data)
         except Exception as e:
             logger.error(f"Failed to log response to RequestLogger: {e}")
     

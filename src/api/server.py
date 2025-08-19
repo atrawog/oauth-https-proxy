@@ -84,6 +84,15 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         logger.info("API app starting...")
         # Initialize OAuth Redis connection
         await oauth_redis_manager.initialize()
+        
+        # Initialize OAuth resource protector for unified auth
+        from .oauth.async_resource_protector import create_async_resource_protector
+        app.state.oauth_components['resource_protector'] = create_async_resource_protector(
+            oauth_settings,
+            oauth_redis_manager.client,
+            auth_manager.key_manager
+        )
+        
         yield
         logger.info("API app shutting down...")
         # Close OAuth Redis connection
@@ -102,10 +111,23 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     app.state.cert_manager = cert_manager
     app.state.scheduler = scheduler
     
+    # Store OAuth components for unified auth
+    app.state.oauth_components = {
+        'settings': oauth_settings,
+        'redis_manager': oauth_redis_manager,
+        'auth_manager': auth_manager,
+        'resource_protector': None  # Will be initialized later if needed
+    }
+    
     # CRITICAL: Add ProxyHeadersMiddleware FIRST to fix redirect URLs
     # This must be added before any other middleware to ensure request.url
     # reflects the external URL, not the internal Docker URL
     app.add_middleware(ProxyHeadersMiddleware)
+    
+    # Add AuthConfigMiddleware to capture full request paths
+    # This must be added early to ensure paths are captured before routing
+    from .auth_middleware import AuthConfigMiddleware
+    app.add_middleware(AuthConfigMiddleware)
     
     # Add CORS middleware
     app.add_middleware(

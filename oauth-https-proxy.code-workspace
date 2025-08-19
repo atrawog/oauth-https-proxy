@@ -5,6 +5,9 @@
 		},
 		{
 			"path": "oauth-https-proxy-client"
+		},
+		{
+			"path": "mcp-http-echo-server"
 		}
 	],
 	"settings": {

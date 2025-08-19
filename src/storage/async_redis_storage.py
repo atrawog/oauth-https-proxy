@@ -896,3 +896,170 @@ class AsyncRedisStorage:
         except Exception as e:
             logger.error(f"Failed to list proxy names by owner: {e}")
             return []
+    
+    # Authentication Configuration operations
+    async def store_auth_config(self, config_id: str, config_data: dict) -> bool:
+        """Store authentication configuration.
+        
+        Args:
+            config_id: Unique identifier for this configuration
+            config_data: Configuration data dictionary
+            
+        Returns:
+            True if stored successfully
+        """
+        try:
+            # Add timestamps if not present
+            if 'created_at' not in config_data:
+                config_data['created_at'] = datetime.now(timezone.utc).isoformat()
+            config_data['updated_at'] = datetime.now(timezone.utc).isoformat()
+            
+            # Store configuration
+            key = f"auth:config:pattern:{config_id}"
+            result = await self.redis_client.set(key, json.dumps(config_data))
+            
+            # Add to index for efficient listing
+            if result:
+                await self.redis_client.sadd("auth:config:index", config_id)
+            
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Failed to store auth config: {e}")
+            return False
+    
+    async def get_auth_config(self, config_id: str) -> Optional[dict]:
+        """Get authentication configuration by ID.
+        
+        Args:
+            config_id: Configuration identifier
+            
+        Returns:
+            Configuration data or None
+        """
+        try:
+            key = f"auth:config:pattern:{config_id}"
+            data = await self.redis_client.get(key)
+            if data:
+                return json.loads(data)
+            return None
+        except Exception as e:
+            logger.error(f"Failed to get auth config: {e}")
+            return None
+    
+    async def list_auth_configs(self) -> List[dict]:
+        """List all authentication configurations.
+        
+        Returns:
+            List of configuration dictionaries
+        """
+        try:
+            configs = []
+            # Use index for efficient listing
+            config_ids = await self.redis_client.smembers("auth:config:index")
+            
+            for config_id in config_ids:
+                config = await self.get_auth_config(config_id)
+                if config:
+                    config['id'] = config_id
+                    configs.append(config)
+            
+            # Sort by priority (highest first)
+            configs.sort(key=lambda x: x.get('priority', 50), reverse=True)
+            
+            return configs
+        except Exception as e:
+            logger.error(f"Failed to list auth configs: {e}")
+            return []
+    
+    async def delete_auth_config(self, config_id: str) -> bool:
+        """Delete authentication configuration.
+        
+        Args:
+            config_id: Configuration identifier
+            
+        Returns:
+            True if deleted successfully
+        """
+        try:
+            key = f"auth:config:pattern:{config_id}"
+            result = await self.redis_client.delete(key)
+            
+            # Remove from index
+            if result:
+                await self.redis_client.srem("auth:config:index", config_id)
+                
+                # Clear cache entries that might be affected
+                # Cache keys follow pattern auth:config:cache:{method}:{path}
+                async for cache_key in self.redis_client.scan_iter(match="auth:config:cache:*"):
+                    await self.redis_client.delete(cache_key)
+            
+            return bool(result)
+        except Exception as e:
+            logger.error(f"Failed to delete auth config: {e}")
+            return False
+    
+    async def find_auth_configs_by_pattern(self, path_pattern: str) -> List[dict]:
+        """Find all configurations matching a specific path pattern.
+        
+        Args:
+            path_pattern: The path pattern to search for
+            
+        Returns:
+            List of matching configurations
+        """
+        try:
+            configs = []
+            all_configs = await self.list_auth_configs()
+            
+            for config in all_configs:
+                if config.get('path_pattern') == path_pattern:
+                    configs.append(config)
+            
+            return configs
+        except Exception as e:
+            logger.error(f"Failed to find auth configs by pattern: {e}")
+            return []
+    
+    async def update_auth_config(self, config_id: str, updates: dict) -> bool:
+        """Update authentication configuration.
+        
+        Args:
+            config_id: Configuration identifier
+            updates: Dictionary of fields to update
+            
+        Returns:
+            True if updated successfully
+        """
+        try:
+            # Get existing config
+            config = await self.get_auth_config(config_id)
+            if not config:
+                return False
+            
+            # Apply updates
+            config.update(updates)
+            config['updated_at'] = datetime.now(timezone.utc).isoformat()
+            
+            # Store updated config
+            return await self.store_auth_config(config_id, config)
+        except Exception as e:
+            logger.error(f"Failed to update auth config: {e}")
+            return False
+    
+    async def clear_auth_config_cache(self) -> int:
+        """Clear all cached auth configurations.
+        
+        Returns:
+            Number of cache entries cleared
+        """
+        try:
+            count = 0
+            async for cache_key in self.redis_client.scan_iter(match="auth:config:cache:*"):
+                if await self.redis_client.delete(cache_key):
+                    count += 1
+            
+            logger.info(f"Cleared {count} auth config cache entries")
+            return count
+        except Exception as e:
+            logger.error(f"Failed to clear auth config cache: {e}")
+            return 0

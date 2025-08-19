@@ -1,13 +1,15 @@
-"""FastAPI router for MCP endpoint."""
+"""FastAPI router for MCP endpoint with full MCP Streamable HTTP compliance."""
 
+import asyncio
 import json
 import logging
 import time
 import uuid
-from typing import Dict, Any, Optional
+from typing import Dict, Any, Optional, AsyncGenerator
 
 from fastapi import APIRouter, Request, Response, Depends, HTTPException
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
+from sse_starlette.sse import EventSourceResponse
 
 from .mcp_server import MCPServer
 from src.api.auth import get_optional_token_info
@@ -43,6 +45,33 @@ def create_mcp_router(async_storage, unified_logger):
         stateless_mode=False,  # Default to stateful, can be configured
         session_timeout=3600   # 1 hour default
     )
+    
+    @router.get("/")
+    async def mcp_info():
+        """Return basic MCP server information for GET requests.
+        
+        This helps clients discover that this is an MCP endpoint.
+        """
+        return {
+            "type": "mcp_server",
+            "name": "OAuth-HTTPS-Proxy MCP Server",
+            "version": "1.0.0",
+            "protocol": "jsonrpc",
+            "protocol_version": "2.0",
+            "mcp_version": "2025-06-18",
+            "methods": [
+                "initialize",
+                "initialized",
+                "tools/list",
+                "tools/call",
+                "prompts/list",
+                "resources/list",
+                "notifications/initialized"
+            ],
+            "description": "MCP server with debugging and auth tools",
+            "endpoint": "/mcp/",
+            "method": "POST"
+        }
     
     @router.post("/")
     async def handle_mcp_request(
@@ -314,6 +343,19 @@ async def handle_mcp_method(
             ]
         
         return {"tools": tools}
+    
+    elif method == "prompts/list":
+        # List available prompts (we don't have any yet)
+        return {"prompts": []}
+    
+    elif method == "resources/list":
+        # List available resources (we don't have any yet)
+        return {"resources": []}
+    
+    elif method == "notifications/initialized":
+        # Client notification that initialization is complete
+        # This is a notification, not a request, so just acknowledge it
+        return {}
     
     elif method == "tools/call":
         # Call a specific tool

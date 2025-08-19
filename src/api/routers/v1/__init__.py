@@ -29,7 +29,8 @@ def create_v1_router(app) -> APIRouter:
         oauth_status,
         oauth_admin,
         services,
-        logs
+        logs,
+        auth_config
     )
     
     # Create main v1 router (no prefix here, it's added when mounting)
@@ -135,9 +136,39 @@ def create_v1_router(app) -> APIRouter:
         
         if unified_logger:
             logger.info("Attempting to import MCP router...")
-            from src.mcp.router import create_mcp_router
-            logger.info("MCP router module imported successfully")
-            mcp_router = create_mcp_router(async_storage, unified_logger)
+            # Try the working router first (no auth, actually works)
+            try:
+                from src.mcp.mcp_working import create_mcp_working_router
+                logger.info("MCP WORKING router imported successfully - NO AUTH REQUIRED")
+                mcp_router = create_mcp_working_router(async_storage, unified_logger)
+            except ImportError as e_working:
+                logger.debug(f"Could not import working router: {e_working}")
+                # Try the simple SSE router second (no auth, no SDK dependencies)
+                try:
+                    from src.mcp.mcp_sse_simple import create_mcp_sse_simple_router
+                    logger.info("MCP simple SSE router module imported successfully - NO AUTH")
+                    mcp_router = create_mcp_sse_simple_router(async_storage, unified_logger)
+                except ImportError as e0:
+                    logger.debug(f"Could not import simple SSE router: {e0}")
+                # Try the official SDK SSE router second
+                try:
+                    from src.mcp.mcp_sse_official import create_mcp_sse_official_router
+                    logger.info("MCP official SSE router module imported successfully")
+                    mcp_router = create_mcp_sse_official_router(async_storage, unified_logger)
+                except ImportError as e1:
+                    logger.debug(f"Could not import official SSE router: {e1}")
+                    # Try the new SSE-compliant router third
+                    try:
+                        from src.mcp.mcp_sse_router import create_mcp_sse_router
+                        logger.info("MCP SSE router module imported successfully")
+                        mcp_router = create_mcp_sse_router(async_storage, unified_logger)
+                    except ImportError as e2:
+                        logger.debug(f"Could not import SSE router: {e2}")
+                        # Fall back to regular router
+                        from src.mcp.router import create_mcp_router
+                        logger.info("MCP router module imported successfully")
+                        mcp_router = create_mcp_router(async_storage, unified_logger)
+            
             v1_router.include_router(
                 mcp_router,
                 prefix="/mcp"
@@ -153,5 +184,16 @@ def create_v1_router(app) -> APIRouter:
         logger.warning(f"Error initializing MCP endpoints: {e}")
         import traceback
         logger.debug(f"Error traceback: {traceback.format_exc()}")
+    
+    # Authentication configuration endpoints: /api/v1/auth-config/*
+    try:
+        auth_config_router = auth_config.create_auth_config_router(async_storage)
+        v1_router.include_router(
+            auth_config_router,
+            prefix="/auth-config"
+        )
+        logger.info("Included auth-config router in v1")
+    except Exception as e:
+        logger.warning(f"Auth config endpoints not available: {e}")
     
     return v1_router
