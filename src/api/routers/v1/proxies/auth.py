@@ -8,6 +8,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_proxy_owner
 from src.proxy.models import ProxyAuthConfig
 
 logger = logging.getLogger(__name__)

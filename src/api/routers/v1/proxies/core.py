@@ -15,6 +15,7 @@ import io
 from tabulate import tabulate
 
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_proxy_owner, get_current_token_info
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
 

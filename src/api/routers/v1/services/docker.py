@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from python_on_whales.exceptions import DockerException
 
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_auth
 from src.docker.models import (
     DockerServiceConfig,
     DockerServiceInfo,

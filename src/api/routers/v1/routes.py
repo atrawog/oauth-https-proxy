@@ -6,6 +6,7 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_route_owner
 from src.proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
 
 logger = logging.getLogger(__name__)

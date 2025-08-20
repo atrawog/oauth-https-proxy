@@ -9,6 +9,7 @@ from authlib.jose.errors import JoseError
 import redis
 
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_admin
 from src.api.oauth.config import Settings as OAuthSettings
 from src.api.oauth.keys import RSAKeyManager
 

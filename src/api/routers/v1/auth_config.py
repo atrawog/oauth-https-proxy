@@ -16,6 +16,7 @@ from src.api.models import (
     AuthConfigTestResponse
 )
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_admin
 from src.api.pattern_matcher import PathPatternMatcher
 from src.api.unified_auth import invalidate_auth_cache
 

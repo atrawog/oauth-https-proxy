@@ -9,6 +9,7 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.auth import AuthDep, AuthResult
+from src.api.auth import require_auth
 from src.ports.models import ServicePort, PortConfiguration
 from src.docker.manager import DockerManager
 

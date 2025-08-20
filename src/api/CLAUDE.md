@@ -28,9 +28,9 @@ api/
 └── static/         # Web GUI assets
 ```
 
-## API Versioning
+## API Structure
 
-All API endpoints follow the versioning pattern `/api/v1/{resource}`. This allows for future API versions without breaking existing integrations.
+All API endpoints are mounted at the root level with clean URLs: `/{resource}`. This provides a simple, consistent API structure.
 
 ## Token Management API
 
@@ -53,31 +53,31 @@ All API endpoints follow the versioning pattern `/api/v1/{resource}`. This allow
 ```
 
 ### Token Endpoints
-- `GET /api/v1/tokens/` - List all tokens (requires trailing slash)
-- `POST /api/v1/tokens/` - Create new token
-- `POST /api/v1/tokens/generate` - Generate token for display
-- `PUT /api/v1/tokens/email` - Update certificate email for current token
-- `GET /api/v1/tokens/info` - Get current token information
-- `GET /api/v1/tokens/{name}` - Get specific token details
-- `DELETE /api/v1/tokens/{name}` - Delete a token
-- `GET /api/v1/tokens/{name}/reveal` - Securely reveal token value
+- `GET /tokens/` - List all tokens (requires trailing slash)
+- `POST /tokens/` - Create new token
+- `POST /tokens/generate` - Generate token for display
+- `PUT /tokens/email` - Update certificate email for current token
+- `GET /tokens/info` - Get current token information
+- `GET /tokens/{name}` - Get specific token details
+- `DELETE /tokens/{name}` - Delete a token
+- `GET /tokens/{name}/reveal` - Securely reveal token value
 
 ## Route Management API
 
 ### Route Endpoints
 **Note**: Collection endpoints require trailing slashes to avoid 307 redirects.
-- `GET /api/v1/routes/` - List all routing rules (requires trailing slash)
-- `POST /api/v1/routes/` - Create new routing rule
-- `GET /api/v1/routes/{route_id}` - Get specific route details
-- `PUT /api/v1/routes/{route_id}` - Update route configuration
-- `DELETE /api/v1/routes/{route_id}` - Delete route
-- `GET /api/v1/routes/formatted` - Get routes in formatted table
+- `GET /routes/` - List all routing rules (requires trailing slash)
+- `POST /routes/` - Create new routing rule
+- `GET /routes/{route_id}` - Get specific route details
+- `PUT /routes/{route_id}` - Update route configuration
+- `DELETE /routes/{route_id}` - Delete route
+- `GET /routes/formatted` - Get routes in formatted table
 
 ### Route Schema
 ```json
 {
-  "route_id": "api-v1",
-  "path_pattern": "/api/v1/",
+  "route_id": "auth-route",
+  "path_pattern": "/auth/",
   "target_type": "service",  // port|service|hostname|url
   "target_value": "auth",
   "priority": 90,  // Higher = checked first
@@ -91,11 +91,11 @@ All API endpoints follow the versioning pattern `/api/v1/{resource}`. This allow
 ## Log Query API
 
 ### Log Endpoints
-- `GET /api/v1/logs/ip/{ip}` - Query by IP address
-- `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
-- `GET /api/v1/logs/search` - Search logs with filters
-- `GET /api/v1/logs/errors` - Recent errors
-- `GET /api/v1/logs/events` - Event statistics
+- `GET /logs/ip/{ip}` - Query by IP address
+- `GET /logs/client/{client_id}` - Query by OAuth client
+- `GET /logs/search` - Search logs with filters
+- `GET /logs/errors` - Recent errors
+- `GET /logs/events` - Event statistics
 
 ## Web GUI
 
@@ -138,17 +138,17 @@ async def health():
     return {"status": "ok"}
 
 # Bearer token required (default)
-@router.get("/api/v1/data")
+@router.get("/data")
 async def get_data(auth: AuthResult = Depends(AuthDep())):
     return {"user": auth.principal}
 
 # Admin only
-@router.delete("/api/v1/tokens/{name}")
+@router.delete("/tokens/{name}")
 async def delete_token(name: str, auth: AuthResult = Depends(AuthDep(admin=True))):
     return {"deleted": name}
 
 # OAuth with specific requirements
-@router.post("/api/v1/services")
+@router.post("/services")
 async def create_service(
     auth: AuthResult = Depends(AuthDep(
         auth_type="oauth",
@@ -159,7 +159,7 @@ async def create_service(
     return {"created_by": auth.principal}
 
 # Bearer with ownership check
-@router.delete("/api/v1/certificates/{cert_name}")
+@router.delete("/certificates/{cert_name}")
 async def delete_cert(
     cert_name: str,
     auth: AuthResult = Depends(AuthDep(check_owner=True))
@@ -180,16 +180,16 @@ Authentication can be configured at runtime via the API:
 
 ```bash
 # Configure endpoint authentication
-POST /api/v1/auth/endpoints
+POST /auth/endpoints
 {
-  "path_pattern": "/api/v1/admin/*",
+  "path_pattern": "/admin/*",
   "methods": ["*"],
   "auth_type": "admin",
   "priority": 100
 }
 
 # Configure route authentication
-PUT /api/v1/routes/{route_id}/auth
+PUT /routes/{route_id}/auth
 {
   "auth_type": "oauth",
   "oauth_scopes": ["route:access"]
