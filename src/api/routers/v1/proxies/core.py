@@ -15,7 +15,7 @@ import io
 from tabulate import tabulate
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_proxy_owner, get_current_token_info
+from src.api.auth import require_proxy_owner
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
 
@@ -44,7 +44,8 @@ def create_core_router(storage, cert_manager):
         auth: AuthResult = Depends(AuthDep())
     ):
         """Create a new proxy target with optional certificate generation."""
-        auth.token_hash, auth.principal, cert_email = token_info
+        # Get cert_email from auth or request
+        cert_email = getattr(auth, 'cert_email', None) or request.cert_email
         
         # Get async components
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
@@ -213,8 +214,6 @@ def create_core_router(storage, cert_manager):
         async_storage = request.app.state.async_storage
         all_targets = await async_storage.list_proxy_targets()
         
-        auth.token_hash, auth.principal, _ = token_info
-        
         # Admin sees all proxy targets
         if auth.principal == "ADMIN":
             return all_targets
@@ -236,7 +235,7 @@ def create_core_router(storage, cert_manager):
         from tabulate import tabulate
         
         # Get proxy targets using existing endpoint logic
-        targets = await list_proxy_targets(request, token_info)
+        targets = await list_proxy_targets(request, auth)
         
         if format == "json":
             # Return standard JSON response

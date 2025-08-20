@@ -1063,3 +1063,137 @@ class AsyncRedisStorage:
         except Exception as e:
             logger.error(f"Failed to clear auth config cache: {e}")
             return 0
+    
+    # =====================================================================
+    # Logging Methods with Redis Streams
+    # =====================================================================
+    
+    async def initialize_logging(self):
+        """Initialize logging stream and consumer group."""
+        try:
+            # Import the async log storage
+            from .async_log_storage import AsyncLogStorage
+            self.log_storage = AsyncLogStorage(self.redis_client)
+            await self.log_storage.initialize()
+            logger.info("Async logging initialized with Redis Streams")
+        except Exception as e:
+            logger.error(f"Failed to initialize logging: {e}")
+            self.log_storage = None
+    
+    async def log_request(self, log_entry: dict) -> str:
+        """Log a request using Redis Streams."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.log_request(log_entry)
+        return ""
+    
+    async def search_logs(self, **kwargs) -> dict:
+        """Search logs with filters."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.search_logs(**kwargs)
+        return {'total': 0, 'logs': []}
+    
+    async def get_logs_by_ip(self, ip: str, hours: int = 24, limit: int = 100) -> list:
+        """Get logs by IP address."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_logs_by_ip(ip, hours, limit)
+        return []
+    
+    async def get_logs_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> list:
+        """Get logs by hostname."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_logs_by_hostname(hostname, hours, limit)
+        return []
+    
+    async def get_logs_by_proxy(self, hostname: str, hours: int = 24, limit: int = 100) -> list:
+        """Get logs by proxy hostname."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_logs_by_proxy(hostname, hours, limit)
+        return []
+    
+    async def get_logs_by_client(self, client_id: str, hours: int = 24, limit: int = 100) -> list:
+        """Get logs by OAuth client ID."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_logs_by_client(client_id, hours, limit)
+        return []
+    
+    async def get_error_logs(self, hours: int = 1, include_4xx: bool = False, limit: int = 50) -> list:
+        """Get error logs."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_error_logs(hours, include_4xx, limit)
+        return []
+    
+    async def get_event_statistics(self, hours: int = 24) -> dict:
+        """Get event statistics."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_event_statistics(hours)
+        return {}
+    
+    async def get_log_statistics(self, hours: int = 24) -> dict:
+        """Get log statistics."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_log_statistics(hours)
+        return {}
+    
+    async def get_oauth_activity(self, ip: str, hours: int = 24, limit: int = 100) -> list:
+        """Get OAuth activity for an IP."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_oauth_activity(ip, hours, limit)
+        return []
+    
+    async def get_oauth_debug(self, ip: str, hours: int = 24, limit: int = 100) -> dict:
+        """Get OAuth debug information."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.get_oauth_debug(ip, hours, limit)
+        return {}
+    
+    async def track_oauth_flows(self, client_id: str = None, username: str = None, 
+                                session_id: str = None, hours: int = 1) -> list:
+        """Track OAuth flows."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.track_oauth_flows(client_id, username, session_id, hours)
+        return []
+    
+    async def clear_logs(self) -> int:
+        """Clear all logs."""
+        if not hasattr(self, 'log_storage') or not self.log_storage:
+            await self.initialize_logging()
+        
+        if self.log_storage:
+            return await self.log_storage.clear_logs()
+        return 0
