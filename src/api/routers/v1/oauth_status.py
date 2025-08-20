@@ -15,7 +15,7 @@ import hashlib
 from fastapi import APIRouter, Query, HTTPException, Depends
 from pydantic import BaseModel, Field
 
-from src.api.auth import get_current_token_info, get_optional_token_info
+from src.auth import AuthDep, AuthResult
 from src.storage.redis_storage import RedisStorage
 
 logger = logging.getLogger(__name__)
@@ -658,7 +658,7 @@ class OAuthStatusRouter:
     async def revoke_session(
         self,
         session_id: str,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Revoke a session and all associated tokens."""
         # Session ID in our context is the username or user ID

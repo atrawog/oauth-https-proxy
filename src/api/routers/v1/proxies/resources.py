@@ -6,7 +6,7 @@ This module handles MCP (Model Context Protocol) resource metadata configuration
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.api.auth import require_proxy_owner, require_auth_header
+from src.auth import AuthDep, AuthResult
 from src.proxy.models import ProxyResourceConfig
 
 logger = logging.getLogger(__name__)

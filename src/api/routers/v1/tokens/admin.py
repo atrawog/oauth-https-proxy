@@ -4,7 +4,7 @@ import secrets
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.api.auth import require_admin
+from src.auth import AuthDep, AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +25,7 @@ def create_admin_router(async_storage) -> APIRouter:
     @router.post("/admin")
     async def create_or_update_admin_token(
         request: Request,
-        _: dict = Depends(require_admin)  # Requires existing admin token
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Requires existing admin token
     ):
         """Create or update the ADMIN token.
         

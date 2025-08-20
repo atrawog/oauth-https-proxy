@@ -218,7 +218,7 @@ class UnifiedAuthHandler:
         
         # Reuse existing token validation from auth.py
         try:
-            token_hash, token_name, cert_email = await get_current_token_info(request, credentials)
+            token_hash, principal, cert_email = await get_current_token_info(request, credentials)
         except HTTPException:
             raise
         except Exception as e:
@@ -232,8 +232,8 @@ class UnifiedAuthHandler:
             authenticated=True,
             auth_type="bearer",
             token_hash=token_hash,
-            token_name=token_name,
-            is_admin=token_name == "ADMIN",
+            principal=principal,
+            is_admin=principal == "ADMIN",
             cert_email=cert_email,
             request_path=request.state.full_path if hasattr(request.state, 'full_path') else str(request.url.path),
             request_method=request.method,

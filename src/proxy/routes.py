@@ -2,7 +2,7 @@
 
 import json
 from datetime import datetime, timezone
-from typing import Dict, List, Optional, Union, TYPE_CHECKING
+from typing import Dict, List, Optional, Union, TYPE_CHECKING, Any
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 import re
@@ -41,6 +41,10 @@ class Route(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     owner_token_hash: Optional[str] = Field(None, description="Hash of token that owns this route")
     created_by: Optional[str] = Field(None, description="Token name that created this route")
+    
+    # Authentication configuration
+    auth_config: Optional[Dict[str, Any]] = Field(None, description="Authentication configuration for this route")
+    override_proxy_auth: bool = Field(False, description="Whether route auth overrides proxy auth")
     
     @field_validator('methods')
     @classmethod
@@ -147,6 +151,8 @@ class RouteCreateRequest(BaseModel):
     methods: Optional[List[str]] = Field(None, description="HTTP methods to match (None = all)")
     is_regex: bool = Field(False, description="Whether path_pattern is a regex")
     description: str = Field("", description="Human-readable description")
+    auth_config: Optional[Dict[str, Any]] = Field(None, description="Authentication configuration for this route")
+    override_proxy_auth: bool = Field(False, description="Whether route auth overrides proxy auth")
     enabled: bool = Field(True, description="Whether this route is active")
     scope: RouteScope = Field(RouteScope.GLOBAL, description="Route scope (global or proxy-specific)")
     proxy_hostnames: List[str] = Field(default_factory=list, description="Proxies this route applies to (when scope=proxy)")

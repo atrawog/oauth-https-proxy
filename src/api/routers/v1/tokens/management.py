@@ -7,7 +7,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, EmailStr
 
 from .models import TokenCreateRequest, TokenGenerateResponse
-from src.api.auth import require_admin, get_current_token_info
+from src.auth import AuthDep, AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +34,7 @@ def create_management_router(async_storage) -> APIRouter:
     async def generate_token_display(
         request: Request,
         token_request: TokenCreateRequest,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Generate a new API token and return full value for display.
         
@@ -84,10 +84,13 @@ def create_management_router(async_storage) -> APIRouter:
     async def update_token_email(
         request: Request,
         email_request: EmailUpdateRequest,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Update the certificate email for the current token."""
-        token_hash, token_name, current_email = token_info
+        # Extract token info from auth result
+        token_hash = auth.token_hash
+        principal = auth.principal
+        current_email = auth.metadata.get('cert_email')
         
         # Get async async_storage
         async_storage = request.app.state.async_storage
@@ -113,33 +116,36 @@ def create_management_router(async_storage) -> APIRouter:
         if not result:
             raise HTTPException(500, "Failed to update token email")
         
-        logger.info(f"Updated cert_email for token {token_name} to {new_email}")
+        logger.info(f"Updated cert_email for token {principal} to {new_email}")
         
         return {
             "message": "Certificate email updated successfully",
-            "name": token_name,
+            "name": principal,
             "cert_email": new_email
         }
     
     @router.get("/info")
     async def get_token_info(
         request: Request,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get information about the current token."""
-        token_hash, token_name, cert_email = token_info
+        token_hash = auth.token_hash
+        principal = auth.principal
+        cert_email = auth.metadata.get('cert_email')
+        is_admin = auth.metadata.get('is_admin', False)
         
         return {
-            "name": token_name,
+            "name": principal,
             "cert_email": cert_email,
-            "is_admin": token_name and token_name.upper() == "ADMIN"
+            "is_admin": is_admin
         }
     
     @router.get("/{name}/reveal")
     async def reveal_token(
         request: Request,
         name: str,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Reveal the full token value for a specific token.
         

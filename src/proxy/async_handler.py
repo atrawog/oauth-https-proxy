@@ -20,12 +20,14 @@ from starlette.background import BackgroundTask
 import asyncio
 
 from .models import ProxyTarget
+from .routes import Route
 from .auth_exclusions import merge_exclusions
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..shared.config import Config
 from ..shared.client_ip import get_real_client_ip
 from ..storage.async_redis_storage import AsyncRedisStorage
 from ..storage.redis_clients import RedisClients
+from ..auth import FlexibleAuthService, AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,12 +35,13 @@ logger = logging.getLogger(__name__)
 class EnhancedAsyncProxyHandler:
     """Async proxy handler with comprehensive request tracing."""
     
-    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients):
+    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients, oauth_components=None):
         """Initialize enhanced proxy handler.
         
         Args:
             storage: Async Redis storage instance
             redis_clients: Redis clients for logging
+            oauth_components: Optional OAuth components for authentication
         """
         self.storage = storage
         self.redis_clients = redis_clients
@@ -46,6 +49,9 @@ class EnhancedAsyncProxyHandler:
         # Initialize unified logger
         self.logger = UnifiedAsyncLogger(redis_clients)
         self.logger.set_component("proxy_handler")
+        
+        # Initialize auth service
+        self.auth_service = FlexibleAuthService(storage=storage, oauth_components=oauth_components)
         
         # Get timeouts from configuration
         request_timeout = float(Config.PROXY_REQUEST_TIMEOUT)
@@ -154,16 +160,33 @@ class EnhancedAsyncProxyHandler:
             
             # Check authentication if enabled
             if target.auth_enabled and not route_target:
-                auth_result = await self._check_authentication(request, target, trace_id)
-                if not auth_result["authenticated"]:
-                    await self._log_response_error(trace_id, 401, start_time, "Authentication required")
+                # Get the route that was matched (if any) for auth override checking
+                matched_route = None
+                if route_target:
+                    # Try to get the route from our earlier check
+                    # This would need to be passed from _check_routes method
+                    pass
+                
+                auth_result = await self._check_authentication(request, target, trace_id, matched_route)
+                if not auth_result.authenticated:
+                    await self._log_response_error(trace_id, 401, start_time, 
+                                                 auth_result.error_description or "Authentication required")
                     
-                    if target.auth_mode == "redirect":
+                    # Check if we should redirect
+                    if target.auth_mode == "redirect" and target.auth_proxy:
                         return RedirectResponse(
                             url=f"https://{target.auth_proxy}/authorize?redirect_uri={quote(str(request.url))}"
                         )
                     else:
-                        raise HTTPException(401, "Authentication required")
+                        # Return 401 with WWW-Authenticate header if provided
+                        headers = {}
+                        if auth_result.www_authenticate:
+                            headers["WWW-Authenticate"] = auth_result.www_authenticate
+                        raise HTTPException(
+                            status_code=401,
+                            detail=auth_result.error_description or "Authentication required",
+                            headers=headers
+                        )
             
             # Proxy the request
             response = await self._proxy_request(
@@ -330,63 +353,82 @@ class EnhancedAsyncProxyHandler:
         return None
     
     async def _check_authentication(self, request: Request, target: ProxyTarget,
-                                   trace_id: str) -> Dict[str, any]:
-        """Check authentication for protected proxy.
+                                   trace_id: str, route: Optional[Route] = None) -> AuthResult:
+        """Check authentication for protected proxy using FlexibleAuthService.
         
         Args:
             request: FastAPI request
             target: Proxy target configuration
             trace_id: Request trace ID
+            route: Optional route that matched the request
             
         Returns:
-            Authentication result dictionary
+            AuthResult from FlexibleAuthService
         """
         self.logger.add_span(trace_id, "check_authentication",
-                            auth_mode=target.auth_mode)
+                            auth_mode=target.auth_mode if target.auth_enabled else "none")
         
-        # Check for excluded paths
-        if target.auth_excluded_paths:
-            request_path = str(request.url.path)
-            for excluded_path in target.auth_excluded_paths:
-                if request_path.startswith(excluded_path):
-                    await self.logger.debug(
-                        f"Path {request_path} excluded from auth",
-                        trace_id=trace_id
-                    )
-                    return {"authenticated": True, "reason": "excluded_path"}
+        # Initialize auth service if needed
+        if not hasattr(self.auth_service, '_configs_loaded'):
+            await self.auth_service.initialize()
         
-        # Check for bearer token
+        # Extract credentials from request
+        from fastapi.security import HTTPAuthorizationCredentials
+        credentials = None
         auth_header = request.headers.get("authorization")
         if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header[7:]
-            
-            # Validate token (would call OAuth validation endpoint)
-            # For now, simplified validation
-            if token:
-                await self.logger.debug(
-                    "Bearer token authenticated",
-                    trace_id=trace_id
-                )
-                return {"authenticated": True, "method": "bearer"}
+            credentials = HTTPAuthorizationCredentials(
+                scheme="Bearer",
+                credentials=auth_header[7:]
+            )
         
-        # Check for cookie
-        cookie_name = target.auth_cookie_name or "unified_auth_token"
-        auth_cookie = request.cookies.get(cookie_name)
-        if auth_cookie:
-            # Validate cookie (would call OAuth validation endpoint)
+        # Check if route overrides proxy auth
+        if route and route.override_proxy_auth and route.auth_config:
             await self.logger.debug(
-                "Cookie authenticated",
+                f"Using route auth override for {route.route_id}",
                 trace_id=trace_id
             )
-            return {"authenticated": True, "method": "cookie"}
+            
+            # Store route auth config in Redis for auth service to use
+            import json
+            route_auth_key = f"route:auth:{route.route_id}"
+            await self.storage.redis_client.set(
+                route_auth_key,
+                json.dumps(route.auth_config),
+                ex=300  # 5 minute expiry
+            )
+            
+            # Check route auth
+            result = await self.auth_service.check_route_auth(
+                request=request,
+                route_id=route.route_id,
+                credentials=credentials
+            )
+        else:
+            # Check proxy auth
+            hostname = request.headers.get("host", "").split(":")[0]
+            result = await self.auth_service.check_proxy_auth(
+                request=request,
+                hostname=hostname,
+                path=str(request.url.path),
+                credentials=credentials
+            )
         
-        await self.logger.info(
-            "Authentication required but not provided",
-            trace_id=trace_id,
-            auth_mode=target.auth_mode
-        )
+        # Log auth result
+        if result.authenticated:
+            await self.logger.debug(
+                f"Authentication successful: {result.auth_type}",
+                trace_id=trace_id,
+                principal=result.principal
+            )
+        else:
+            await self.logger.info(
+                f"Authentication failed: {result.error}",
+                trace_id=trace_id,
+                error_description=result.error_description
+            )
         
-        return {"authenticated": False}
+        return result
     
     async def _proxy_request(self, request: Request, backend_url: str,
                            target: ProxyTarget, trace_id: str) -> Response:

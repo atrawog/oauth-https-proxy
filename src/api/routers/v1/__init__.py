@@ -185,7 +185,7 @@ def create_v1_router(app) -> APIRouter:
         import traceback
         logger.debug(f"Error traceback: {traceback.format_exc()}")
     
-    # Authentication configuration endpoints: /api/v1/auth-config/*
+    # Legacy authentication configuration endpoints: /api/v1/auth-config/*
     try:
         auth_config_router = auth_config.create_auth_config_router(async_storage)
         v1_router.include_router(
@@ -195,5 +195,29 @@ def create_v1_router(app) -> APIRouter:
         logger.info("Included auth-config router in v1")
     except Exception as e:
         logger.warning(f"Auth config endpoints not available: {e}")
+    
+    # New flexible auth endpoints: /api/v1/auth/endpoints/*
+    try:
+        from . import auth_endpoints
+        auth_endpoints_router = auth_endpoints.create_auth_endpoints_router(async_storage)
+        v1_router.include_router(
+            auth_endpoints_router,
+            prefix="/auth/endpoints"
+        )
+        logger.info("Included flexible auth endpoints router in v1")
+    except Exception as e:
+        logger.warning(f"Flexible auth endpoints not available: {e}")
+    
+    # Route auth configuration endpoints: /api/v1/routes/{route_id}/auth
+    try:
+        from . import route_auth
+        route_auth_router = route_auth.create_route_auth_router(async_storage)
+        v1_router.include_router(
+            route_auth_router,
+            prefix="/routes"
+        )
+        logger.info("Included route auth router in v1")
+    except Exception as e:
+        logger.warning(f"Route auth endpoints not available: {e}")
     
     return v1_router

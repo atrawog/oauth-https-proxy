@@ -15,7 +15,7 @@ from src.api.models import (
     AuthConfigTestRequest,
     AuthConfigTestResponse
 )
-from src.api.auth import require_admin
+from src.auth import AuthDep, AuthResult
 from src.api.pattern_matcher import PathPatternMatcher
 from src.api.unified_auth import invalidate_auth_cache
 
@@ -39,7 +39,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     @router.get("/", response_model=List[EndpointAuthConfig])
     async def list_auth_configs(
         request: Request,
-        _: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """List all authentication configurations.
         
@@ -138,7 +138,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     @router.get("/endpoints")
     async def list_configurable_endpoints(
         request: Request,
-        _: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """List all API endpoints that can be configured.
         
@@ -173,7 +173,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     async def get_auth_config(
         request: Request,
         config_id: str,
-        _: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Get a specific authentication configuration by ID."""
         storage = request.app.state.async_storage or async_storage
@@ -279,7 +279,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     async def test_auth_config(
         request: Request,
         test_request: AuthConfigTestRequest,
-        _: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Test which authentication configuration would apply to a given path.
         
@@ -493,7 +493,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
         request: Request,
         path: str,
         method: str = "GET",
-        _: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Show the effective authentication for a specific path.
         

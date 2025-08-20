@@ -5,7 +5,7 @@ import uuid
 from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 
-from src.api.auth import get_current_token_info, require_route_owner
+from src.auth import AuthDep, AuthResult
 from src.proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
 
 logger = logging.getLogger(__name__)
@@ -19,11 +19,11 @@ def create_router(async_storage):
     async def create_route(
         request: Request,
         route_request: RouteCreateRequest,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Create a new routing rule."""
         async_storage = request.app.state.async_storage
-        token_hash, token_name, _ = token_info
+        auth.token_hash, auth.principal, _ = token_info
         
         # Generate unique route ID
         route_id = f"{route_request.path_pattern.replace('/', '-').strip('-')}-{uuid.uuid4().hex[:8]}"
@@ -41,8 +41,8 @@ def create_router(async_storage):
             enabled=route_request.enabled,
             scope=route_request.scope,
             proxy_hostnames=route_request.proxy_hostnames,
-            owner_token_hash=token_hash,
-            created_by=token_name
+            owner_token_hash=auth.token_hash,
+            created_by=auth.principal
         )
         
         # Store in Redis - storage layer will check for duplicates

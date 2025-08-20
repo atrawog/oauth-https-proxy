@@ -8,7 +8,7 @@ import logging
 from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from src.api.auth import require_auth, get_token_info_from_header
+from src.auth import AuthDep, AuthResult
 from src.ports.models import ServicePort, PortConfiguration
 from src.docker.manager import DockerManager
 
@@ -103,7 +103,7 @@ def create_ports_router(async_storage) -> APIRouter:
         request: Request,
         service_name: str,
         port_config: PortConfiguration,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Add a port to an existing service.
         
@@ -167,7 +167,7 @@ def create_ports_router(async_storage) -> APIRouter:
         request: Request,
         service_name: str,
         port_name: str,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Remove a port from a service.
         
@@ -198,7 +198,7 @@ def create_ports_router(async_storage) -> APIRouter:
         service_name: str,
         port_name: str,
         port_config: PortConfiguration,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Update a port configuration.
         

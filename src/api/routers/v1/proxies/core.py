@@ -14,7 +14,7 @@ import csv
 import io
 from tabulate import tabulate
 
-from src.api.auth import require_auth, require_auth_header, get_current_token_info, require_proxy_owner
+from src.auth import AuthDep, AuthResult
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
 
@@ -40,10 +40,10 @@ def create_core_router(storage, cert_manager):
         req: Request,
         request: ProxyTargetRequest,
         background_tasks: BackgroundTasks,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Create a new proxy target with optional certificate generation."""
-        token_hash, token_name, cert_email = token_info
+        auth.token_hash, auth.principal, cert_email = token_info
         
         # Get async components
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
@@ -60,8 +60,8 @@ def create_core_router(storage, cert_manager):
             hostname=request.hostname,
             target_url=request.target_url,
             cert_name=None,  # Will be set later if cert exists or created
-            owner_token_hash=token_hash,
-            created_by=token_name,
+            owner_token_hash=auth.token_hash,
+            created_by=auth.principal,
             created_at=datetime.now(timezone.utc),
             enabled=True,
             enable_http=request.enable_http,
@@ -121,8 +121,8 @@ def create_core_router(storage, cert_manager):
                         email=email,
                         acme_directory_url=acme_url,
                         status="pending",
-                        owner_token_hash=token_hash,
-                        created_by=token_name
+                        owner_token_hash=auth.token_hash,
+                        created_by=auth.principal
                     )
                     await async_storage.store_certificate(cert_name, cert)
                     # Trigger async certificate generation with event publishing
@@ -134,8 +134,8 @@ def create_core_router(storage, cert_manager):
                             async_cert_manager,
                             cert_request,
                             None,  # https_server will be imported inside the task
-                            token_hash,
-                            token_name
+                            auth.token_hash,
+                            auth.principal
                         )
                     )
                     cert_status = "Certificate generation started"
@@ -173,8 +173,8 @@ def create_core_router(storage, cert_manager):
                 "enable_https": request.enable_https,
                 "cert_email": cert_email if cert_email else None,
                 "cert_name": actual_cert_name,
-                "owner_token_hash": token_hash,
-                "created_by": token_name
+                "owner_token_hash": auth.token_hash,
+                "created_by": auth.principal
             })
             
             if event_id:
@@ -206,27 +206,27 @@ def create_core_router(storage, cert_manager):
     @router.get("/")
     async def list_proxy_targets(
         request: Request,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List proxy targets - filtered by ownership or all for admin."""
         async_storage = request.app.state.async_storage
         all_targets = await async_storage.list_proxy_targets()
         
-        token_hash, token_name, _ = token_info
+        auth.token_hash, auth.principal, _ = token_info
         
         # Admin sees all proxy targets
-        if token_name == "ADMIN":
+        if auth.principal == "ADMIN":
             return all_targets
         
         # Regular users see only their own targets
-        return [target for target in all_targets if target.owner_token_hash == token_hash]
+        return [target for target in all_targets if target.owner_token_hash == auth.token_hash]
     
     
     @router.get("/formatted")
     async def list_proxy_targets_formatted(
         request: Request,
         format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List proxy targets with formatted output."""
         from fastapi.responses import PlainTextResponse

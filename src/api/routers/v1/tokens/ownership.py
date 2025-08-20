@@ -4,7 +4,7 @@ import logging
 from typing import List, Dict
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.api.auth import require_admin
+from src.auth import AuthDep, AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def create_ownership_router(async_storage) -> APIRouter:
     async def get_token_certificates(
         request: Request,
         name: str,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Get all certificates owned by a token."""
         # Get async async_storage
@@ -59,7 +59,7 @@ def create_ownership_router(async_storage) -> APIRouter:
     async def get_token_proxies(
         request: Request,
         name: str,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Get all proxy targets owned by a token."""
         # Get async async_storage

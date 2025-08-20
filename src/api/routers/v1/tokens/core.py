@@ -11,7 +11,7 @@ import io
 from tabulate import tabulate
 
 from .models import TokenCreateRequest, TokenResponse, TokenSummary, TokenDetail
-from src.api.auth import require_admin, get_current_token_info
+from src.auth import AuthDep, AuthResult
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +33,7 @@ def create_core_router(async_storage) -> APIRouter:
     async def create_token(
         request: Request,
         token_request: TokenCreateRequest,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Create a new API token."""
         # Get async async_storage if available
@@ -77,7 +77,7 @@ def create_core_router(async_storage) -> APIRouter:
     @router.get("/", response_model=List[TokenSummary])
     async def list_tokens(
         request: Request,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """List all API tokens."""
         # Get async async_storage if available
@@ -127,11 +127,11 @@ def create_core_router(async_storage) -> APIRouter:
     async def list_tokens_formatted(
         request: Request,
         format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """List all API tokens with formatted output."""
         # Get tokens using existing endpoint logic
-        tokens = await list_tokens(request, _)
+        tokens = await list_tokens(request, auth)
         
         if format == "json":
             # Return standard JSON response
@@ -165,7 +165,7 @@ def create_core_router(async_storage) -> APIRouter:
     async def get_token_details(
         request: Request,
         name: str,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Get detailed information about a specific token."""
         # Get async async_storage if available
@@ -204,7 +204,7 @@ def create_core_router(async_storage) -> APIRouter:
         request: Request,
         name: str,
         cascade: bool = Query(False, description="Delete owned resources"),
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Delete an API token."""
         # Get async async_storage if available

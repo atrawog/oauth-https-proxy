@@ -9,7 +9,7 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from python_on_whales.exceptions import DockerException
 
-from src.api.auth import require_auth, get_token_info_from_header
+from src.auth import AuthDep, AuthResult
 from src.docker.models import (
     DockerServiceConfig,
     DockerServiceInfo,
@@ -63,7 +63,7 @@ def create_docker_router(async_storage) -> APIRouter:
     async def list_services(
         request: Request,
         owned_only: bool = Query(False, description="Only show services owned by current token"),
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List all Docker services."""
         manager = await get_docker_manager(request)
@@ -82,7 +82,7 @@ def create_docker_router(async_storage) -> APIRouter:
         request: Request,
         config: DockerServiceConfig,
         auto_proxy: bool = Query(False, description="Automatically create proxy configuration"),
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Create a new Docker service.
         
@@ -166,7 +166,7 @@ def create_docker_router(async_storage) -> APIRouter:
         request: Request,
         service_name: str,
         updates: DockerServiceUpdate,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Update a Docker service configuration.
         
@@ -199,7 +199,7 @@ def create_docker_router(async_storage) -> APIRouter:
         service_name: str,
         force: bool = Query(False, description="Force delete even if running"),
         delete_proxy: bool = Query(True, description="Also delete associated proxy"),
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Delete a Docker service and cleanup resources."""
         manager = await get_docker_manager(request)
@@ -240,7 +240,7 @@ def create_docker_router(async_storage) -> APIRouter:
     async def start_service(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Start a stopped service."""
         manager = await get_docker_manager(request)
@@ -268,7 +268,7 @@ def create_docker_router(async_storage) -> APIRouter:
     async def stop_service(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Stop a running service."""
         manager = await get_docker_manager(request)
@@ -296,7 +296,7 @@ def create_docker_router(async_storage) -> APIRouter:
     async def restart_service(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Restart a service."""
         manager = await get_docker_manager(request)

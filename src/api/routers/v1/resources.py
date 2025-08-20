@@ -8,7 +8,7 @@ from authlib.jose import JsonWebToken
 from authlib.jose.errors import JoseError
 import redis
 
-from src.api.auth import get_current_token_info, require_admin
+from src.auth import AuthDep, AuthResult
 from src.api.oauth.config import Settings as OAuthSettings
 from src.api.oauth.keys import RSAKeyManager
 
@@ -52,7 +52,7 @@ def create_router(storage):
     
     @router.get("/", response_model=List[ProtectedResource])
     async def list_resources(
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List all registered Protected Resources."""
         # Get all resources from Redis using SCAN for production safety
@@ -78,7 +78,7 @@ def create_router(storage):
     @router.post("/", response_model=ProtectedResource)
     async def register_resource(
         resource: ProtectedResource,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Register a new Protected Resource."""
         # Check if resource already exists
@@ -100,7 +100,7 @@ def create_router(storage):
     @router.get("/{uri:path}", response_model=ProtectedResource)
     async def get_resource(
         uri: str,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get details of a specific Protected Resource."""
         # Reconstruct full URI
@@ -122,7 +122,7 @@ def create_router(storage):
     async def update_resource(
         uri: str,
         resource: ProtectedResource,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Update an existing Protected Resource."""
         # Reconstruct full URI
@@ -146,7 +146,7 @@ def create_router(storage):
     @router.delete("/{uri:path}")
     async def delete_resource(
         uri: str,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Delete a Protected Resource."""
         # Reconstruct full URI
@@ -165,7 +165,7 @@ def create_router(storage):
     async def validate_token_for_resource(
         uri: str,
         request: TokenValidationRequest,
-        token_info: Tuple[str, Optional[str], Optional[str]] = Depends(get_current_token_info)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Validate a token for a specific resource."""
         # Reconstruct full URI

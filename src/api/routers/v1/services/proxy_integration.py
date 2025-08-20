@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from src.api.auth import get_token_info_from_header
+from src.auth import AuthDep, AuthResult
 from src.docker.manager import DockerManager
 from src.proxy.models import ProxyTarget
 from src.shared.config import Config
@@ -53,7 +53,7 @@ def create_proxy_integration_router(storage) -> APIRouter:
         service_name: str,
         hostname: Optional[str] = None,
         enable_https: bool = Query(False, description="Enable HTTPS (requires certificate)"),
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Create a proxy configuration for the service."""
         manager = await get_docker_manager(request)
@@ -63,8 +63,8 @@ def create_proxy_integration_router(storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.metadata.get('is_admin', False)
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to create proxy for this service")
         
@@ -101,9 +101,9 @@ def create_proxy_integration_router(storage) -> APIRouter:
                 enabled=True,
                 enable_http=True,
                 enable_https=enable_https,
-                owner_token_hash=token_info["hash"],
+                owner_token_hash=auth.token_hash,
                 preserve_host_header=True,
-                created_by=token_info.get("name", "unknown")
+                created_by=auth.principal
             )
             
             # Store proxy configuration

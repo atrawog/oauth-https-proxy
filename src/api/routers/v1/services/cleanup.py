@@ -7,7 +7,7 @@ import logging
 from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from src.api.auth import get_token_info_from_header
+from src.auth import AuthDep, AuthResult
 from src.docker.manager import DockerManager
 
 logger = logging.getLogger(__name__)
@@ -48,7 +48,7 @@ def create_cleanup_router(storage) -> APIRouter:
     @router.post("/cleanup")
     async def cleanup_orphaned_services(
         request: Request,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Clean up orphaned Docker containers and services.
         

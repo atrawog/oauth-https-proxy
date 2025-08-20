@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from fastapi import APIRouter, HTTPException, Depends, Query
 from pydantic import BaseModel
 
-from src.api.auth import require_admin
+from src.auth import AuthDep, AuthResult
 from src.proxy.routes import Route, RouteCreateRequest
 
 logger = logging.getLogger(__name__)
@@ -34,7 +34,7 @@ def create_router(storage):
     @router.post("/setup-routes", response_model=OAuthSetupResponse)
     async def setup_oauth_routes(
         request: OAuthSetupRequest,
-        _: dict = Depends(require_admin)  # Admin only
+        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Automatically configure all required OAuth routes."""
         

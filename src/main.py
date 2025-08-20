@@ -86,6 +86,8 @@ async def initialize_components(config: Config) -> tuple:
     # Initialize default proxies
     storage.initialize_default_proxies()
     
+    # Note: Flexible auth system is initialized in attach_to_app (async_init.py)
+    
     logger.info("All components initialized successfully")
     
     return storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server

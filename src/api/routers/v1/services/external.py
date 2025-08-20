@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from src.api.auth import get_token_info_from_header
+from src.auth import AuthDep, AuthResult
 from src.docker.models import (
     ServiceType,
     ExternalServiceConfig,
@@ -37,7 +37,7 @@ def create_external_router(async_storage) -> APIRouter:
     async def register_external_service(
         request: Request,
         config: ExternalServiceConfig,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Register an external service (replaces instance registration).
         
@@ -85,7 +85,7 @@ def create_external_router(async_storage) -> APIRouter:
     @router.get("/external", response_model=List[UnifiedServiceInfo])
     async def list_external_services(
         request: Request,
-        token_info: Optional[Dict] = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List all external services."""
         try:
@@ -125,7 +125,7 @@ def create_external_router(async_storage) -> APIRouter:
     async def delete_external_service(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Delete an external service registration."""
         try:
@@ -163,7 +163,7 @@ def create_external_router(async_storage) -> APIRouter:
     async def get_external_service(
         request: Request,
         service_name: str,
-        token_info: Optional[Dict] = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get details of a specific external service."""
         try:
@@ -201,7 +201,7 @@ def create_external_router(async_storage) -> APIRouter:
     async def list_all_services(
         request: Request,
         service_type: Optional[ServiceType] = None,
-        token_info: Optional[Dict] = Depends(get_token_info_from_header)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List all services (Docker and external)."""
         try:

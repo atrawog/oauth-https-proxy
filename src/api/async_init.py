@@ -191,6 +191,32 @@ def attach_to_app(app: FastAPI, components: AsyncComponents):
     app.state.docker_manager = components.docker_manager
     app.state.cert_manager = components.cert_manager
     
+    # Initialize flexible auth service
+    from src.auth import FlexibleAuthService
+    from src.auth.defaults import initialize_auth_system
+    import asyncio
+    
+    # Create auth service with storage and OAuth components
+    oauth_components = getattr(app.state, 'oauth_components', None)
+    app.state.auth_service = FlexibleAuthService(
+        storage=components.async_storage,
+        oauth_components=oauth_components
+    )
+    
+    # Initialize auth service asynchronously
+    async def init_auth():
+        await app.state.auth_service.initialize()
+        # Load default configurations
+        await initialize_auth_system(
+            components.async_storage,
+            load_defaults=True,
+            migrate=True
+        )
+        logger.info("Flexible auth system initialized with defaults")
+    
+    # Run initialization in background
+    asyncio.create_task(init_auth())
+    
     logger.info("Async components attached to FastAPI app")
     
     # Now create and attach the v1 router with async_storage available
