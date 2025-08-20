@@ -18,8 +18,10 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Multi-Port Services**: Services can expose multiple ports with access controls
 
 ### Security Features
-- **Token-Based API**: All administrative operations require bearer tokens
-- **OAuth Protection**: Protect any proxied service with OAuth authentication
+- **Flexible Authentication System**: Configure different auth types (none/bearer/admin/oauth) per endpoint, route, or proxy
+- **Token-Based API**: Bearer tokens with ownership tracking and resource validation
+- **OAuth Protection**: Full OAuth 2.1 server with GitHub integration
+- **Fine-Grained Access Control**: Pattern-based auth rules with priorities
 - **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist
 - **Per-Proxy OAuth Metadata**: Each proxy can serve custom OAuth authorization server metadata
 - **Certificate Isolation**: Multi-domain certificates with ownership tracking
@@ -288,6 +290,79 @@ just logs-oauth <ip>
 5. **Network Isolation**: Use Docker networks to isolate services
 
 ## Basic Usage
+
+### Flexible Authentication
+
+The system supports configurable authentication at three levels:
+
+#### Authentication Types
+- `none` - Public access, no authentication required
+- `bearer` - API token authentication (acm_* tokens)
+- `admin` - Admin token only (ADMIN_TOKEN environment variable)
+- `oauth` - OAuth 2.1 with GitHub integration
+
+#### Configure Endpoint Authentication
+```bash
+# Make health endpoint public
+curl -X POST http://localhost:9000/api/v1/auth/endpoints \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{
+    "path_pattern": "/health",
+    "methods": ["GET"],
+    "auth_type": "none",
+    "priority": 100
+  }'
+
+# Require admin for token management
+curl -X POST http://localhost:9000/api/v1/auth/endpoints \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{
+    "path_pattern": "/api/v1/tokens/*",
+    "methods": ["*"],
+    "auth_type": "admin",
+    "priority": 90
+  }'
+
+# OAuth with specific users for services
+curl -X POST http://localhost:9000/api/v1/auth/endpoints \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{
+    "path_pattern": "/api/v1/services/*",
+    "methods": ["POST", "PUT", "DELETE"],
+    "auth_type": "oauth",
+    "oauth_scopes": ["service:write"],
+    "oauth_allowed_users": ["alice", "bob"],
+    "priority": 80
+  }'
+```
+
+#### Configure Route Authentication
+```bash
+# Set auth for a specific route
+curl -X PUT http://localhost:9000/api/v1/routes/metrics/auth \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -d '{
+    "auth_type": "admin",
+    "override_proxy_auth": true
+  }'
+```
+
+#### Configure Proxy Authentication
+```bash
+# Enable OAuth on a proxy
+just proxy-auth-enable api.yourdomain.com $TOKEN auth.yourdomain.com
+
+# Or configure programmatically
+curl -X POST http://localhost:9000/api/v1/proxy/targets/api.yourdomain.com/auth \
+  -H "Authorization: Bearer $TOKEN" \
+  -d '{
+    "auth_type": "oauth",
+    "auth_proxy": "auth.yourdomain.com",
+    "auth_mode": "redirect",
+    "auth_required_users": ["alice", "bob"],
+    "oauth_scopes": ["api:read", "api:write"]
+  }'
+```
 
 ### Create a Proxy
 
@@ -690,12 +765,31 @@ All API endpoints are served under `/api/v1/` prefix, except for OAuth protocol 
 **Note**: When accessing the API directly, use port 9000 (e.g., `http://localhost:9000/api/v1/`). Port 80/443 is for proxied traffic only.
 
 ### Authentication
-All write operations require a Bearer token in the Authorization header:
+The API uses a flexible authentication system with four types:
+- **none**: Public endpoints (no auth required)
+- **bearer**: API token authentication (default for most endpoints)
+- **admin**: Admin-only operations (requires ADMIN_TOKEN)
+- **oauth**: OAuth 2.1 protected endpoints
+
+All write operations typically require authentication:
 ```
 Authorization: Bearer your-admin-token
 ```
 
 ### Main API Categories
+
+#### Authentication Management (`/api/v1/auth/*`)
+- Configure authentication per endpoint, route, or proxy
+- Pattern-based matching with priorities
+- Support for none/bearer/admin/oauth auth types
+- Key endpoints:
+  - `GET /api/v1/auth/endpoints` - List endpoint auth configs
+  - `POST /api/v1/auth/endpoints` - Create endpoint auth config
+  - `PUT /api/v1/auth/endpoints/{config_id}` - Update config
+  - `DELETE /api/v1/auth/endpoints/{config_id}` - Delete config
+  - `POST /api/v1/auth/endpoints/test` - Test path matching
+  - `PUT /api/v1/routes/{route_id}/auth` - Configure route auth
+  - `POST /api/v1/proxy/targets/{hostname}/auth` - Configure proxy auth
 
 #### Certificate Management (`/api/v1/certificates/*`)
 - Create, list, renew, and delete SSL certificates

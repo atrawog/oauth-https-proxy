@@ -115,12 +115,88 @@ The API includes a web-based management interface accessible at the root path (`
 
 ## Authentication
 
-All write operations require bearer token authentication:
+### Flexible Authentication System
+
+The API uses a flexible authentication system that supports multiple auth types:
+
+#### Authentication Types
+- **none** - Public access, no authentication required
+- **bearer** - API token authentication (acm_* tokens)
+- **admin** - Admin-only operations (requires ADMIN_TOKEN)
+- **oauth** - OAuth 2.1 with GitHub integration
+
+#### Using AuthDep in Routes
+
+All API endpoints use the `AuthDep` dependency for authentication:
+
+```python
+from src.auth import AuthDep, AuthResult
+
+# Public endpoint
+@router.get("/health")
+async def health():
+    return {"status": "ok"}
+
+# Bearer token required (default)
+@router.get("/api/v1/data")
+async def get_data(auth: AuthResult = Depends(AuthDep())):
+    return {"user": auth.principal}
+
+# Admin only
+@router.delete("/api/v1/tokens/{name}")
+async def delete_token(name: str, auth: AuthResult = Depends(AuthDep(admin=True))):
+    return {"deleted": name}
+
+# OAuth with specific requirements
+@router.post("/api/v1/services")
+async def create_service(
+    auth: AuthResult = Depends(AuthDep(
+        auth_type="oauth",
+        required_scopes=["service:write"],
+        allowed_users=["alice", "bob"]
+    ))
+):
+    return {"created_by": auth.principal}
+
+# Bearer with ownership check
+@router.delete("/api/v1/certificates/{cert_name}")
+async def delete_cert(
+    cert_name: str,
+    auth: AuthResult = Depends(AuthDep(check_owner=True))
+):
+    return {"deleted": cert_name}
+```
+
+#### Request Format
+
+For endpoints requiring authentication:
 ```
 Authorization: Bearer acm_your_token_here
 ```
 
-Tokens are validated via Redis hash lookup for optimal performance.
+#### Dynamic Configuration
+
+Authentication can be configured at runtime via the API:
+
+```bash
+# Configure endpoint authentication
+POST /api/v1/auth/endpoints
+{
+  "path_pattern": "/api/v1/admin/*",
+  "methods": ["*"],
+  "auth_type": "admin",
+  "priority": 100
+}
+
+# Configure route authentication
+PUT /api/v1/routes/{route_id}/auth
+{
+  "auth_type": "oauth",
+  "oauth_scopes": ["route:access"]
+}
+```
+
+Tokens are validated via Redis with caching for optimal performance.
 
 ## Error Handling
 

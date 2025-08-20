@@ -7,6 +7,7 @@ This document describes the source code organization and technical implementatio
 ```
 ./src/
   ├── api/         # API routers and async operations
+  ├── auth/        # Flexible authentication system
   ├── certmanager/ # Certificate management with async ACME
   ├── consumers/   # Redis Streams consumers
   ├── dispatcher/  # Unified async dispatcher
@@ -63,6 +64,7 @@ The entire system has been migrated to a fully asynchronous architecture for imp
 For detailed documentation on specific components:
 
 - [API Documentation](api/CLAUDE.md) - API routers, endpoints, and FastAPI app
+- [Authentication System](auth/CLAUDE.md) - Flexible authentication with multiple auth types
 - [OAuth Service](api/oauth/CLAUDE.md) - OAuth implementation and MCP compliance
 - [Certificate Manager](certmanager/CLAUDE.md) - ACME certificate management
 - [Proxy Manager](proxy/CLAUDE.md) - Reverse proxy and routing

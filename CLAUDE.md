@@ -77,6 +77,7 @@ This documentation is organized into modular component-specific files:
 - **[Development Guidelines](src/CLAUDE.md)** - General development practices, environment setup, async architecture
 - **[Just Commands Reference](justfile.md)** - Complete reference for all `just` commands
 - **[Python CLI Client](oauth-https-proxy-client/CLAUDE.md)** - Enhanced CLI with smart formatting
+- **[Flexible Authentication](src/auth/CLAUDE.md)** - Unified auth system with multiple auth types and configuration layers
 
 ### Component Documentation
 
@@ -99,11 +100,22 @@ This documentation is organized into modular component-specific files:
 
 ## Key Features
 
+### Flexible Authentication System
+- **Four Authentication Types**: `none` (public), `bearer` (API token), `admin` (admin-only), `oauth` (OAuth 2.1)
+- **Three Configuration Layers**: API endpoints, routes, and proxies - each with independent auth settings
+- **Pattern-Based Matching**: Wildcard patterns with priority-based resolution
+- **Dynamic Configuration**: Configure auth per endpoint/route/proxy via API or Redis
+- **Resource Ownership**: Automatic ownership validation for bearer tokens
+- **OAuth Integration**: Full OAuth 2.1 with scope, audience, and user allowlist support
+- **Performance Optimized**: Built-in caching with configurable TTL
+- **Backward Compatible**: Existing auth patterns continue to work
+
 ### Token Management
-- Bearer token authentication for all write operations
+- Bearer token authentication with flexible configuration
 - Ownership tracking - tokens own certificates and proxies
 - Cascade deletion - removing token removes owned resources
 - Certificate email configuration per token
+- Admin token for privileged operations
 
 ### Certificate Management
 - ACME v2 protocol with HTTP-01 challenges

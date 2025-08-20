@@ -106,18 +106,46 @@ When multiple routes match a request, they are evaluated by:
 2. Sorting by priority (higher values checked first)
 3. Matching path and methods
 
-## OAuth Integration
+### Route Authentication Override
+Routes can override proxy-level authentication settings:
+
+```json
+{
+  "route_id": "public-health",
+  "path_pattern": "/health",
+  "auth_config": {
+    "auth_type": "none"  // Make health endpoint public
+  },
+  "override_proxy_auth": true  // Override proxy's auth settings
+}
+```
+
+This allows fine-grained auth control where specific routes can have different authentication than the proxy defaults.
+
+## Authentication Integration
+
+### Flexible Authentication System
+
+Proxies support the flexible authentication system with four auth types:
+- **none** - Public access, no authentication required
+- **bearer** - API token authentication 
+- **admin** - Admin-only access
+- **oauth** - OAuth 2.1 with GitHub integration
+
+### OAuth Configuration
 
 ```json
 {
   "auth_enabled": true,
+  "auth_type": "oauth",  // none|bearer|admin|oauth
   "auth_proxy": "auth.example.com",
   "auth_mode": "forward",  // forward|redirect|passthrough
   "auth_required_users": ["alice", "bob"],  // Per-proxy GitHub user allowlist (null=global default, ["*"]=all users)
   "auth_required_emails": ["*@example.com"],
   "auth_allowed_scopes": ["mcp:read", "mcp:write"],  // Optional: restrict token scopes
   "auth_allowed_audiences": ["https://api.example.com"],  // Optional: restrict token audiences
-  "auth_pass_headers": true
+  "auth_pass_headers": true,
+  "auth_excluded_paths": ["/health", "/.well-known/*"]  // Paths that bypass authentication
 }
 ```
 
