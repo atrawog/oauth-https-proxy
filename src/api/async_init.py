@@ -219,24 +219,24 @@ def attach_to_app(app: FastAPI, components: AsyncComponents):
     
     logger.info("Async components attached to FastAPI app")
     
-    # Now create and attach the v1 router with async_storage available
+    # Now create and attach the API router with async_storage available
     try:
-        from .routers.v1 import create_v1_router
+        from .routers import create_api_router
         
-        # Create v1 router and mount at root for clean URLs
-        v1_router = create_v1_router(app)
+        # Create API router and mount at root for clean URLs
+        api_router = create_api_router(app)
         
         # Mount at root path for clean, consistent URLs
         # Note: OAuth endpoints like /token are singular without trailing slash
         # while API endpoints like /tokens/ are plural with trailing slash, so no conflict
-        app.include_router(v1_router, prefix="")
-        logger.info("API v1 router included at root path /")
+        app.include_router(api_router, prefix="")
+        logger.info("API router included at root path /")
         
     except ImportError as e:
-        logger.error(f"Failed to import v1 router: {e}")
+        logger.error(f"Failed to import API router: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
     except Exception as e:
-        logger.error(f"Failed to include v1 router: {e}")
+        logger.error(f"Failed to include API router: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")

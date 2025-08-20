@@ -14,7 +14,7 @@ from fastapi import APIRouter, HTTPException, Depends, Request, Query
 from pydantic import BaseModel, Field
 
 from src.auth import EndpointAuthConfig, AuthDep
-from src.storage import AsyncRedisStorage
+from src.storage.async_redis_storage import AsyncRedisStorage
 
 logger = logging.getLogger(__name__)
 

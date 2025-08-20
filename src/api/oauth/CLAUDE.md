@@ -192,36 +192,36 @@ Response:
 
 ## OAuth Admin API Endpoints
 
-- `GET /api/v1/oauth/clients` - List OAuth clients
-- `GET /api/v1/oauth/clients/{client_id}` - Client details
-- `GET /api/v1/oauth/clients/{client_id}/tokens` - Client's tokens
-- `GET /api/v1/oauth/tokens` - Token statistics
-- `GET /api/v1/oauth/tokens/{jti}` - Token details
-- `GET /api/v1/oauth/sessions` - Active sessions
-- `GET /api/v1/oauth/sessions/{session_id}` - Session details
-- `DELETE /api/v1/oauth/sessions/{session_id}` - Revoke session
-- `GET /api/v1/oauth/metrics` - System metrics
-- `GET /api/v1/oauth/health` - Integration health
-- `GET /api/v1/oauth/proxies` - OAuth status for proxies
-- `GET /api/v1/oauth/proxies/{hostname}/sessions` - Proxy sessions
+- `GET /oauth/clients` - List OAuth clients
+- `GET /oauth/clients/{client_id}` - Client details
+- `GET /oauth/clients/{client_id}/tokens` - Client's tokens
+- `GET /oauth/tokens` - Token statistics
+- `GET /oauth/tokens/{jti}` - Token details
+- `GET /oauth/sessions` - Active sessions
+- `GET /oauth/sessions/{session_id}` - Session details
+- `DELETE /oauth/sessions/{session_id}` - Revoke session
+- `GET /oauth/metrics` - System metrics
+- `GET /oauth/health` - Integration health
+- `GET /oauth/proxies` - OAuth status for proxies
+- `GET /oauth/proxies/{hostname}/sessions` - Proxy sessions
 
 ## OAuth Status API Endpoints
 
-- `GET /api/v1/oauth/status` - Overall OAuth system status
-- `GET /api/v1/oauth/status/clients` - Client statistics
-- `GET /api/v1/oauth/status/tokens` - Token statistics
-- `GET /api/v1/oauth/status/sessions` - Session statistics
+- `GET /oauth/status` - Overall OAuth system status
+- `GET /oauth/status/clients` - Client statistics
+- `GET /oauth/status/tokens` - Token statistics
+- `GET /oauth/status/sessions` - Session statistics
 
 ## Protected Resource Management API Endpoints
 
 **Note**: These management endpoints are optional conveniences, not MCP requirements.
-- `GET /api/v1/resources/` - List registered protected resources (requires trailing slash)
-- `POST /api/v1/resources/` - Register new protected resource
-- `GET /api/v1/resources/{uri}` - Get resource details
-- `PUT /api/v1/resources/{uri}` - Update resource
-- `DELETE /api/v1/resources/{uri}` - Remove resource
-- `POST /api/v1/resources/{uri}/validate-token` - Validate token for resource
-- `POST /api/v1/resources/auto-register` - Auto-discover proxy resources
+- `GET /resources/` - List registered protected resources (requires trailing slash)
+- `POST /resources/` - Register new protected resource
+- `GET /resources/{uri}` - Get resource details
+- `PUT /resources/{uri}` - Update resource
+- `DELETE /resources/{uri}` - Remove resource
+- `POST /resources/{uri}/validate-token` - Validate token for resource
+- `POST /resources/auto-register` - Auto-discover proxy resources
 
 ## Protected Resource Endpoints (Required on each protected resource)
 

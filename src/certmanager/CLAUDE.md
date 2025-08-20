@@ -62,13 +62,13 @@ The Certificate Manager provides automated SSL/TLS certificate management using 
 
 ## API Endpoints
 
-- `POST /api/v1/certificates/` - Single domain (async)
-- `POST /api/v1/certificates/multi-domain` - Multiple domains (async)
-- `GET /api/v1/certificates/` - List all certificates (requires trailing slash)
-- `GET /api/v1/certificates/{cert_name}` - Get certificate details
-- `GET /api/v1/certificates/{cert_name}/status` - Generation status
-- `POST /api/v1/certificates/{cert_name}/renew` - Manual renewal
-- `DELETE /api/v1/certificates/{cert_name}` - Delete certificate
+- `POST /certificates/` - Single domain (async)
+- `POST /certificates/multi-domain` - Multiple domains (async)
+- `GET /certificates/` - List all certificates (requires trailing slash)
+- `GET /certificates/{cert_name}` - Get certificate details
+- `GET /certificates/{cert_name}/status` - Generation status
+- `POST /certificates/{cert_name}/renew` - Manual renewal
+- `DELETE /certificates/{cert_name}` - Delete certificate
 - `GET /.well-known/acme-challenge/{token}` - ACME validation (root level)
 - `GET /health` - Service health status (root level)
 

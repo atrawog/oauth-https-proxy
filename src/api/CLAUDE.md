@@ -22,8 +22,16 @@ api/
 ├── auth.py          # Authentication utilities
 ├── models.py        # Pydantic models
 ├── oauth/           # OAuth implementation (see oauth/CLAUDE.md)
-├── routers/         # API routers
-│   └── v1/         # Version 1 API
+├── routers/         # API routers organized by path
+│   ├── auth/       # /auth-config/* and /auth/endpoints/*
+│   ├── certificates/ # /certificates/*
+│   ├── logs/       # /logs/*
+│   ├── oauth/      # /oauth/*
+│   ├── proxy/      # /proxy/targets/*
+│   ├── resources/  # /resources/*
+│   ├── routes/     # /routes/*
+│   ├── services/   # /services/*
+│   └── tokens/     # /tokens/*
 ├── server.py        # FastAPI app setup
 └── static/         # Web GUI assets
 ```

@@ -66,9 +66,9 @@ The MCP module provides a complete implementation of the Model Context Protocol 
 ### HTTP Endpoints
 
 ```
-POST /api/v1/mcp/          - Main MCP JSON-RPC endpoint
-GET  /api/v1/mcp/health    - Health check
-GET  /api/v1/mcp/info      - Server information
+POST /mcp/          - Main MCP JSON-RPC endpoint
+GET  /mcp/health    - Health check
+GET  /mcp/info      - Server information
 ```
 
 ### JSON-RPC Methods
@@ -172,7 +172,7 @@ The server can automatically detect the appropriate mode:
 
 ### Initialize Session
 ```bash
-curl -X POST http://localhost:9000/api/v1/mcp/ \
+curl -X POST http://localhost:9000/mcp/ \
   -H "Content-Type: application/json" \
   -d '{
     "jsonrpc": "2.0",
@@ -185,7 +185,7 @@ curl -X POST http://localhost:9000/api/v1/mcp/ \
 ### Call Echo Tool
 ```bash
 SESSION_ID="your-session-id"
-curl -X POST http://localhost:9000/api/v1/mcp/ \
+curl -X POST http://localhost:9000/mcp/ \
   -H "Content-Type: application/json" \
   -H "Mcp-Session-Id: $SESSION_ID" \
   -d '{
@@ -201,7 +201,7 @@ curl -X POST http://localhost:9000/api/v1/mcp/ \
 
 ### Check Health
 ```bash
-curl http://localhost:9000/api/v1/mcp/health
+curl http://localhost:9000/mcp/health
 ```
 
 ## Testing
@@ -223,7 +223,7 @@ import json
 # Initialize session
 async with httpx.AsyncClient() as client:
     response = await client.post(
-        "http://localhost:9000/api/v1/mcp/",
+        "http://localhost:9000/mcp/",
         json={
             "jsonrpc": "2.0",
             "method": "initialize",

@@ -181,22 +181,22 @@ When enabled, the proxy automatically serves:
 
 ## API Endpoints
 
-- `POST /api/v1/proxy/targets/` - Create proxy target
-- `GET /api/v1/proxy/targets/` - List all proxies (requires trailing slash)
-- `GET /api/v1/proxy/targets/{hostname}` - Get proxy details
-- `PUT /api/v1/proxy/targets/{hostname}` - Update proxy
-- `DELETE /api/v1/proxy/targets/{hostname}` - Delete proxy
-- `POST /api/v1/proxy/targets/{hostname}/auth` - Configure auth
-- `DELETE /api/v1/proxy/targets/{hostname}/auth` - Remove auth
-- `GET /api/v1/proxy/targets/{hostname}/auth` - Get auth config
-- `POST /api/v1/proxy/targets/{hostname}/resource` - Configure protected resource metadata (RFC 9728)
-- `DELETE /api/v1/proxy/targets/{hostname}/resource` - Remove protected resource metadata
-- `GET /api/v1/proxy/targets/{hostname}/resource` - Get protected resource configuration
-- `POST /api/v1/proxy/targets/{hostname}/oauth-server` - Configure OAuth authorization server metadata
-- `DELETE /api/v1/proxy/targets/{hostname}/oauth-server` - Remove OAuth server metadata
-- `GET /api/v1/proxy/targets/{hostname}/oauth-server` - Get OAuth server configuration
-- `GET /api/v1/proxy/targets/{hostname}/routes` - Get proxy routes
-- `PUT /api/v1/proxy/targets/{hostname}/routes` - Update proxy routes
+- `POST /proxy/targets/` - Create proxy target
+- `GET /proxy/targets/` - List all proxies (requires trailing slash)
+- `GET /proxy/targets/{hostname}` - Get proxy details
+- `PUT /proxy/targets/{hostname}` - Update proxy
+- `DELETE /proxy/targets/{hostname}` - Delete proxy
+- `POST /proxy/targets/{hostname}/auth` - Configure auth
+- `DELETE /proxy/targets/{hostname}/auth` - Remove auth
+- `GET /proxy/targets/{hostname}/auth` - Get auth config
+- `POST /proxy/targets/{hostname}/resource` - Configure protected resource metadata (RFC 9728)
+- `DELETE /proxy/targets/{hostname}/resource` - Remove protected resource metadata
+- `GET /proxy/targets/{hostname}/resource` - Get protected resource configuration
+- `POST /proxy/targets/{hostname}/oauth-server` - Configure OAuth authorization server metadata
+- `DELETE /proxy/targets/{hostname}/oauth-server` - Remove OAuth server metadata
+- `GET /proxy/targets/{hostname}/oauth-server` - Get OAuth server configuration
+- `GET /proxy/targets/{hostname}/routes` - Get proxy routes
+- `PUT /proxy/targets/{hostname}/routes` - Update proxy routes
 
 ## Proxy Commands
 

@@ -54,12 +54,12 @@ async def health():
     return {"status": "ok"}
 
 # Bearer token required (uses config or default)
-@router.get("/api/v1/data")
+@router.get("/data")
 async def get_data(auth: AuthResult = Depends(AuthDep())):
     return {"user": auth.principal}
 
 # Admin only
-@router.delete("/api/v1/tokens/{name}")
+@router.delete("/tokens/{name}")
 async def delete_token(
     name: str,
     auth: AuthResult = Depends(AuthDep(admin=True))
@@ -67,7 +67,7 @@ async def delete_token(
     return {"deleted": name}
 
 # OAuth with specific requirements
-@router.post("/api/v1/services")
+@router.post("/services")
 async def create_service(
     auth: AuthResult = Depends(AuthDep(
         auth_type="oauth",
@@ -78,7 +78,7 @@ async def create_service(
     return {"created_by": auth.principal}
 
 # Bearer with ownership check
-@router.delete("/api/v1/certificates/{cert_name}")
+@router.delete("/certificates/{cert_name}")
 async def delete_cert(
     cert_name: str,
     auth: AuthResult = Depends(AuthDep(
@@ -105,7 +105,7 @@ Endpoints can be configured via the API or directly in Redis:
 
 # Configure admin-only token management
 {
-    "path_pattern": "/api/v1/tokens/*",
+    "path_pattern": "/tokens/*",
     "methods": ["*"],
     "auth_type": "admin",
     "priority": 90
@@ -113,7 +113,7 @@ Endpoints can be configured via the API or directly in Redis:
 
 # Configure OAuth for services with specific users
 {
-    "path_pattern": "/api/v1/services/*",
+    "path_pattern": "/services/*",
     "methods": ["POST", "PUT", "DELETE"],
     "auth_type": "oauth",
     "oauth_scopes": ["service:write"],
@@ -123,7 +123,7 @@ Endpoints can be configured via the API or directly in Redis:
 
 # Configure bearer with ownership for certificates
 {
-    "path_pattern": "/api/v1/certificates/{cert_name}",
+    "path_pattern": "/certificates/{cert_name}",
     "methods": ["DELETE"],
     "auth_type": "bearer",
     "bearer_check_owner": true,
@@ -190,26 +190,26 @@ proxy_config = {
 
 ```bash
 # List all endpoint configs
-GET /api/v1/auth/endpoints
+GET /auth/endpoints
 
 # Create endpoint config
-POST /api/v1/auth/endpoints
+POST /auth/endpoints
 {
-    "path_pattern": "/api/v1/admin/*",
+    "path_pattern": "/admin/*",
     "auth_type": "admin",
     "priority": 100
 }
 
 # Update endpoint config
-PUT /api/v1/auth/endpoints/{config_id}
+PUT /auth/endpoints/{config_id}
 
 # Delete endpoint config
-DELETE /api/v1/auth/endpoints/{config_id}
+DELETE /auth/endpoints/{config_id}
 
 # Test path matching
-POST /api/v1/auth/endpoints/test
+POST /auth/endpoints/test
 {
-    "path": "/api/v1/tokens/mytoken",
+    "path": "/tokens/mytoken",
     "method": "GET"
 }
 ```
@@ -218,10 +218,10 @@ POST /api/v1/auth/endpoints/test
 
 ```bash
 # Get route auth config
-GET /api/v1/routes/{route_id}/auth
+GET /routes/{route_id}/auth
 
 # Set route auth config
-PUT /api/v1/routes/{route_id}/auth
+PUT /routes/{route_id}/auth
 {
     "auth_type": "oauth",
     "oauth_scopes": ["route:access"],
@@ -229,14 +229,14 @@ PUT /api/v1/routes/{route_id}/auth
 }
 
 # Remove route auth config
-DELETE /api/v1/routes/{route_id}/auth
+DELETE /routes/{route_id}/auth
 ```
 
 ### Proxy Auth Configuration (Existing)
 
 ```bash
 # Configure proxy auth
-POST /api/v1/proxy/targets/{hostname}/auth
+POST /proxy/targets/{hostname}/auth
 {
     "auth_type": "oauth",
     "auth_proxy": "auth.example.com",
@@ -250,7 +250,7 @@ POST /api/v1/proxy/targets/{hostname}/auth
 Endpoint patterns support wildcards:
 - `*` matches any characters
 - `/api/*` matches all paths starting with `/api/`
-- `/api/v1/*/config` matches `/api/v1/service/config`, `/api/v1/token/config`, etc.
+- `/*/config` matches `/service/config`, `/token/config`, etc.
 
 Patterns are matched by priority (higher first), then by specificity.
 

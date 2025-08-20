@@ -6,9 +6,11 @@ This document provides comprehensive development and testing guidelines for the 
 
 ### API Design Patterns
 - **Collection Endpoints**: All collection endpoints (GET lists) require trailing slashes to avoid HTTP 307 redirects
-  - Example: `/api/v1/routes/` not `/api/v1/routes`
+  - Example: `/routes/` not `/routes`
   - FastAPI/Starlette automatically redirects non-trailing slash URLs
   - This applies to: tokens, certificates, services, routes, resources, ports, proxy/targets
+- **Root-Level API**: All API endpoints are mounted at the root level (no `/api/v1/` prefix)
+  - Clean URLs: `/tokens/`, `/certificates/`, `/proxies/`, etc.
 
 ### Execution Requirements
 - **Command execution**: ONLY via `just` commands - no direct Python/bash or docker exec execution
@@ -179,6 +181,9 @@ The system is **FULLY COMPLIANT** with MCP authorization specification:
 8. **PROXY Protocol Support**: Preserves real client IPs through load balancers
 9. **Enhanced CLI Client**: Smart table formatting with context-aware display
 10. **Exactly-Once Processing**: Redis Streams with consumer groups ensure reliability
+11. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
+12. **Async Redis Streams Logging**: High-performance logging with indexes and real-time processing
+13. **Organized Router Structure**: Directory structure matches API paths for intuitive navigation
 
 ## Environment Configuration
 

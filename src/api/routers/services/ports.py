@@ -9,7 +9,6 @@ from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_auth
 from src.ports.models import ServicePort, PortConfiguration
 from src.docker.manager import DockerManager
 
@@ -51,7 +50,7 @@ def create_ports_router(async_storage) -> APIRouter:
     @router.get("/ports", response_model=Dict[int, Dict])
     async def list_all_ports(
         request: Request,
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """List all allocated ports across all services."""
         manager = await get_docker_manager(request)
@@ -66,7 +65,7 @@ def create_ports_router(async_storage) -> APIRouter:
     @router.get("/ports/available", response_model=List[Dict])
     async def get_available_port_ranges(
         request: Request,
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get available port ranges."""
         manager = await get_docker_manager(request)
@@ -83,7 +82,7 @@ def create_ports_router(async_storage) -> APIRouter:
         request: Request,
         port: int = Query(..., description="Port number to check"),
         bind_address: str = Query("0.0.0.0", description="Bind address"),
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Check if a specific port is available."""
         manager = await get_docker_manager(request)
@@ -132,7 +131,7 @@ def create_ports_router(async_storage) -> APIRouter:
             service_port = await manager.add_port_to_service(
                 service_name, 
                 config_dict, 
-                token_info["hash"]
+                auth.token_hash
             )
             return service_port
             
@@ -146,7 +145,7 @@ def create_ports_router(async_storage) -> APIRouter:
     async def list_service_ports(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get all ports for a service."""
         manager = await get_docker_manager(request)
@@ -180,7 +179,7 @@ def create_ports_router(async_storage) -> APIRouter:
             success = await manager.remove_port_from_service(
                 service_name, 
                 port_name, 
-                token_info["hash"]
+                auth.token_hash
             )
             if success:
                 return {"message": f"Port {port_name} removed from service {service_name}"}
@@ -212,7 +211,7 @@ def create_ports_router(async_storage) -> APIRouter:
             await manager.remove_port_from_service(
                 service_name, 
                 port_name, 
-                token_info["hash"]
+                auth.token_hash
             )
             
             # Add new port with updated config
@@ -233,7 +232,7 @@ def create_ports_router(async_storage) -> APIRouter:
             service_port = await manager.add_port_to_service(
                 service_name, 
                 config_dict, 
-                token_info["hash"]
+                auth.token_hash
             )
             
             return {"message": f"Port {port_name} updated", "port": service_port}

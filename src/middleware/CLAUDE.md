@@ -193,7 +193,7 @@ echo -e "PROXY TCP4 1.2.3.4 5.6.7.8 12345 80\r\nGET / HTTP/1.1\r\nHost: example.
 ### Verify Client IP
 ```bash
 # Check if real IP is preserved
-curl -H "X-Forwarded-For: test" http://localhost:10001/api/v1/debug/headers
+curl -H "X-Forwarded-For: test" http://localhost:10001/debug/headers
 ```
 
 ## Monitoring

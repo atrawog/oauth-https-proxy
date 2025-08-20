@@ -74,35 +74,35 @@ The system automatically registers these internal services:
 ## API Endpoints
 
 ### Docker Service Endpoints
-- `POST /api/v1/services/` - Create new Docker service
-- `GET /api/v1/services/` - List all Docker services (requires trailing slash)
-- `GET /api/v1/services/unified` - List all services (Docker + external)
-- `GET /api/v1/services/{name}` - Get service details
-- `PUT /api/v1/services/{name}` - Update service configuration
-- `DELETE /api/v1/services/{name}` - Delete service
-- `POST /api/v1/services/{name}/start` - Start service
-- `POST /api/v1/services/{name}/stop` - Stop service
-- `POST /api/v1/services/{name}/restart` - Restart service
-- `GET /api/v1/services/{name}/logs` - Get service logs
-- `GET /api/v1/services/{name}/stats` - Get service statistics
-- `POST /api/v1/services/{name}/proxy` - Create proxy for service
-- `POST /api/v1/services/cleanup` - Clean up orphaned services
+- `POST /services/` - Create new Docker service
+- `GET /services/` - List all Docker services (requires trailing slash)
+- `GET /services/unified` - List all services (Docker + external)
+- `GET /services/{name}` - Get service details
+- `PUT /services/{name}` - Update service configuration
+- `DELETE /services/{name}` - Delete service
+- `POST /services/{name}/start` - Start service
+- `POST /services/{name}/stop` - Stop service
+- `POST /services/{name}/restart` - Restart service
+- `GET /services/{name}/logs` - Get service logs
+- `GET /services/{name}/stats` - Get service statistics
+- `POST /services/{name}/proxy` - Create proxy for service
+- `POST /services/cleanup` - Clean up orphaned services
 
 ### External Service Endpoints
-- `POST /api/v1/services/external` - Register external service
-- `GET /api/v1/services/external` - List external services
-- `DELETE /api/v1/services/external/{name}` - Delete external service
+- `POST /services/external` - Register external service
+- `GET /services/external` - List external services
+- `DELETE /services/external/{name}` - Delete external service
 
 ### Port Management Endpoints
-- `GET /api/v1/services/{name}/ports` - List all ports for a service
-- `POST /api/v1/services/{name}/ports` - Add a port to existing service
-- `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove a port from service
-- `PUT /api/v1/services/{name}/ports/{port_name}` - Update port configuration
+- `GET /services/{name}/ports` - List all ports for a service
+- `POST /services/{name}/ports` - Add a port to existing service
+- `DELETE /services/{name}/ports/{port_name}` - Remove a port from service
+- `PUT /services/{name}/ports/{port_name}` - Update port configuration
 
 ### Global Port Query Endpoints
-- `GET /api/v1/services/ports` - List all allocated ports across all services
-- `GET /api/v1/services/ports/available` - Get available port ranges
-- `POST /api/v1/services/ports/check` - Check if port is available
+- `GET /services/ports` - List all allocated ports across all services
+- `GET /services/ports/available` - Get available port ranges
+- `POST /services/ports/check` - Check if port is available
 
 ## Service Commands
 

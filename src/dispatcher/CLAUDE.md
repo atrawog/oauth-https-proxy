@@ -240,10 +240,10 @@ Event-driven instance management:
 
 ```bash
 # Check active instances
-curl http://localhost:9000/api/v1/dispatcher/instances
+curl http://localhost:9000/dispatcher/instances
 
 # View instance health
-curl http://localhost:9000/api/v1/dispatcher/health
+curl http://localhost:9000/dispatcher/health
 
 # Check SSL context
 curl https://hostname --resolve hostname:443:127.0.0.1

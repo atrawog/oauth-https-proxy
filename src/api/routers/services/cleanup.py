@@ -55,7 +55,7 @@ def create_cleanup_router(storage) -> APIRouter:
         Requires admin token.
         """
         # Admin only
-        if token_info.get("name") != "ADMIN":
+        if not auth.is_admin:
             raise HTTPException(403, "Admin token required")
         
         manager = await get_docker_manager(request)

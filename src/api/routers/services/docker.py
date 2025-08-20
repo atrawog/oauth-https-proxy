@@ -10,7 +10,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from python_on_whales.exceptions import DockerException
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_auth
 from src.docker.models import (
     DockerServiceConfig,
     DockerServiceInfo,
@@ -70,7 +69,7 @@ def create_docker_router(async_storage) -> APIRouter:
         manager = await get_docker_manager(request)
         
         # Filter by owner if requested
-        owner_hash = token_info["hash"] if owned_only else None
+        owner_hash = auth.token_hash if owned_only else None
         services = await manager.list_services(owner_hash)
         
         return DockerServiceListResponse(
@@ -91,8 +90,8 @@ def create_docker_router(async_storage) -> APIRouter:
         """
         # Check permissions
         has_permission = (
-            token_info.get("name") == "ADMIN" or
-            "docker:create" in token_info.get("permissions", [])
+            auth.is_admin or
+            "docker:create" in getattr(auth, 'permissions', [])
         )
         if not has_permission:
             raise HTTPException(403, "Admin token or docker:create permission required")
@@ -105,7 +104,7 @@ def create_docker_router(async_storage) -> APIRouter:
         
         try:
             # Create service
-            service_info = await manager.create_service(config, token_info["hash"])
+            service_info = await manager.create_service(config, auth.token_hash)
             
             response = DockerServiceCreateResponse(
                 service=service_info,
@@ -124,7 +123,7 @@ def create_docker_router(async_storage) -> APIRouter:
                         enabled=True,
                         enable_http=True,
                         enable_https=False,  # Start with HTTP only
-                        owner_token_hash=token_info["hash"],
+                        owner_token_hash=auth.token_hash,
                         preserve_host_header=True
                     )
                     
@@ -151,7 +150,7 @@ def create_docker_router(async_storage) -> APIRouter:
     async def get_service(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get information about a specific service."""
         manager = await get_docker_manager(request)
@@ -180,8 +179,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.is_admin
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to update this service")
         
@@ -210,8 +209,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.is_admin
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to delete this service")
         
@@ -251,8 +250,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.is_admin
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to control this service")
         
@@ -279,8 +278,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.is_admin
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to control this service")
         
@@ -307,8 +306,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.is_admin
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to control this service")
         
@@ -327,7 +326,7 @@ def create_docker_router(async_storage) -> APIRouter:
         service_name: str,
         lines: int = Query(100, description="Number of log lines to return"),
         timestamps: bool = Query(False, description="Include timestamps"),
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get service logs."""
         manager = await get_docker_manager(request)
@@ -337,8 +336,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(404, f"Service {service_name} not found")
         
         # Check ownership (logs may contain sensitive info)
-        is_owner = service_info.owner_token_hash == token_info["hash"]
-        is_admin = token_info.get("name") == "ADMIN"
+        is_owner = service_info.owner_token_hash == auth.token_hash
+        is_admin = auth.is_admin
         if not (is_owner or is_admin):
             raise HTTPException(403, "Not authorized to view logs for this service")
         
@@ -359,7 +358,7 @@ def create_docker_router(async_storage) -> APIRouter:
     async def get_service_stats(
         request: Request,
         service_name: str,
-        token_info: Dict = Depends(require_auth)
+        auth: AuthResult = Depends(AuthDep())
     ):
         """Get service resource statistics."""
         manager = await get_docker_manager(request)

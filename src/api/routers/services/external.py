@@ -64,8 +64,8 @@ def create_external_router(async_storage) -> APIRouter:
                 description=config.description,
                 routing_enabled=config.routing_enabled,
                 created_at=datetime.now(timezone.utc),
-                owner_token_hash=token_info["hash"],
-                created_by=token_info.get("name", "unknown")
+                owner_token_hash=auth.token_hash if auth.token_hash else "unknown",
+                created_by=auth.principal if auth.principal else "unknown"
             )
             
             # Store in Redis (new format)
@@ -141,8 +141,8 @@ def create_external_router(async_storage) -> APIRouter:
             service_info = UnifiedServiceInfo.parse_raw(service_data)
             
             # Check ownership
-            is_owner = service_info.owner_token_hash == token_info["hash"]
-            is_admin = token_info.get("name") == "ADMIN"
+            is_owner = service_info.owner_token_hash == auth.token_hash
+            is_admin = auth.is_admin
             if not (is_owner or is_admin):
                 raise HTTPException(403, "Not authorized to delete this service")
             
@@ -228,7 +228,7 @@ def create_external_router(async_storage) -> APIRouter:
             
             # Get external services
             if not service_type or service_type == ServiceType.EXTERNAL:
-                external_services = await list_external_services(request, token_info)
+                external_services = await list_external_services(request, auth)
                 all_services.extend(external_services)
             
             # Count by type

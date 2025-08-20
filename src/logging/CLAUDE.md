@@ -52,7 +52,7 @@ stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
   "client_fqdn": "client.example.com",
   "hostname": "api.example.com",
   "method": "GET",
-  "path": "/api/v1/users",
+  "path": "/users",
   "status_code": 200,
   "response_time_ms": 45,
   "user_id": "github-123",
@@ -65,15 +65,15 @@ stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
 
 ## Log Query API
 
-Access logs via the `/api/v1/logs` endpoints:
+Access logs via the `/logs` endpoints:
 
 ### Endpoints
-- `GET /api/v1/logs/ip/{ip}` - Query by client IP address
-- `GET /api/v1/logs/host/{hostname}` - Query by client FQDN (reverse DNS)
-- `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
-- `GET /api/v1/logs/search` - Search logs with filters
-- `GET /api/v1/logs/errors` - Recent errors
-- `GET /api/v1/logs/events` - Event statistics
+- `GET /logs/ip/{ip}` - Query by client IP address
+- `GET /logs/host/{hostname}` - Query by client FQDN (reverse DNS)
+- `GET /logs/client/{client_id}` - Query by OAuth client
+- `GET /logs/search` - Search logs with filters
+- `GET /logs/errors` - Recent errors
+- `GET /logs/events` - Event statistics
 
 ### Query Parameters
 - `hours` - How many hours back to search (default: 24)

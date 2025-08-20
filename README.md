@@ -31,7 +31,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 
 ### Developer Experience
 - **Web UI**: Built-in management interface at http://localhost
-- **Comprehensive API**: RESTful API for all operations at `/api/v1/`
+- **Comprehensive API**: RESTful API for all operations at root level
 - **API Documentation**: Interactive Swagger UI at https://yourdomain.com/docs
 - **Health Monitoring**: Service health checks and metrics
 - **Hot Reload**: Update certificates and routes without downtime
@@ -304,7 +304,7 @@ The system supports configurable authentication at three levels:
 #### Configure Endpoint Authentication
 ```bash
 # Make health endpoint public
-curl -X POST http://localhost:9000/api/v1/auth/endpoints \
+curl -X POST http://localhost:9000/auth/endpoints \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{
     "path_pattern": "/health",
@@ -314,20 +314,20 @@ curl -X POST http://localhost:9000/api/v1/auth/endpoints \
   }'
 
 # Require admin for token management
-curl -X POST http://localhost:9000/api/v1/auth/endpoints \
+curl -X POST http://localhost:9000/auth/endpoints \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{
-    "path_pattern": "/api/v1/tokens/*",
+    "path_pattern": "/tokens/*",
     "methods": ["*"],
     "auth_type": "admin",
     "priority": 90
   }'
 
 # OAuth with specific users for services
-curl -X POST http://localhost:9000/api/v1/auth/endpoints \
+curl -X POST http://localhost:9000/auth/endpoints \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{
-    "path_pattern": "/api/v1/services/*",
+    "path_pattern": "/services/*",
     "methods": ["POST", "PUT", "DELETE"],
     "auth_type": "oauth",
     "oauth_scopes": ["service:write"],
@@ -339,7 +339,7 @@ curl -X POST http://localhost:9000/api/v1/auth/endpoints \
 #### Configure Route Authentication
 ```bash
 # Set auth for a specific route
-curl -X PUT http://localhost:9000/api/v1/routes/metrics/auth \
+curl -X PUT http://localhost:9000/routes/metrics/auth \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -d '{
     "auth_type": "admin",
@@ -353,7 +353,7 @@ curl -X PUT http://localhost:9000/api/v1/routes/metrics/auth \
 just proxy-auth-enable api.yourdomain.com $TOKEN auth.yourdomain.com
 
 # Or configure programmatically
-curl -X POST http://localhost:9000/api/v1/proxy/targets/api.yourdomain.com/auth \
+curl -X POST http://localhost:9000/proxy/targets/api.yourdomain.com/auth \
   -H "Authorization: Bearer $TOKEN" \
   -d '{
     "auth_type": "oauth",
@@ -615,7 +615,7 @@ Routes are managed dynamically via API/CLI:
 
 ```bash
 # Create a route
-just route-create /api/v1/ service backend-api [token]
+just route-create / service backend-api [token]
 
 # List all routes
 just route-list
@@ -751,18 +751,18 @@ just app-logs-test
 - Unique visitor tracking with HyperLogLog
 
 **Log Query API** (requires admin token):
-- `GET /api/v1/logs/ip/{ip}` - Query by client IP
-- `GET /api/v1/logs/client/{client_id}` - Query by OAuth client
-- `GET /api/v1/logs/correlation/{id}` - Complete request flow
-- `GET /api/v1/logs/search` - Advanced search
-- `GET /api/v1/logs/errors` - Recent errors
+- `GET /logs/ip/{ip}` - Query by client IP
+- `GET /logs/client/{client_id}` - Query by OAuth client
+- `GET /logs/correlation/{id}` - Complete request flow
+- `GET /logs/search` - Advanced search
+- `GET /logs/errors` - Recent errors
 
 ## API Reference
 
 ### Base URL
-All API endpoints are served under `/api/v1/` prefix, except for OAuth protocol endpoints which are at the root level.
+All API endpoints are served at the root level with clean URLs (e.g., `/tokens/`, `/certificates/`, `/routes/`).
 
-**Note**: When accessing the API directly, use port 9000 (e.g., `http://localhost:9000/api/v1/`). Port 80/443 is for proxied traffic only.
+**Note**: When accessing the API directly, use port 9000 (e.g., `http://localhost:9000`). Port 80/443 is for proxied traffic only.
 
 ### Authentication
 The API uses a flexible authentication system with four types:
@@ -778,70 +778,70 @@ Authorization: Bearer your-admin-token
 
 ### Main API Categories
 
-#### Authentication Management (`/api/v1/auth/*`)
+#### Authentication Management (`/auth/*`)
 - Configure authentication per endpoint, route, or proxy
 - Pattern-based matching with priorities
 - Support for none/bearer/admin/oauth auth types
 - Key endpoints:
-  - `GET /api/v1/auth/endpoints` - List endpoint auth configs
-  - `POST /api/v1/auth/endpoints` - Create endpoint auth config
-  - `PUT /api/v1/auth/endpoints/{config_id}` - Update config
-  - `DELETE /api/v1/auth/endpoints/{config_id}` - Delete config
-  - `POST /api/v1/auth/endpoints/test` - Test path matching
-  - `PUT /api/v1/routes/{route_id}/auth` - Configure route auth
-  - `POST /api/v1/proxy/targets/{hostname}/auth` - Configure proxy auth
+  - `GET /auth/endpoints` - List endpoint auth configs
+  - `POST /auth/endpoints` - Create endpoint auth config
+  - `PUT /auth/endpoints/{config_id}` - Update config
+  - `DELETE /auth/endpoints/{config_id}` - Delete config
+  - `POST /auth/endpoints/test` - Test path matching
+  - `PUT /routes/{route_id}/auth` - Configure route auth
+  - `POST /proxy/targets/{hostname}/auth` - Configure proxy auth
 
-#### Certificate Management (`/api/v1/certificates/*`)
+#### Certificate Management (`/certificates/*`)
 - Create, list, renew, and delete SSL certificates
 - Multi-domain certificate support
 - ACME challenge handling at `/.well-known/acme-challenge/*`
 
-#### Proxy Management (`/api/v1/proxy/targets/*`)
+#### Proxy Management (`/proxy/targets/*`)
 - Create and manage reverse proxy configurations
 - OAuth authentication settings per proxy
 - Protected resource metadata configuration (RFC 9728)
 - OAuth authorization server metadata per proxy
 - Route filtering configuration
 - Key endpoints:
-  - `POST /api/v1/proxy/targets/{hostname}/resource` - Configure protected resource metadata
-  - `POST /api/v1/proxy/targets/{hostname}/oauth-server` - Configure OAuth server metadata
-  - `POST /api/v1/proxy/targets/{hostname}/auth` - Configure authentication
+  - `POST /proxy/targets/{hostname}/resource` - Configure protected resource metadata
+  - `POST /proxy/targets/{hostname}/oauth-server` - Configure OAuth server metadata
+  - `POST /proxy/targets/{hostname}/auth` - Configure authentication
 
-#### Token Management (`/api/v1/tokens/*`)
+#### Token Management (`/tokens/*`)
 - API token creation and management
 - Token-based ownership tracking
 
-#### Route Management (`/api/v1/routes/*`)
+#### Route Management (`/routes/*`)
 - Priority-based path routing
 - Support for regex patterns
 - Method-specific routing
 
-#### External Service Management (`/api/v1/services/external/*`)
+#### External Service Management (`/services/external/*`)
 - Named service registration for external URLs
 - Service discovery for routing
 
-#### OAuth Admin (`/api/v1/oauth/*`)
+#### OAuth Admin (`/oauth/*`)
 - Client and session management
 - Token introspection
 - System metrics
 
-#### Protected Resources (`/api/v1/resources/*`)
+#### Protected Resources (`/resources/*`)
 - Protected resource registration
 - Resource validation
 - Auto-discovery
 
-#### Docker Services (`/api/v1/services/*`)
+#### Docker Services (`/services/*`)
 - Container creation and management
 - Service lifecycle control (start/stop/restart)
 - Log retrieval and statistics
 - Automatic proxy creation for services
 - Multi-port configuration with bind address control
 - Port management endpoints:
-  - `GET /api/v1/services/{name}/ports` - List service ports
-  - `POST /api/v1/services/{name}/ports` - Add port to service
-  - `DELETE /api/v1/services/{name}/ports/{port_name}` - Remove port
+  - `GET /services/{name}/ports` - List service ports
+  - `POST /services/{name}/ports` - Add port to service
+  - `DELETE /services/{name}/ports/{port_name}` - Remove port
 
-#### Port Management (`/api/v1/ports/*`)
+#### Port Management (`/ports/*`)
 - Dynamic port allocation tracking
 - Available port range queries
 - Port access token management
