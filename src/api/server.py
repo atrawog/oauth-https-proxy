@@ -357,8 +357,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     app.include_router(oauth_router)
     logger.info("OAuth router included successfully")
     
-    # Include v1 API router
-    # Note: v1 router creation is delayed until after async_storage is attached
-    # This will be done in attach_to_app
+    # Note: All routers are registered via the unified router registry
+    # This happens after async components are attached in main.py or app.py
     
     return app

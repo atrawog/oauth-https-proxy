@@ -14,7 +14,8 @@ from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
 from .dispatcher import UnifiedMultiInstanceServer
 from .api.server import create_api_app
-from .api.async_init import init_async_components, attach_to_app
+from .api.async_init import init_async_components
+from .api.routers.registry import register_all_routers
 from .orchestration.instance_workflow import InstanceWorkflowOrchestrator
 from .docker.async_manager import AsyncDockerManager
 from .certmanager.async_manager import AsyncCertificateManager
@@ -86,11 +87,132 @@ async def initialize_components(config: Config) -> tuple:
     # Initialize default proxies
     storage.initialize_default_proxies()
     
-    # Note: Flexible auth system is initialized in attach_to_app (async_init.py)
+    # Note: Flexible auth system is initialized directly in run_server()
     
     logger.info("All components initialized successfully")
     
     return storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server
+
+
+def create_asgi_app():
+    """Create the FastAPI ASGI app for production deployment.
+    
+    This function creates a minimal FastAPI app that can be used with
+    ASGI servers. The full initialization happens during the lifespan.
+    
+    Returns:
+        FastAPI app instance
+    """
+    from contextlib import asynccontextmanager
+    from fastapi import FastAPI
+    
+    @asynccontextmanager
+    async def lifespan(app: FastAPI):
+        """Manage application lifecycle."""
+        # Get configuration
+        config = get_config()
+        
+        # Setup logging
+        setup_logging(config.LOG_LEVEL)
+        
+        logger.info("Starting OAuth HTTPS Proxy (ASGI mode)...")
+        
+        # Initialize all components
+        storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
+        
+        # Create base API app
+        # Note: We don't use create_api_app here to avoid circular dependencies
+        # Instead we'll attach everything directly
+        
+        # Store core components in app state
+        app.state.storage = storage
+        app.state.cert_manager = manager
+        app.state.scheduler = scheduler
+        app.state.https_server = https_server
+        app.state.proxy_handler = proxy_handler
+        app.state.workflow_orchestrator = workflow_orchestrator
+        
+        # Attach async components
+        app.state.async_components = async_components
+        app.state.async_storage = async_components.async_storage
+        app.state.unified_logger = async_components.unified_logger
+        app.state.metrics_processor = async_components.metrics_processor
+        app.state.alert_manager = async_components.alert_manager
+        app.state.docker_manager = async_components.docker_manager
+        app.state.cert_manager = async_components.cert_manager
+        
+        # Initialize request logger
+        from src.logging.request_logger import RequestLogger
+        app.state.request_logger = RequestLogger(
+            async_components.async_storage.redis_client if async_components.async_storage else None
+        )
+        
+        # Set global request logger
+        from src.shared.logging import set_request_logger
+        set_request_logger(app.state.request_logger)
+        
+        # Initialize auth service
+        from src.auth import FlexibleAuthService
+        from src.auth.defaults import initialize_auth_system
+        oauth_components = getattr(app.state, 'oauth_components', None)
+        app.state.auth_service = FlexibleAuthService(
+            storage=async_components.async_storage,
+            oauth_components=oauth_components
+        )
+        
+        # Initialize auth in background
+        try:
+            await app.state.auth_service.initialize()
+            await initialize_auth_system(
+                async_components.async_storage,
+                load_defaults=True,
+                migrate=True
+            )
+            logger.info("✓ Flexible auth system initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize auth: {e}")
+        
+        # Register all routers using unified registry
+        logger.info("Registering all routers with Unified Router Registry...")
+        try:
+            from .api.routers.registry import register_all_routers
+            register_all_routers(app)
+            logger.info("✓ All routers registered successfully")
+        except Exception as e:
+            logger.error(f"✗ Router registration failed: {e}")
+            raise
+        
+        # Start scheduler
+        scheduler.start()
+        
+        # For ASGI mode, we don't start the full server here
+        logger.info("ASGI app initialized and ready")
+        
+        yield
+        
+        # Shutdown
+        logger.info("Shutting down OAuth HTTPS Proxy...")
+        scheduler.stop()
+        if proxy_handler:
+            await proxy_handler.close()
+        if workflow_orchestrator:
+            await workflow_orchestrator.close()
+        await async_components.shutdown()
+    
+    # Create the FastAPI app with lifespan
+    from .api.server import create_api_app
+    
+    # Get config for initial app creation
+    config = get_config()
+    redis_url = config.get_redis_url_with_password()
+    storage = RedisStorage(redis_url)
+    temp_manager = CertificateManager(storage)
+    temp_scheduler = CertificateScheduler(temp_manager)
+    
+    app = create_api_app(storage, temp_manager, temp_scheduler)
+    app.router.lifespan_context = lifespan
+    
+    return app
 
 
 async def run_server(config: Config) -> None:
@@ -98,11 +220,73 @@ async def run_server(config: Config) -> None:
     # Initialize all components
     storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
     
-    # Create FastAPI app with async components attached
+    # Create FastAPI app
+    logger.info("Creating FastAPI app...")
     app = create_api_app(storage, manager, scheduler)
+    logger.info("FastAPI app created successfully")
     
-    # Attach async components to app
-    attach_to_app(app, async_components)
+    # ========== ATTACH COMPONENTS DIRECTLY ==========
+    logger.info("Attaching async components to app state...")
+    
+    # Core components needed by routers
+    app.state.async_components = async_components
+    app.state.async_storage = async_components.async_storage
+    app.state.unified_logger = async_components.unified_logger
+    app.state.metrics_processor = async_components.metrics_processor
+    app.state.alert_manager = async_components.alert_manager
+    app.state.docker_manager = async_components.docker_manager
+    app.state.cert_manager = async_components.cert_manager
+    app.state.storage = storage  # Legacy storage still needed by some routers
+    
+    # Initialize request logger
+    from src.logging.request_logger import RequestLogger
+    app.state.request_logger = RequestLogger(
+        async_components.async_storage.redis_client if async_components.async_storage else None
+    )
+    
+    # Set global request logger
+    from src.shared.logging import set_request_logger
+    set_request_logger(app.state.request_logger)
+    
+    # Initialize auth service
+    from src.auth import FlexibleAuthService
+    from src.auth.defaults import initialize_auth_system
+    oauth_components = getattr(app.state, 'oauth_components', None)
+    app.state.auth_service = FlexibleAuthService(
+        storage=async_components.async_storage,
+        oauth_components=oauth_components
+    )
+    
+    # Initialize auth in background
+    async def init_auth():
+        try:
+            await app.state.auth_service.initialize()
+            await initialize_auth_system(
+                async_components.async_storage,
+                load_defaults=True,
+                migrate=True
+            )
+            logger.info("✓ Flexible auth system initialized")
+        except Exception as e:
+            logger.error(f"Failed to initialize auth: {e}")
+    
+    asyncio.create_task(init_auth())
+    
+    logger.info("✓ All components attached to app state")
+    
+    # ========== REGISTER ALL ROUTERS USING UNIFIED REGISTRY ==========
+    logger.info("=" * 60)
+    logger.info("STARTING UNIFIED ROUTER REGISTRATION")
+    logger.info("=" * 60)
+    logger.info("Starting router registration with Unified Router Registry...")
+    try:
+        register_all_routers(app)
+        logger.info("✓ All routers registered successfully via Unified Router Registry")
+    except Exception as e:
+        logger.error(f"✗ Router registration failed: {e}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
+        raise RuntimeError(f"Failed to register routers: {e}")
     
     # Start scheduler
     scheduler.start()
@@ -176,7 +360,11 @@ async def run_server(config: Config) -> None:
 
 
 def main() -> None:
-    """Main entry point."""
+    """Main entry point for CLI execution.
+    
+    This is used when running the server directly via `python run.py` or
+    `python -m src.main`. It initializes everything and runs the full server.
+    """
     try:
         # Get and validate configuration
         config = get_config()
@@ -184,17 +372,20 @@ def main() -> None:
         # Setup logging
         setup_logging(config.LOG_LEVEL)
         
-        logger.info("Starting MCP HTTP Proxy...")
+        logger.info("=" * 60)
+        logger.info("OAUTH HTTPS PROXY STARTING (CLI MODE)")
+        logger.info("=" * 60)
+        logger.info("Starting OAuth HTTPS Proxy via run.py...")
         logger.info(f"Configuration loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}")
         
         # Run the server
         asyncio.run(run_server(config))
         
     except KeyboardInterrupt:
-        logger.info("Shutting down MCP HTTP Proxy (interrupted)")
+        logger.info("Shutting down OAuth HTTPS Proxy (interrupted)")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Failed to start MCP HTTP Proxy: {e}", exc_info=True)
+        logger.error(f"Failed to start OAuth HTTPS Proxy: {e}", exc_info=True)
         sys.exit(1)
 
 

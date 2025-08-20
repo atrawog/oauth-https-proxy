@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Run the OAuth HTTPS Proxy server."""
+"""CLI entry point for OAuth HTTPS Proxy.
+
+This script is the main entry point for running the proxy server
+in development or via Docker. It starts the full server with all
+components including the dispatcher, workflow orchestrator, and API.
+
+For production ASGI deployment, use src.app:app instead.
+"""
 
 import sys
 import os
