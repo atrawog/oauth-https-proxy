@@ -34,9 +34,6 @@ class Settings(BaseSettings):
     # Access Control
     allowed_github_users: str = Field(alias="OAUTH_ALLOWED_GITHUB_USERS")  # NO DEFAULTS! Comma-separated list
 
-    # MCP Protocol Version
-    mcp_protocol_version: str = Field(alias="OAUTH_MCP_PROTOCOL_VERSION")  # NO DEFAULTS!
-
     model_config = ConfigDict(
         env_file=".env",
         extra="ignore",  # Allow extra fields from environment

@@ -30,7 +30,6 @@ COPY --chown=proxyuser:proxyuser pixi.toml .
 COPY --chown=proxyuser:proxyuser pyproject.toml .
 
 # Copy local dependencies referenced in pixi.toml
-COPY --chown=proxyuser:proxyuser mcp-http-echo-server/ ./mcp-http-echo-server/
 COPY --chown=proxyuser:proxyuser oauth-https-proxy-client/ ./oauth-https-proxy-client/
 
 # Switch to non-root user for pixi installation

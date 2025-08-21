@@ -215,7 +215,7 @@ proxy-auth-show hostname token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client proxy auth show {{hostname}}
 
 # Set protected resource metadata
-proxy-resource-set hostname endpoint="/mcp" scopes="mcp:read,mcp:write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="" token="${ADMIN_TOKEN}":
+proxy-resource-set hostname endpoint="/api" scopes="read,write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client proxy resource set {{hostname}} \
         --endpoint {{endpoint}} \
         --scopes "{{scopes}}" \
@@ -432,7 +432,7 @@ service-register-oauth token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Register OAuth client
-oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="mcp:read mcp:write" token="${ADMIN_TOKEN}":
+oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="read write" token="${ADMIN_TOKEN}":
     TOKEN={{token}} pixi run proxy-client oauth register {{name}} \
         --redirect-uri {{redirect-uri}} --scope "{{scope}}"
 
@@ -626,18 +626,6 @@ test *files="":
 # Run comprehensive tests
 test-all:
     pixi run pytest tests/ -v --tb=short
-
-# Test MCP tools
-test-mcp:
-    pixi run pytest tests/test_mcp_tools.py -v -s
-
-# Test MCP endpoint (quick test)
-test-mcp-quick:
-    pixi run pytest tests/test_mcp.py -v
-
-# Check if MCP server is working
-test-mcp-server:
-    pixi run python scripts/test_mcp_server.py
 
 # Build documentation
 docs-build:

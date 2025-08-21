@@ -1,6 +1,6 @@
 # OAuth HTTPS Proxy
 
-A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic ACME certificate management, and Model Context Protocol (MCP) compliance. This proxy provides secure, authenticated access to backend services with automatic SSL/TLS certificate provisioning.
+A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic ACME certificate management. This proxy provides secure, authenticated access to backend services with automatic SSL/TLS certificate provisioning.
 
 ## Features
 
@@ -8,12 +8,10 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Dynamic Reverse Proxy**: Route traffic to multiple backend services
 - **Automatic HTTPS**: Obtain and renew Let's Encrypt certificates via ACME
 - **OAuth 2.1 Integration**: Built-in OAuth server with GitHub authentication
-- **MCP Compliance**: Full support for Model Context Protocol with OAuth protection
 - **WebSocket Support**: Proxy WebSocket and Server-Sent Events (SSE) connections
 - **Route Management**: Priority-based path routing with regex support
 - **External Service Management**: Named service registration for external URLs
 - **Docker Service Management**: Create and manage Docker containers dynamically
-- **MCP Metadata**: Automatic metadata endpoints for MCP-compliant services
 - **Port Management**: Comprehensive port allocation with bind address control
 - **Multi-Port Services**: Services can expose multiple ports with access controls
 
@@ -195,32 +193,27 @@ just proxy-create yourdomain.com "http://127.0.0.1:9000"
 
 ### Step 5: Deploy Protected Services
 
-Example: Deploy an MCP echo server with OAuth protection
+Example: Deploy a service with OAuth protection
 
 ```bash
-# Build the echo server image (if using local Dockerfile)
-cd mcp-http-echo-server
-docker build -t mcp-http-echo-server:latest .
-cd ..
-
-# Run the service
-docker run -d --name mcp-echo-server \
+# Run your service
+docker run -d --name my-service \
   --network oauth-https-proxy_proxy_network \
   -p 127.0.0.1:3000:3000 \
-  mcp-http-echo-server:latest
+  my-service:latest
 
 # Register as external service
-just service-register mcp-echo-server "http://mcp-echo-server:3000" "MCP Echo Server"
+just service-register my-service "http://my-service:3000" "My Service"
 
 # Create proxy with staging certificate
-just proxy-create echo.yourdomain.com "http://mcp-echo-server:3000" --staging
+just proxy-create service.yourdomain.com "http://my-service:3000" --staging
 
 # Enable OAuth protection
-just proxy-auth-enable echo.yourdomain.com auth.yourdomain.com redirect
+just proxy-auth-enable service.yourdomain.com auth.yourdomain.com redirect
 
 # Once verified, switch to production certificate
-just cert-delete proxy-echo-yourdomain-com
-just proxy-update echo.yourdomain.com --production-cert
+just cert-delete proxy-service-yourdomain-com
+just proxy-update service.yourdomain.com --production-cert
 ```
 
 ### Step 6: DNS Configuration
@@ -417,8 +410,8 @@ just service-create-exposed my-app nginx:alpine 8080 127.0.0.1 [token]
 # Create a service accessible from all interfaces
 just service-create-exposed public-api node:18 3000 0.0.0.0 [token]
 
-# Real example: Create mcp-everything service on port 3000
-just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 [token]
+# Real example: Create service on port 3000
+just service-create-exposed my-service my-service-image:latest 3000 127.0.0.1 [token]
 
 # Add additional ports to existing service
 just service-port-add my-app 8081 [bind-address] [source-token] [token]
@@ -430,10 +423,9 @@ just service-port-list my-app
 # Create proxy for service (optional) - makes it accessible via HTTPS
 just service-proxy-create my-app [hostname] [enable-https] [token]
 
-# Full example: Service accessible at both localhost:3000 and https://everything.yourdomain.com
-just service-create-exposed mcp-everything mcp-service-mcp-everything:latest 3000 127.0.0.1 [token]
-just proxy-create everything.yourdomain.com http://mcp-everything:3000 [token]
-just proxy-resource-set everything.yourdomain.com [token] [endpoint] [scopes]
+# Full example: Service accessible at both localhost:3000 and https://service.yourdomain.com
+just service-create-exposed my-service my-service-image:latest 3000 127.0.0.1 [token]
+just proxy-create service.yourdomain.com http://my-service:3000 [token]
 ```
 
 ### Port Management
@@ -448,17 +440,6 @@ just service-port-check 8080 [bind-address]
 just service-port-add <service> <port> [bind-address] [source-token] [token]
 just service-port-remove <service> <port-name> [token]
 just service-port-list <service>
-```
-
-### Set Up MCP Echo Servers (Example)
-
-```bash
-# One command to set up example protected resources with OAuth
-just mcp-echo-setup
-
-# Access them at:
-# https://echo-stateless.yourdomain.com/mcp
-# https://echo-stateful.yourdomain.com/mcp
 ```
 
 ## Architecture
@@ -527,51 +508,6 @@ The PROXY protocol handler:
 5. **Middleware** → ASGI middleware retrieves client IP from Redis
 6. **Header Injection** → Adds X-Real-IP and X-Forwarded-For headers
 
-## MCP (Model Context Protocol) Support
-
-This proxy is fully compliant with MCP 2025-06-18 specification:
-
-### For Protected Resources
-
-```bash
-# 1. Create proxy for your protected resource
-just proxy-create mcp.yourdomain.com http://mcp-server:3000 [token]
-
-# 2. Enable OAuth protection
-just proxy-auth-enable mcp.yourdomain.com [token] auth.yourdomain.com [mode]
-
-# 3. Enable MCP metadata (for automatic metadata endpoints)
-just proxy-resource-set mcp.yourdomain.com [token] [endpoint] [scopes]
-
-# Your protected resource is now accessible at https://mcp.yourdomain.com/mcp
-# with full OAuth protection and MCP compliance!
-
-# IMPORTANT: Do NOT create specific routes for paths that proxies already handle!
-# The proxy automatically forwards ALL paths to the backend - adding routes
-# for specific paths like /mcp will bypass OAuth protection.
-```
-
-### For Claude Desktop
-
-Add to your Claude configuration:
-
-```json
-{
-  "mcpServers": {
-    "my-server": {
-      "url": "https://mcp.yourdomain.com/mcp",
-      "auth": {
-        "type": "oauth2",
-        "authorization_url": "https://auth.yourdomain.com/authorize",
-        "token_url": "https://auth.yourdomain.com/token",
-        "client_id": "your_client_id",
-        "scope": "mcp:read mcp:write"
-      }
-    }
-  }
-}
-```
-
 ## Configuration
 
 ### Environment Variables
@@ -635,9 +571,9 @@ Each proxy can serve its own OAuth authorization server metadata with custom con
 
 ```bash
 # Configure custom OAuth server metadata for a proxy
-just proxy-oauth-server-set everything.yourdomain.com \
+just proxy-oauth-server-set service.yourdomain.com \
   "https://auth.yourdomain.com" \                    # Custom issuer
-  "mcp:read,mcp:write,everything:admin" \            # Custom scopes
+  "read,write,admin" \                               # Custom scopes
   "authorization_code,refresh_token" \               # Grant types
   "code" \                                           # Response types
   "client_secret_post,client_secret_basic" \        # Token auth methods
@@ -687,7 +623,7 @@ just route-create / service frontend [token]
 
 ```bash
 # Register OAuth client for testing
-just oauth-client-register my-app https://myapp.com/callback "mcp:read mcp:write"
+just oauth-client-register my-app https://myapp.com/callback "read write"
 
 # Monitor OAuth activity
 just oauth-sessions-list
@@ -887,7 +823,6 @@ All tests run against real services (no mocks):
 just test                # Basic tests
 just test-proxy-all      # All proxy tests
 just test-auth           # OAuth tests
-just test-mcp-compliance # MCP specification tests
 ```
 
 ### Project Structure
@@ -994,9 +929,6 @@ oauth-https-proxy/
 5. **OAuth Protection Bypassed**
    ```bash
    # IMPORTANT: Never create specific routes for paths already handled by proxies!
-   # Example of WRONG approach:
-   # just route-create /mcp url http://backend:3000  # DON'T DO THIS!
-   
    # The proxy already forwards ALL paths to the backend.
    # Adding specific routes creates a bypass that skips OAuth.
    

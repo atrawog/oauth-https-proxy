@@ -65,7 +65,6 @@ class Config:
     OAUTH_SESSION_TIMEOUT: int = int(os.getenv('OAUTH_SESSION_TIMEOUT', '300'))  # 5 minutes
     OAUTH_CLIENT_LIFETIME: int = int(os.getenv('OAUTH_CLIENT_LIFETIME', '7776000'))  # 90 days
     OAUTH_ALLOWED_GITHUB_USERS: str = os.getenv('OAUTH_ALLOWED_GITHUB_USERS', '*')
-    OAUTH_MCP_PROTOCOL_VERSION: str = os.getenv('OAUTH_MCP_PROTOCOL_VERSION', '2025-06-18')
     
     # JWT Configuration
     OAUTH_JWT_ALGORITHM: str = os.getenv('OAUTH_JWT_ALGORITHM', 'RS256')
@@ -75,12 +74,6 @@ class Config:
     # Admin Configuration
     ADMIN_TOKEN: Optional[str] = os.getenv('ADMIN_TOKEN')
     ADMIN_EMAIL: Optional[str] = os.getenv('ADMIN_EMAIL')
-    
-    # MCP Configuration
-    MCP_SERVER_URL: Optional[str] = os.getenv('MCP_SERVER_URL')
-    MCP_RESOURCE_INDICATORS_ENABLED: bool = os.getenv('MCP_RESOURCE_INDICATORS_ENABLED', 'true').lower() == 'true'
-    MCP_RESOURCE_VALIDATION_STRICT: bool = os.getenv('MCP_RESOURCE_VALIDATION_STRICT', 'true').lower() == 'true'
-    MCP_MAX_RESOURCES_PER_TOKEN: int = int(os.getenv('MCP_MAX_RESOURCES_PER_TOKEN', '5'))
     
     # Testing Configuration
     TEST_DOMAIN: Optional[str] = os.getenv('TEST_DOMAIN')

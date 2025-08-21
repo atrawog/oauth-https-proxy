@@ -133,16 +133,6 @@ def register_all_routers(app: FastAPI) -> None:
         "Log query and analysis"
     ))
     
-    # MCP (Model Context Protocol) endpoints
-    logger.info("Adding MCP router to configuration...")
-    routers_config.append((
-        "mcp",
-        lambda: _create_mcp_router(async_storage, unified_logger),
-        "/mcp",
-        "Model Context Protocol server with 21 tools"
-    ))
-    logger.info(f"Router config now has {len(routers_config)} entries")
-    
     # Authentication configuration endpoints
     routers_config.append((
         "auth_config",
@@ -209,12 +199,6 @@ def register_all_routers(app: FastAPI) -> None:
             routes.append(route.path)
     logger.info(f"Total routes registered: {len(routes)}")
     
-    # Specifically check for MCP routes
-    mcp_routes = [r for r in routes if 'mcp' in r.lower()]
-    if mcp_routes:
-        logger.info(f"✓ MCP routes registered: {mcp_routes}")
-    else:
-        logger.warning("✗ NO MCP ROUTES FOUND!")
     
     logger.debug(f"All routes: {sorted(set(routes))}")
     
@@ -282,25 +266,6 @@ def _create_logs_router(async_storage) -> APIRouter:
     """Create logs router."""
     from .logs.logs import create_logs_router
     return create_logs_router(async_storage)
-
-
-def _create_mcp_router(async_storage, unified_logger):
-    """Create MCP router."""
-    logger.error("DEBUG: _create_mcp_router function called!")  # Use error level to ensure visibility
-    logger.info("Creating MCP router...")
-    try:
-        logger.error("DEBUG: About to import create_mcp_router")
-        from src.mcp_server import create_mcp_router
-        logger.error("DEBUG: Import successful, calling create_mcp_router")
-        mcp_router = create_mcp_router(async_storage, unified_logger)
-        logger.error(f"DEBUG: MCP router created: {type(mcp_router)}")
-        logger.info("✓ MCP router created successfully")
-        return mcp_router
-    except Exception as e:
-        logger.error(f"✗ Failed to create MCP router: {e}")
-        import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
-        raise
 
 
 def _create_auth_config_router(async_storage) -> APIRouter:
