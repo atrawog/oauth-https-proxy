@@ -36,12 +36,14 @@ def test_fastmcp_server_creation():
 def test_mcp_router_imports():
     """Test that MCP router modules can be imported."""
     # These imports should not raise exceptions
-    from src.api.routers.mcp import create_mcp_router
-    from src.api.routers.mcp.event_publisher import MCPEventPublisher
-    from src.api.routers.mcp.mcp_server import IntegratedMCPServer
-    from src.api.routers.mcp.session_manager import MCPSessionManager
+    from src.api.routers.mcp import (
+        mount_mcp_app,
+        MCPEventPublisher,
+        IntegratedMCPServer,
+        MCPSessionManager
+    )
     
-    assert create_mcp_router is not None
+    assert mount_mcp_app is not None
     assert MCPEventPublisher is not None
     assert IntegratedMCPServer is not None
     assert MCPSessionManager is not None

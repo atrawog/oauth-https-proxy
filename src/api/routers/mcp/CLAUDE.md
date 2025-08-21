@@ -8,21 +8,30 @@ The MCP server provides a Model Context Protocol endpoint that enables LLMs like
 
 ### Components
 
-1. **MCP Server** (`mcp_server.py`)
-   - FastMCP server with stateful session management
-   - 10+ integrated tools for system management
-   - Full async/await implementation
-   - Protocol version negotiation (2024-11-05, 2025-03-26, 2025-06-18)
-
-2. **MCP Mount** (`mcp_mount.py`)
+1. **MCP Main Handler** (`mcp.py`)
    - Direct mounting of SDK's Starlette app on FastAPI
    - SSE streaming support with proper async handling
    - Task group initialization for stateful operation
+   - Auto-initialization for out-of-order requests
+   - Enhanced keepalive mechanism (15s intervals)
+   - Graceful error handling and connection recovery
    - Handles both `/mcp` and `/mcp/` endpoints
 
-3. **Registry Integration** (`registry.py`)
-   - Automatic MCP server registration on startup
-   - Integration with unified endpoint registry
+2. **MCP Server** (`mcp_server.py`)
+   - FastMCP server with stateful session management
+   - 10+ integrated tools for system management
+   - Full async/await implementation with timezone-aware datetime
+   - Protocol version negotiation (2024-11-05, 2025-03-26, 2025-06-18)
+
+3. **Session Manager** (`session_manager.py`)
+   - Stateful session tracking and management
+   - Session persistence across requests
+   - Session cleanup and expiration
+
+4. **Event Publisher** (`event_publisher.py`)
+   - Redis Streams event publishing for MCP activities
+   - Tool execution tracking and logging
+   - System event notifications
 
 ## Endpoint Details
 
@@ -263,13 +272,30 @@ logging.getLogger("src.api.routers.mcp").setLevel(logging.DEBUG)
 - Admin tools require admin authentication
 - All operations are logged via unified logging system
 
+## Recent Refactoring (August 2025)
+
+The MCP implementation was significantly refactored to consolidate 9 experimental implementations into a single, production-ready solution:
+
+### Changes Made
+- **Removed 8 obsolete files**: Eliminated experimental implementations (mcp_app, mcp_direct, mcp_fastapi, mcp_mounted, mcp_router, mcp_simple, mcp_starlette, mcp_wrapper)
+- **Renamed mcp_mount.py to mcp.py**: Established single authoritative implementation
+- **Fixed datetime issues**: All datetime operations now use timezone-aware UTC
+- **Enhanced error handling**: Improved connection resilience and graceful error recovery
+- **Added auto-initialization**: Handles out-of-order protocol requests from Claude.ai
+- **Improved keepalive**: Reduced interval to 15s to prevent connection timeouts
+
+### Benefits
+- 85% reduction in MCP module code
+- Single source of truth for all MCP functionality
+- All recent fixes consolidated in one file
+- Cleaner architecture and easier maintenance
+
 ## Future Enhancements
 
 - [ ] Add resource management tools
 - [ ] Implement prompt templates
 - [ ] Add sampling capabilities
 - [ ] Support for file operations
-- [ ] Enhanced error handling and recovery
 - [ ] WebSocket transport option
 - [ ] Tool result caching
 

@@ -295,5 +295,5 @@ def _create_auth_endpoints_router(async_storage) -> APIRouter:
 
 def _mount_mcp_app(app: FastAPI, async_storage, cert_manager, docker_manager, unified_logger) -> None:
     """Mount MCP Starlette app directly with proper task group initialization."""
-    from .mcp.mcp_mount import mount_mcp_app
+    from .mcp import mount_mcp_app
     mount_mcp_app(app, async_storage, cert_manager, docker_manager, unified_logger)
