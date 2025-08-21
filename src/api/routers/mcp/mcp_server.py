@@ -6,7 +6,7 @@ async logging and Redis Streams architecture.
 """
 
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
 from mcp.server.fastmcp import FastMCP
@@ -149,7 +149,7 @@ class IntegratedMCPServer:
             async with self.logger.trace_context("mcp_tool_health_check"):
                 health = {
                     "status": "healthy",
-                    "timestamp": datetime.utcnow().isoformat(),
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
                     "components": {}
                 }
 
@@ -473,7 +473,7 @@ class IntegratedMCPServer:
                         "name": c.cert_name,
                         "domains": c.domains,
                         "expires_at": c.expires_at.isoformat() if c.expires_at else None,
-                        "status": "active" if c.expires_at and c.expires_at > datetime.utcnow() else "expired"
+                        "status": "active" if c.expires_at and c.expires_at > datetime.now(timezone.utc) else "expired"
                     }
                     for c in certs
                 ]
