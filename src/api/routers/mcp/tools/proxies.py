@@ -599,11 +599,22 @@ class ProxyTools(BaseMCPTools):
                     token_info = await self.validate_token(token)
                     user = token_info.get("name", "unknown")
                     
-                    if proxy.owner_token != token_info["name"] and token_info["name"].upper() != "ADMIN":
+                    owner_token = getattr(proxy, 'owner_token', None) if hasattr(proxy, 'owner_token') else proxy.get('owner_token') if isinstance(proxy, dict) else None
+                    if owner_token != token_info["name"] and token_info["name"].upper() != "ADMIN":
                         raise PermissionError("You can only view proxies you own")
                 
-                # Get metadata
-                metadata = await self.storage.get_protected_resource_metadata(hostname)
+                # Get metadata from Redis
+                metadata = None
+                try:
+                    resource_data = await self.storage.redis_client.get(f"resource:{hostname}")
+                    if resource_data:
+                        import json
+                        if isinstance(resource_data, bytes):
+                            resource_data = resource_data.decode('utf-8')
+                        metadata = json.loads(resource_data)
+                except Exception as e:
+                    logger.warning(f"Error getting resource metadata: {e}")
+                    metadata = None
                 
                 result = {
                     "hostname": hostname,
@@ -662,8 +673,8 @@ class ProxyTools(BaseMCPTools):
                 owner_token = getattr(proxy, 'owner_token', '') if hasattr(proxy, 'owner_token') else proxy.get('owner_token', '') if isinstance(proxy, dict) else ''
                 await self.check_ownership(token_info, owner_token, "proxy")
                 
-                # Clear metadata
-                await self.storage.delete_protected_resource_metadata(hostname)
+                # Clear metadata from Redis
+                await self.storage.redis_client.delete(f"resource:{hostname}")
                 
                 # Log audit event
                 await self.log_audit_event(
@@ -721,17 +732,32 @@ class ProxyTools(BaseMCPTools):
                 
                 for proxy in proxies:
                     # Filter by owner if needed
-                    if filter_owner and proxy.owner_token != filter_owner:
+                    owner_token = getattr(proxy, 'owner_token', None) if hasattr(proxy, 'owner_token') else proxy.get('owner_token') if isinstance(proxy, dict) else None
+                    if filter_owner and owner_token != filter_owner:
                         continue
                     
-                    metadata = await self.storage.get_protected_resource_metadata(proxy.hostname)
+                    # Get metadata from Redis
+                    metadata = None
+                    hostname = getattr(proxy, 'hostname', None) if hasattr(proxy, 'hostname') else proxy.get('hostname') if isinstance(proxy, dict) else None
+                    if hostname:
+                        try:
+                            resource_data = await self.storage.redis_client.get(f"resource:{hostname}")
+                            if resource_data:
+                                import json
+                                if isinstance(resource_data, bytes):
+                                    resource_data = resource_data.decode('utf-8')
+                                metadata = json.loads(resource_data)
+                        except Exception as e:
+                            logger.debug(f"No resource metadata for {hostname}: {e}")
+                            metadata = None
+                    
                     if metadata:
                         resources.append({
-                            "hostname": proxy.hostname,
+                            "hostname": hostname,
                             "endpoint": metadata.get("endpoint", "/api"),
                             "scopes": metadata.get("scopes_supported", []),
                             "stateful": metadata.get("stateful", False),
-                            "owner": proxy.owner_token
+                            "owner": owner_token
                         })
                 
                 # Log audit event
