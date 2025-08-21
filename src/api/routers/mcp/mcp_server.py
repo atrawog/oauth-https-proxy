@@ -75,7 +75,15 @@ class IntegratedMCPServer:
         # ========== System Tools ==========
         logger.info("[MCP SERVER] Registering echo tool")
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "Echo Message",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def echo(message: str) -> str:
             """Echo back a message for testing.
 
@@ -85,15 +93,53 @@ class IntegratedMCPServer:
             Returns:
                 The echoed message with a prefix
             """
-            # Simple tool for testing
-            return f"Echo: {message}"
+            # Get session context
+            try:
+                context = self.mcp.get_context()
+                session_id = getattr(context, 'session_id', None) if context else None
+            except:
+                session_id = 'unknown'
+            
+            # Use unified logger with trace context
+            async with self.logger.trace_context(
+                "mcp_tool_echo",
+                session_id=session_id,
+                input_message=message
+            ):
+                await self.logger.log(
+                    "info",
+                    "Echo tool called",
+                    tool="echo",
+                    input_message=message,
+                    session_id=session_id
+                )
+                
+                result = f"Echo: {message}"
+                
+                await self.logger.log(
+                    "info",
+                    "Echo tool result",
+                    tool="echo",
+                    result=result,
+                    session_id=session_id
+                )
+                
+                return result
         
         tool_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
         logger.info(f"[MCP SERVER] After echo registration: {tool_count} tools")
 
         logger.info("[MCP SERVER] Registering health_check tool")
         
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "System Health Check",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def health_check() -> Dict[str, Any]:
             """Check system health status.
 
@@ -127,7 +173,15 @@ class IntegratedMCPServer:
 
         # ========== Proxy Management Tools ==========
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "List Proxy Configurations",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def list_proxies(
             token: Optional[str] = None,
             include_details: bool = False
@@ -196,7 +250,15 @@ class IntegratedMCPServer:
                     "count": len(proxy_list)
                 }
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "Create Proxy Configuration",
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": False
+            }
+        )
         async def create_proxy(
             hostname: str,
             target_url: str,
@@ -279,7 +341,15 @@ class IntegratedMCPServer:
                     "message": f"Proxy {hostname} created successfully"
                 }
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "Delete Proxy Configuration",
+                "readOnlyHint": False,
+                "destructiveHint": True,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def delete_proxy(
             hostname: str,
             token: str
@@ -352,7 +422,15 @@ class IntegratedMCPServer:
 
         # ========== Certificate Management Tools ==========
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "List SSL Certificates",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def list_certificates(
             token: Optional[str] = None
         ) -> Dict[str, Any]:
@@ -405,7 +483,15 @@ class IntegratedMCPServer:
                     "count": len(cert_list)
                 }
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "Request SSL Certificate",
+                "readOnlyHint": False,
+                "destructiveHint": False,
+                "idempotentHint": False,
+                "openWorldHint": True
+            }
+        )
         async def request_certificate(
             domain: str,
             token: str,
@@ -474,7 +560,15 @@ class IntegratedMCPServer:
         # ========== Service Management Tools (if Docker manager available) ==========
 
         if self.docker_manager:
-            @self.mcp.tool()
+            @self.mcp.tool(
+                annotations={
+                    "title": "List Docker Services",
+                    "readOnlyHint": True,
+                    "destructiveHint": False,
+                    "idempotentHint": True,
+                    "openWorldHint": False
+                }
+            )
             async def list_services() -> Dict[str, Any]:
                 """List Docker services managed by the system.
 
@@ -511,7 +605,15 @@ class IntegratedMCPServer:
 
         # ========== Route Management Tools ==========
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "List HTTP Routing Rules",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def list_routes() -> Dict[str, Any]:
             """List HTTP routing rules.
 
@@ -550,7 +652,15 @@ class IntegratedMCPServer:
 
         # ========== Log Query Tools ==========
 
-        @self.mcp.tool()
+        @self.mcp.tool(
+            annotations={
+                "title": "Query System Logs",
+                "readOnlyHint": True,
+                "destructiveHint": False,
+                "idempotentHint": True,
+                "openWorldHint": False
+            }
+        )
         async def query_logs(
             hours: int = 24,
             hostname: Optional[str] = None,
