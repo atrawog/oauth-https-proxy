@@ -787,13 +787,14 @@ class IntegratedMCPServer:
                     logger.warning(f"Error querying logs: {e}")
                     logs = []
 
+                # Match proxy-client API format for search endpoint
                 return {
+                    "total": len(logs),
                     "logs": logs,
-                    "count": len(logs),
-                    "filters": {
+                    "query_params": {
                         "hours": hours,
-                        "hostname": hostname,
-                        "status_code": status_code
+                        "limit": limit,
+                        "offset": 0
                     }
                 }
 
