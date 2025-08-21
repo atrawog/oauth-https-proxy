@@ -761,11 +761,20 @@ class UnifiedDispatcher:
                 hostname=hostname, service_name=service_name
             )
             
+        except ConnectionResetError as e:
+            # Connection reset by peer is common with HTTPS/MCP - handle gracefully
+            logger.debug(f"Connection reset by peer from {client_ip}:{client_port} - likely normal client disconnect")
         except Exception as e:
             logger.error(f"Error handling HTTPS connection: {e}")
         finally:
-            writer.close()
-            await writer.wait_closed()
+            try:
+                writer.close()
+                await writer.wait_closed()
+            except ConnectionResetError:
+                # Ignore connection reset during cleanup
+                pass
+            except Exception as e:
+                logger.debug(f"Error during connection cleanup: {e}")
     
 
     async def _send_proxy_protocol_header(self, writer: asyncio.StreamWriter, client_ip: str, client_port: int, server_port: int):

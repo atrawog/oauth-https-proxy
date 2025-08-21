@@ -148,12 +148,22 @@ def mount_mcp_app(
         body = await request.body()
         body_sent = False
         
+        # Track if we need to inject initialization
+        needs_init_injection = False
+        
         # Log request body for MCP protocol messages
         if body:
             try:
                 body_json = json.loads(body)
                 method = body_json.get('method', 'unknown')
                 request_id = body_json.get('id', 'no-id')
+                
+                # Check if this is a tools/list request that might come before initialization
+                if method == 'tools/list':
+                    # Check if session is initialized by looking at session_id
+                    if session_id == 'no-session' or not session_id:
+                        logger.info(f"[MCP FIX] Detected tools/list before initialization, will auto-initialize")
+                        needs_init_injection = True
                 
                 # Fix incomplete initialize requests from Claude.ai
                 if method == 'initialize':
@@ -262,6 +272,36 @@ def mount_mcp_app(
                     session_id=session_id
                 )
         
+        # Handle requests that come before initialization
+        if needs_init_injection and method == 'tools/list':
+            logger.info(f"[MCP FIX] Intercepting tools/list before initialization")
+            
+            # For tools/list before initialization, we'll modify the request to be an initialize first
+            # Then let the original tools/list be sent after
+            modified_request = {
+                "method": "initialize",
+                "params": {
+                    "protocolVersion": "2025-06-18",
+                    "capabilities": {
+                        "experimental": {},
+                        "prompts": {"listChanged": False},
+                        "resources": {"subscribe": False, "listChanged": False},
+                        "tools": {"listChanged": False}
+                    },
+                    "clientInfo": {
+                        "name": "Claude.ai (auto-init)",
+                        "version": "1.0.0"
+                    }
+                },
+                "jsonrpc": "2.0",
+                "id": 0
+            }
+            
+            # Replace the body with the initialize request
+            original_body = body
+            body = json.dumps(modified_request).encode('utf-8')
+            logger.info(f"[MCP FIX] Replaced tools/list with initialize request")
+        
         # Create receive callable
         async def receive():
             nonlocal body_sent
@@ -307,7 +347,7 @@ def mount_mcp_app(
         async def generate():
             try:
                 last_activity = asyncio.get_event_loop().time()
-                keepalive_interval = 30  # Send keepalive every 30 seconds
+                keepalive_interval = 15  # Send keepalive every 15 seconds (more frequent)
                 
                 while True:
                     try:
@@ -333,7 +373,13 @@ def mount_mcp_app(
                                         if 'result' in data_json:
                                             logger.info(f"[MCP RESPONSE] Result for id={data_json.get('id', 'unknown')}: {str(data_json.get('result', ''))[:200]}")
                                         elif 'error' in data_json:
-                                            logger.error(f"[MCP RESPONSE] Error for id={data_json.get('id', 'unknown')}: {data_json.get('error')}")
+                                            error_code = data_json.get('error', {}).get('code')
+                                            error_msg = data_json.get('error', {}).get('message')
+                                            logger.error(f"[MCP RESPONSE] Error for id={data_json.get('id', 'unknown')}: {error_code} - {error_msg}")
+                                            
+                                            # If we get an initialization error, log additional context
+                                            if error_code == -32602 and 'initialization' in str(error_msg).lower():
+                                                logger.warning(f"[MCP FIX] Client needs to send initialize first. Session: {session_id}")
                                 except:
                                     pass  # Ignore parsing errors for partial chunks
                             yield chunk
@@ -344,15 +390,27 @@ def mount_mcp_app(
                         # Check if we need to send keepalive
                         current_time = asyncio.get_event_loop().time()
                         if current_time - last_activity > keepalive_interval:
-                            # Send SSE comment as keepalive
+                            # Send SSE comment as keepalive - more frequent to prevent timeouts
                             logger.debug(f"[MCP KEEPALIVE] Sending keepalive for session {session_id}")
                             yield b': keepalive\n\n'
                             last_activity = current_time
                         # Continue waiting for data
                         continue
+            except asyncio.CancelledError:
+                logger.info(f"[MCP HANDLER] Stream cancelled for session {session_id}")
+                # Don't re-raise, just end the stream gracefully
             except Exception as e:
                 logger.error(f"[MCP HANDLER] Error in generate for session {session_id}: {e}")
-                raise
+                # Send error event to client before closing
+                error_event = {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32000,
+                        "message": "Internal server error",
+                        "data": str(e)
+                    }
+                }
+                yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode('utf-8')
             finally:
                 # Cancel the task if not done
                 if not task.done():
