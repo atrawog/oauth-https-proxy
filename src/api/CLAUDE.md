@@ -26,6 +26,7 @@ api/
 │   ├── auth/       # /auth-config/* and /auth/endpoints/*
 │   ├── certificates/ # /certificates/*
 │   ├── logs/       # /logs/*
+│   ├── mcp/        # /mcp - Model Context Protocol server
 │   ├── oauth/      # /oauth/*
 │   ├── proxy/      # /proxy/targets/*
 │   ├── resources/  # /resources/*
@@ -104,6 +105,24 @@ All API endpoints are mounted at the root level with clean URLs: `/{resource}`. 
 - `GET /logs/search` - Search logs with filters
 - `GET /logs/errors` - Recent errors
 - `GET /logs/events` - Event statistics
+
+## MCP (Model Context Protocol) Server
+
+### MCP Endpoint
+- `POST /mcp` - Main MCP endpoint for LLM integration
+- Supports streamable HTTP transport with SSE and JSON responses
+- Stateful session management with persistent context
+- Protocol versions: 2024-11-05, 2025-03-26, 2025-06-18
+
+### MCP Features
+- **Direct Mounting**: MCP SDK's Starlette app mounted directly on FastAPI
+- **SSE Streaming**: Proper Server-Sent Events streaming for real-time responses
+- **Session Management**: Stateful sessions with task group initialization
+- **Tool Integration**: 10+ tools for system management (proxies, certificates, services)
+- **Claude.ai Compatible**: Fully tested with Claude.ai connection requirements
+
+### Implementation Details
+See [MCP Router Documentation](routers/mcp/CLAUDE.md) for detailed implementation.
 
 ## Web GUI
 
@@ -226,6 +245,7 @@ Error responses include detailed messages:
 ## Related Documentation
 
 - [OAuth Service](oauth/CLAUDE.md) - OAuth implementation details
+- [MCP Server](routers/mcp/CLAUDE.md) - Model Context Protocol implementation
 - [API Routers](routers/v1/CLAUDE.md) - Detailed router documentation
 - [Proxy Manager](../proxy/CLAUDE.md) - Proxy endpoints
 - [Certificate Manager](../certmanager/CLAUDE.md) - Certificate endpoints

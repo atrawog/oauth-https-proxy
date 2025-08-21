@@ -9,6 +9,7 @@ OAuth is integrated directly into the proxy service:
 - Authlib-based implementation
 - Redis for all state
 - **MCP 2025-06-18 Compliant**: Full support for resource indicators, audience validation, and protected resource metadata
+- **MCP Server Integration**: OAuth protects MCP endpoints and tools
 
 ## Configuration
 
@@ -227,6 +228,36 @@ Response:
 
 - `GET /.well-known/oauth-protected-resource` - Protected resource metadata (REQUIRED)
 - `GET /mcp` or `/mcp/sessions` - MCP protocol endpoints (implementation-specific)
+
+## MCP Server Integration
+
+The OAuth service provides authentication and authorization for MCP endpoints:
+
+### MCP Endpoint Protection
+- `/mcp` endpoint can be protected with OAuth authentication
+- Tools respect OAuth scopes and permissions
+- Session management integrates with MCP stateful sessions
+
+### MCP-Specific Scopes
+- `mcp:read` - Read access to MCP tools and data
+- `mcp:write` - Write access (create/update/delete operations)
+- `mcp:admin` - Admin tools access (command execution)
+
+### Configuration for MCP
+```bash
+# Create route for MCP endpoint
+just route-create mcp-route /mcp service api 85
+
+# Configure OAuth for MCP (optional)
+just route-update mcp-route auth_type oauth
+```
+
+### Claude.ai OAuth Flow
+1. Claude.ai connects to `/mcp` endpoint
+2. If OAuth is enabled, redirects to authorization
+3. User authorizes Claude.ai access
+4. MCP session established with OAuth context
+5. Tools execute with proper authorization
 
 ## OAuth Commands
 

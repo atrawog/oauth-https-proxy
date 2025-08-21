@@ -98,7 +98,7 @@ def register_all_routers(app: FastAPI) -> None:
         "OAuth resource management"
     ))
     
-    # ========== OPTIONAL ROUTERS ==========
+    # ========== OPTIONAL ROUTERS ===========
     
     # Docker service management (optional)
     if hasattr(app.state, 'docker_manager'):
@@ -159,7 +159,7 @@ def register_all_routers(app: FastAPI) -> None:
             logger.info(f"Registering {name} router: {description}")
             router_or_app = factory()
             
-            # All routers now use include_router (MCP was fixed to return a router)
+            # Include router (all routers are now FastAPI routers)
             app.include_router(router_or_app, prefix=prefix)
             logger.info(f"✓ {name} router registered at {prefix}")
             
@@ -179,6 +179,19 @@ def register_all_routers(app: FastAPI) -> None:
                 raise RuntimeError(f"Critical router failed: {error_msg}")
     
     # ========== LOG SUMMARY ==========
+    
+    # ========== MOUNT MCP STARLETTE APP ==========
+    
+    # Mount MCP Starlette app directly (not as router)
+    try:
+        logger.info("Mounting MCP Starlette app...")
+        _mount_mcp_app(app, async_storage, cert_manager, getattr(app.state, 'docker_manager', None), unified_logger)
+        successful_routers.append("MCP (/mcp) - Mounted as Starlette app")
+    except Exception as e:
+        import traceback
+        logger.error(f"Failed to mount MCP app: {e}")
+        logger.error(f"MCP app traceback: {traceback.format_exc()}")
+        failed_routers.append(f"MCP: {str(e)}")
     
     logger.info("=" * 60)
     logger.info("ROUTER REGISTRATION SUMMARY")
@@ -278,3 +291,9 @@ def _create_auth_endpoints_router(async_storage) -> APIRouter:
     """Create auth endpoints router."""
     from .auth.auth_endpoints import create_auth_endpoints_router
     return create_auth_endpoints_router(async_storage)
+
+
+def _mount_mcp_app(app: FastAPI, async_storage, cert_manager, docker_manager, unified_logger) -> None:
+    """Mount MCP Starlette app directly with proper task group initialization."""
+    from .mcp.mcp_mount import mount_mcp_app
+    mount_mcp_app(app, async_storage, cert_manager, docker_manager, unified_logger)

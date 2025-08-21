@@ -344,7 +344,17 @@ async def run_server(config: Config) -> None:
         logger.info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)")
         logger.info("Each domain will have its own dedicated Hypercorn instance")
         
-        await unified_server.run()
+        # Create unified server task
+        unified_task = asyncio.create_task(unified_server.run())
+        
+        # Wait for all tasks
+        await asyncio.gather(
+            api_task,
+            internal_task,
+            proxy_task,
+            unified_task,
+            return_exceptions=True
+        )
     finally:
         scheduler.stop()
         if proxy_handler:

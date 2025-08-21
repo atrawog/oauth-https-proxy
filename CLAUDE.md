@@ -40,6 +40,7 @@ This document provides comprehensive development and testing guidelines for the 
 The system provides a complete reverse proxy solution with:
 - **Dynamic Reverse Proxy**: Route requests based on hostname and path
 - **OAuth 2.1 Server**: Integrated authentication with GitHub OAuth
+- **MCP Server**: Model Context Protocol endpoints for LLM integration
 - **ACME Certificate Manager**: Automatic SSL from Let's Encrypt
 - **Docker Service Management**: Container lifecycle and port management
 - **Redis Storage**: All configuration and state in Redis
@@ -57,6 +58,11 @@ The system provides a complete reverse proxy solution with:
 │  │   API    │  │  Proxy   │  │    OAuth Server      │ │
 │  │  (9000)  │  │ Instances│  │  (auth.domain.com)   │ │
 │  └──────────┘  └──────────┘  └──────────────────────┘ │
+│                                                         │
+│  ┌──────────────────────────────────────────────────┐ │
+│  │           MCP Server (/mcp endpoint)             │ │
+│  │      Streamable HTTP Transport (SSE/JSON)        │ │
+│  └──────────────────────────────────────────────────┘ │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
@@ -86,6 +92,7 @@ This documentation is organized into modular component-specific files:
 #### API & Web Interface
 - **[API Documentation](src/api/CLAUDE.md)** - FastAPI application, routers, web GUI
 - **[OAuth Service](src/api/oauth/CLAUDE.md)** - OAuth 2.1 implementation, MCP compliance
+- **[MCP Server](src/api/routers/mcp/CLAUDE.md)** - Model Context Protocol server implementation
 
 #### Core Services
 - **[Certificate Manager](src/certmanager/CLAUDE.md)** - ACME/Let's Encrypt automation
@@ -146,28 +153,43 @@ This documentation is organized into modular component-specific files:
 - Protected resource metadata (RFC 9728)
 - Per-proxy user allowlists
 
-## MCP 2025-06-18 Compliance
+## MCP (Model Context Protocol) Support
 
-The system is **FULLY COMPLIANT** with MCP authorization specification:
+The system provides **FULL MCP SUPPORT** for LLM integration:
 
-### OAuth Server Compliance ✅
+### MCP Server Implementation ✅
+- **Endpoint**: Available at `/mcp` on any configured domain (e.g., `https://auth.domain.com/mcp`)
+- **Transport**: Streamable HTTP with SSE (Server-Sent Events) and JSON responses
+- **Protocol Versions**: Supports 2024-11-05, 2025-03-26, and 2025-06-18
+- **Session Management**: Stateful sessions with persistent context
+- **Tool Integration**: 10+ built-in tools for system management
+
+### MCP Tools Available
+- `echo` - Test connectivity and message handling
+- `health_check` - System health status monitoring
+- `list_proxies` - View configured proxy targets
+- `create_proxy` - Create new proxy configurations
+- `delete_proxy` - Remove proxy configurations
+- `list_certificates` - View SSL certificates
+- `list_tokens` - Manage API tokens
+- `list_services` - Docker service management
+- `get_logs` - Access system logs
+- `run_command` - Execute system commands (admin only)
+
+### Claude.ai Integration ✅
+- Direct connection support via `https://domain.com/mcp`
+- Automatic tool discovery and execution
+- Persistent session management
+- Full streaming support for real-time responses
+
+### MCP OAuth Compliance ✅
 - Resource parameter support in authorization and token endpoints
 - Audience-restricted tokens with resource URIs in `aud` claim
 - Authorization server metadata endpoint with `resource_indicators_supported: true`
 - Dynamic client registration (RFC 7591)
 - Token introspection and revocation endpoints
-
-### Protected Resource Compliance ✅
-- Protected resource metadata endpoint on each protected resource
-- WWW-Authenticate headers with metadata URLs
-- Audience validation for all protected resources
+- Protected resource metadata endpoints
 - Resource-specific scope enforcement
-
-### Integration Features ✅
-- Resource registry for MCP server management
-- Automatic resource discovery from proxy configuration
-- Token validation with resource context
-- Per-resource access control
 
 ## Key Implementation Insights
 

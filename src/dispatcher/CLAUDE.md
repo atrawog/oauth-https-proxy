@@ -122,6 +122,13 @@ async def handle_websocket(websocket: WebSocket):
     await forward_websocket(websocket, backend_ws)
 ```
 
+### MCP SSE Streaming
+The dispatcher properly handles MCP's Server-Sent Events:
+- Detects `text/event-stream` content type
+- Uses `StreamingResponse` for proper SSE delivery
+- Maintains persistent connections for real-time updates
+- Supports both `/mcp` and `/mcp/` endpoints
+
 ## Health Monitoring
 
 ### Dispatcher Health
