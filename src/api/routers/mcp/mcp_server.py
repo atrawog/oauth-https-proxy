@@ -16,6 +16,19 @@ from ....storage.async_redis_storage import AsyncRedisStorage
 from .event_publisher import MCPEventPublisher
 from .session_manager import MCPSessionManager
 
+# Import all tool modules
+from .tools import (
+    TokenTools,
+    CertificateTools,
+    ProxyTools,
+    ServiceTools,
+    RouteTools,
+    LogTools,
+    OAuthTools,
+    WorkflowTools,
+    SystemTools
+)
+
 
 class IntegratedMCPServer:
     """MCP server with full integration into the OAuth HTTPS Proxy system."""
@@ -57,7 +70,8 @@ class IntegratedMCPServer:
         self.event_publisher = MCPEventPublisher(async_storage, unified_logger)
 
         # Register all tools
-        self._register_tools()
+        self._register_core_tools()  # Register built-in tools
+        self._register_modular_tools()  # Register modular tool categories
         
         # Log how many tools were registered
         import logging
@@ -66,11 +80,45 @@ class IntegratedMCPServer:
         tool_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
         logger.info(f"[MCP SERVER] Registered {tool_count} tools")
 
-    def _register_tools(self):
-        """Register all MCP tools with tracing and event publishing."""
+    def _register_modular_tools(self):
+        """Register all modular tool categories."""
         import logging
         logger = logging.getLogger(__name__)
-        logger.info("[MCP SERVER] Starting tool registration")
+        logger.info("[MCP SERVER] Registering modular tools")
+        
+        # Initialize and register each tool category
+        tool_categories = [
+            (TokenTools, "Token Management"),
+            (CertificateTools, "Certificate Management"),
+            (ProxyTools, "Proxy Management"),
+            (ServiceTools, "Service Management"),
+            (RouteTools, "Route Management"),
+            (LogTools, "Log Management"),
+            (OAuthTools, "OAuth Management"),
+            (WorkflowTools, "Workflow Automation"),
+            (SystemTools, "System Configuration")
+        ]
+        
+        for ToolClass, category_name in tool_categories:
+            try:
+                logger.info(f"[MCP SERVER] Registering {category_name} tools")
+                tool_instance = ToolClass(
+                    mcp_server=self,
+                    storage=self.storage,
+                    logger=self.logger,
+                    event_publisher=self.event_publisher,
+                    session_manager=self.session_manager
+                )
+                tool_instance.register_tools()
+                logger.info(f"[MCP SERVER] {category_name} tools registered successfully")
+            except Exception as e:
+                logger.error(f"[MCP SERVER] Failed to register {category_name} tools: {e}")
+    
+    def _register_core_tools(self):
+        """Register core built-in MCP tools."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("[MCP SERVER] Starting core tool registration")
 
         # ========== System Tools ==========
         logger.info("[MCP SERVER] Registering echo tool")
@@ -182,7 +230,7 @@ class IntegratedMCPServer:
                 "openWorldHint": False
             }
         )
-        async def list_proxies(
+        async def proxy_list(
             token: Optional[str] = None,
             include_details: bool = False
         ) -> Dict[str, Any]:
@@ -259,7 +307,7 @@ class IntegratedMCPServer:
                 "openWorldHint": False
             }
         )
-        async def create_proxy(
+        async def proxy_create(
             hostname: str,
             target_url: str,
             token: str,
@@ -350,7 +398,7 @@ class IntegratedMCPServer:
                 "openWorldHint": False
             }
         )
-        async def delete_proxy(
+        async def proxy_delete(
             hostname: str,
             token: str
         ) -> Dict[str, Any]:
@@ -431,7 +479,7 @@ class IntegratedMCPServer:
                 "openWorldHint": False
             }
         )
-        async def list_certificates(
+        async def cert_list(
             token: Optional[str] = None
         ) -> Dict[str, Any]:
             """List available SSL certificates.
@@ -492,7 +540,7 @@ class IntegratedMCPServer:
                 "openWorldHint": True
             }
         )
-        async def request_certificate(
+        async def cert_create(
             domain: str,
             token: str,
             email: Optional[str] = None
@@ -569,7 +617,7 @@ class IntegratedMCPServer:
                     "openWorldHint": False
                 }
             )
-            async def list_services() -> Dict[str, Any]:
+            async def service_list() -> Dict[str, Any]:
                 """List Docker services managed by the system.
 
                 Returns:
@@ -614,7 +662,7 @@ class IntegratedMCPServer:
                 "openWorldHint": False
             }
         )
-        async def list_routes() -> Dict[str, Any]:
+        async def route_list() -> Dict[str, Any]:
             """List HTTP routing rules.
 
             Returns:
@@ -661,7 +709,7 @@ class IntegratedMCPServer:
                 "openWorldHint": False
             }
         )
-        async def query_logs(
+        async def logs(
             hours: int = 24,
             hostname: Optional[str] = None,
             status_code: Optional[int] = None,
@@ -695,20 +743,49 @@ class IntegratedMCPServer:
                 }
             ):
                 # Query logs from Redis
-                time.time() - (hours * 3600)
+                start_time = time.time() - (hours * 3600)
 
                 # Build index key based on filters
-                if hostname:
-                    pass
-                elif status_code:
-                    pass
-                else:
-                    pass
-
-                # Get log entries
-                # Note: This is simplified - actual implementation would
-                # use the request logger's query methods
                 logs = []
+                try:
+                    if hostname:
+                        # Query by hostname
+                        index_key = f"idx:req:host:{hostname}"
+                        log_keys = await self.async_storage.redis_client.zrevrange(index_key, 0, limit - 1)
+                    elif status_code:
+                        # Query by status code
+                        index_key = f"idx:req:status:{status_code}"
+                        log_keys = await self.async_storage.redis_client.zrevrange(index_key, 0, limit - 1)
+                    else:
+                        # Get all recent logs from stream
+                        # Use the stream for recent logs
+                        log_keys = []
+                        stream_data = await self.async_storage.redis_client.xrevrange(
+                            "stream:requests",
+                            count=limit
+                        )
+                        for stream_id, fields in stream_data:
+                            logs.append(fields)
+                    
+                    # Fetch log entries if we have keys
+                    if log_keys and not logs:
+                        for key in log_keys:
+                            if isinstance(key, bytes):
+                                key = key.decode('utf-8')
+                            log_data = await self.async_storage.redis_client.hgetall(key)
+                            if log_data:
+                                # Convert bytes to strings if needed
+                                log_entry = {}
+                                for k, v in log_data.items():
+                                    if isinstance(k, bytes):
+                                        k = k.decode('utf-8')
+                                    if isinstance(v, bytes):
+                                        v = v.decode('utf-8')
+                                    log_entry[k] = v
+                                logs.append(log_entry)
+                except Exception as e:
+                    logger.warning(f"Error querying logs: {e}")
+                    logs = []
 
                 return {
                     "logs": logs,
