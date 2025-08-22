@@ -42,9 +42,8 @@ class AsyncCertificateManager:
         self.storage = storage
         self.redis_clients = redis_clients
         
-        # Initialize unified logger
-        self.logger = UnifiedAsyncLogger(redis_clients)
-        self.logger.set_component("certificate_manager")
+        # Initialize component-specific logger
+        self.logger = UnifiedAsyncLogger(redis_clients, component="certificate_manager")
         
         # Initialize sync manager for ACME operations
         # Need sync storage for sync manager

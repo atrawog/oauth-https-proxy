@@ -64,10 +64,9 @@ class MainOrchestrator:
             self.async_storage = AsyncRedisStorage(Config.REDIS_URL)
             await self.async_storage.initialize()
             
-            # Initialize unified logger
+            # Initialize component-specific logger
             logger.info("Initializing unified logger...")
-            self.logger = UnifiedAsyncLogger(self.redis_clients)
-            self.logger.set_component("orchestrator")
+            self.logger = UnifiedAsyncLogger(self.redis_clients, component="orchestrator")
             
             # Start initialization trace
             trace_id = self.logger.start_trace(

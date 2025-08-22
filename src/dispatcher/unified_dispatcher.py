@@ -216,16 +216,20 @@ class UnifiedDispatcher:
         self.async_components = async_components
         self.async_storage = async_components.async_storage if async_components else None
         
-        # Initialize unified logger if async components available
-        self.unified_logger = async_components.unified_logger if async_components else None
-        if self.unified_logger:
-            # Set global logger for fire-and-forget logging
-            set_global_logger(self.unified_logger)
-            log_info("Unified dispatcher initialized with async logger", component="dispatcher")
+        # Create dispatcher-specific logger to prevent contamination
+        if async_components and hasattr(async_components, 'redis_clients'):
+            self.unified_logger = UnifiedAsyncLogger(async_components.redis_clients, component="dispatcher")
+            # Also set as global for backward compatibility, but dispatcher uses its own
+            if async_components.unified_logger:
+                set_global_logger(async_components.unified_logger)
+            log_info("Unified dispatcher initialized with component-specific logger", component="dispatcher")
         elif storage and storage.redis_client:
             # Fallback to old logging
+            self.unified_logger = None
             from ..shared.logging import configure_logging
             configure_logging(storage.redis_client)
+        else:
+            self.unified_logger = None
         self.hostname_to_http_port: Dict[str, int] = {}
         self.hostname_to_https_port: Dict[str, int] = {}
         self.http_server = None
@@ -779,8 +783,8 @@ class UnifiedDispatcher:
             if not target_port:
                 # Log available instances for debugging
                 available_http_hosts = list(self.hostname_to_http_port.keys())[:10]  # First 10
-                logger.warning(
-                    "No HTTP instance found for hostname",
+                logger.debug(
+                    "No HTTP instance found for hostname (may still be initializing)",
                     hostname=hostname,
                     available_http_hosts=available_http_hosts,
                     total_http_hosts=len(self.hostname_to_http_port),
@@ -902,7 +906,7 @@ class UnifiedDispatcher:
             # Special handling for localhost - route to API instance
             if not target_port and hostname in ['localhost', '127.0.0.1']:
                 # Route localhost to the API instance via named instance (HTTPS not available, use HTTP)
-                logger.warning(f"HTTPS requested for localhost, but API doesn't have HTTPS configured")
+                logger.debug(f"HTTPS requested for localhost, but API doesn't have HTTPS configured")
                 writer.close()
                 await writer.wait_closed()
                 return
@@ -910,8 +914,8 @@ class UnifiedDispatcher:
             if not target_port:
                 # Log available instances for debugging
                 available_https_hosts = list(self.hostname_to_https_port.keys())[:10]  # First 10
-                logger.warning(
-                    "No HTTPS instance found for hostname",
+                logger.debug(
+                    "No HTTPS instance found for hostname (may still be initializing)",
                     hostname=hostname,
                     available_https_hosts=available_https_hosts,
                     total_https_hosts=len(self.hostname_to_https_port),
@@ -1027,7 +1031,7 @@ class UnifiedDispatcher:
                 
                 # Enhanced logging with hostname and instance
                 service_info = f" (service: {service_name})" if service_name else ""
-                logger.info(
+                logger.debug(
                     f"Forwarding connection - Client: {client_ip}:{client_port} -> "
                     f"Hostname: {hostname or 'unknown'} -> "
                     f"Target: {target_host}:{target_port}{service_info} "
@@ -1569,12 +1573,11 @@ class UnifiedMultiInstanceServer:
         # The dispatcher is now running in background
         # unified_server_instance is available for dynamic management
         logger.info("UnifiedMultiInstanceServer fully initialized in WORKFLOW MODE")
-        logger.info(f"Currently {len(self.instances)} instances running (should be 0 at startup)")
         
-        if len(self.instances) > 0:
-            logger.error("WARNING: Instances found at startup! This should not happen in workflow mode!")
-            for instance in self.instances:
-                logger.error(f"  Unexpected instance: {instance.domains}")
+        # Note: Instances will be created by the workflow orchestrator for existing proxies
+        # This is expected behavior - the orchestrator publishes events for all existing proxies at startup
+        # So we don't check for zero instances here anymore
+        logger.info(f"Currently {len(self.instances)} instances running (created by workflow orchestrator)")
         
         # Wait forever (this is where we block)
         try:

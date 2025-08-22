@@ -48,9 +48,8 @@ class AsyncDockerManager:
         self.storage = storage
         self.redis_clients = redis_clients
         
-        # Initialize unified logger
-        self.logger = UnifiedAsyncLogger(redis_clients)
-        self.logger.set_component("docker_manager")
+        # Initialize component-specific logger
+        self.logger = UnifiedAsyncLogger(redis_clients, component="docker_manager")
         
         # Docker configuration
         self.docker_host = os.getenv('DOCKER_HOST')

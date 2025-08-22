@@ -129,7 +129,7 @@ class Route(BaseModel):
         from ..shared.logger import get_logger_compat
         logger = get_logger_compat(__name__)
         if self.path_pattern == "/.well-known/oauth-authorization-server":
-            logger.info(f"Route match check: path='{path}' pattern='{self.path_pattern}' result={result}")
+            logger.debug(f"Route match check: path='{path}' pattern='{self.path_pattern}' result={result}")
         
         return result
     

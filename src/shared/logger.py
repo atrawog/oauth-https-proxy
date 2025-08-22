@@ -56,14 +56,7 @@ def log_debug(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        if component:
-            # Temporarily set component
-            original = _logger.component
-            _logger.set_component(component)
-            asyncio.create_task(_logger.debug(message, **kwargs))
-            _logger.component = original
-        else:
-            asyncio.create_task(_logger.debug(message, **kwargs))
+        asyncio.create_task(_logger.debug(message, component=component, **kwargs))
 
 
 def log_info(message: str, component: Optional[str] = None, **kwargs):
@@ -75,14 +68,7 @@ def log_info(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        if component:
-            # Temporarily set component
-            original = _logger.component
-            _logger.set_component(component)
-            asyncio.create_task(_logger.info(message, **kwargs))
-            _logger.component = original
-        else:
-            asyncio.create_task(_logger.info(message, **kwargs))
+        asyncio.create_task(_logger.info(message, component=component, **kwargs))
 
 
 def log_warning(message: str, component: Optional[str] = None, **kwargs):
@@ -94,14 +80,7 @@ def log_warning(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        if component:
-            # Temporarily set component
-            original = _logger.component
-            _logger.set_component(component)
-            asyncio.create_task(_logger.warning(message, **kwargs))
-            _logger.component = original
-        else:
-            asyncio.create_task(_logger.warning(message, **kwargs))
+        asyncio.create_task(_logger.warning(message, component=component, **kwargs))
 
 
 def log_error(message: str, component: Optional[str] = None, error: Optional[Exception] = None, trace_id: Optional[str] = None, **kwargs):
@@ -122,14 +101,7 @@ def log_error(message: str, component: Optional[str] = None, error: Optional[Exc
         if trace_id:
             kwargs['trace_id'] = trace_id
         
-        if component:
-            # Temporarily set component
-            original = _logger.component
-            _logger.set_component(component)
-            asyncio.create_task(_logger.error(message, **kwargs))
-            _logger.component = original
-        else:
-            asyncio.create_task(_logger.error(message, **kwargs))
+        asyncio.create_task(_logger.error(message, component=component, **kwargs))
 
 
 def log_critical(message: str, component: Optional[str] = None, **kwargs):
@@ -141,14 +113,7 @@ def log_critical(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        if component:
-            # Temporarily set component
-            original = _logger.component
-            _logger.set_component(component)
-            asyncio.create_task(_logger.critical(message, **kwargs))
-            _logger.component = original
-        else:
-            asyncio.create_task(_logger.critical(message, **kwargs))
+        asyncio.create_task(_logger.critical(message, component=component, **kwargs))
 
 
 # Specialized logging helpers

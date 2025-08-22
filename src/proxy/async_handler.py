@@ -46,9 +46,8 @@ class EnhancedAsyncProxyHandler:
         self.storage = storage
         self.redis_clients = redis_clients
         
-        # Initialize unified logger
-        self.logger = UnifiedAsyncLogger(redis_clients)
-        self.logger.set_component("proxy_handler")
+        # Initialize component-specific logger
+        self.logger = UnifiedAsyncLogger(redis_clients, component="proxy_handler")
         
         # Initialize auth service
         self.auth_service = FlexibleAuthService(storage=storage, oauth_components=oauth_components)

@@ -57,9 +57,8 @@ class AsyncComponents:
             await self.async_storage.initialize()
             logger.info("Async storage initialized")
             
-            # Initialize unified logger
-            self.unified_logger = UnifiedAsyncLogger(self.redis_clients)
-            self.unified_logger.set_component("api_server")
+            # Initialize unified logger with component name
+            self.unified_logger = UnifiedAsyncLogger(self.redis_clients, component="api_server")
             
             # Set as global logger for easy access
             set_global_logger(self.unified_logger)

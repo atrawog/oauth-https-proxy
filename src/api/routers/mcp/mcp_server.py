@@ -97,16 +97,26 @@ class IntegratedMCPServer:
         # Store dependencies
         self.storage = async_storage
         self.async_storage = async_storage  # Also store as async_storage for compatibility
-        self.logger = unified_logger
+        
+        # Create component-specific logger to prevent contamination
+        redis_clients = getattr(unified_logger, 'redis_clients', None)
+        if redis_clients:
+            self.logger = UnifiedAsyncLogger(redis_clients, component="mcp_server")
+        else:
+            # Fallback if redis_clients not available
+            self.logger = unified_logger
+        
         self.cert_manager = cert_manager
         self.docker_manager = docker_manager
 
-        # Set component name for logging
-        self.logger.set_component("mcp_server")
-
-        # Initialize managers
-        self.session_manager = MCPSessionManager(async_storage, unified_logger)
-        self.event_publisher = MCPEventPublisher(async_storage, unified_logger)
+        # Initialize managers with their own loggers
+        if redis_clients:
+            self.session_manager = MCPSessionManager(async_storage, redis_clients)
+            self.event_publisher = MCPEventPublisher(async_storage, redis_clients)
+        else:
+            # Fallback - should not happen in production
+            self.session_manager = MCPSessionManager(async_storage, unified_logger.redis_clients)
+            self.event_publisher = MCPEventPublisher(async_storage, unified_logger.redis_clients)
         
         # Initialize session interceptor to bridge FastMCP with Redis
         self.session_interceptor = MCPSessionInterceptor(
@@ -588,80 +598,8 @@ class IntegratedMCPServer:
                     "count": len(cert_list)
                 }
 
-        @self.mcp.tool(
-            annotations={
-                "title": "Request SSL Certificate",
-                "readOnlyHint": False,
-                "destructiveHint": False,
-                "idempotentHint": False,
-                "openWorldHint": True
-            }
-        )
-        async def cert_create(
-            domain: str,
-            token: str,
-            email: Optional[str] = None
-        ) -> Dict[str, Any]:
-            """Request a new SSL certificate for a domain.
-
-            Args:
-                domain: The domain to request a certificate for
-                token: API token for authentication (required)
-                email: Optional email for certificate notifications
-
-            Returns:
-                Dictionary with certificate request status
-            """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
-
-            async with self.logger.trace_context(
-                "mcp_tool_request_certificate",
-                session_id=session_id,
-                domain=domain
-            ) as trace_id:
-                # Validate token
-                token_info = await self.storage.get_token_by_hash(token)
-                if not token_info:
-                    raise PermissionError("Valid token required for certificate requests")
-
-                user = token_info.get("name", "unknown")
-                cert_email = email or token_info.get("cert_email")
-
-                if not cert_email:
-                    raise ValueError("Email required for certificate request")
-
-                if not self.cert_manager:
-                    raise RuntimeError("Certificate manager not available")
-
-                # Request certificate
-                cert_name = f"mcp-{domain}"
-
-                # Publish workflow event for certificate request
-                await self.event_publisher.publish_workflow_event(
-                    event_type="certificate_requested",
-                    hostname=domain,
-                    data={
-                        "cert_name": cert_name,
-                        "email": cert_email,
-                        "requested_by": "mcp",
-                        "session_id": session_id,
-                        "user": user
-                    },
-                    trace_id=trace_id
-                )
-
-                return {
-                    "status": "requested",
-                    "domain": domain,
-                    "cert_name": cert_name,
-                    "message": f"Certificate request initiated for {domain}"
-                }
-
+        # Note: cert_create is now registered via CertificateTools in modular tools
+        
         # ========== Service Management Tools (if Docker manager available) ==========
 
         if self.docker_manager:

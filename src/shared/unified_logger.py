@@ -51,28 +51,27 @@ def mask_sensitive_headers(headers: Dict[str, str]) -> Dict[str, str]:
 class UnifiedAsyncLogger:
     """Unified logger for both events and logs with trace correlation."""
     
-    def __init__(self, redis_clients: RedisClients):
+    def __init__(self, redis_clients: RedisClients, component: str = "unknown"):
         """Initialize the unified logger.
         
         Args:
             redis_clients: RedisClients instance with multiple connections
+            component: Component name for this logger instance (immutable)
         """
         self.redis_clients = redis_clients
         self.publisher = UnifiedStreamPublisher(redis_clients.stream_redis)
         
-        # Component name for this instance
-        self.component = "unknown"
+        # Component name for this instance (immutable to prevent contamination)
+        self._component = component
         
         # Active traces for correlation
         self.active_traces: Dict[str, Dict[str, Any]] = {}
     
-    def set_component(self, component: str):
-        """Set the component name for this logger instance.
-        
-        Args:
-            component: Component name (e.g., "proxy_handler", "cert_manager")
-        """
-        self.component = component
+    @property
+    def component(self) -> str:
+        """Get the component name."""
+        return self._component
+    
     
     # Trace management
     
@@ -212,6 +211,7 @@ class UnifiedAsyncLogger:
     
     async def log(self, level: str, message: str,
                  trace_id: Optional[str] = None,
+                 component: Optional[str] = None,
                  **kwargs) -> Optional[str]:
         """Publish a log entry.
         
@@ -219,6 +219,7 @@ class UnifiedAsyncLogger:
             level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
             message: Log message
             trace_id: Optional trace ID for correlation
+            component: Optional component override (uses instance component if not provided)
             **kwargs: Additional log fields
             
         Returns:
@@ -228,35 +229,38 @@ class UnifiedAsyncLogger:
         if trace_id and trace_id in self.active_traces:
             self.add_span(trace_id, "log", level=level, message=message)
         
+        # Use provided component or instance component
+        log_component = component if component else self._component
+        
         return await self.publisher.publish_log(
             level=level,
             message=message,
-            component=self.component,
+            component=log_component,
             trace_id=trace_id,
             **kwargs
         )
     
     # Convenience methods for different log levels
     
-    async def debug(self, message: str, trace_id: Optional[str] = None, **kwargs):
+    async def debug(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
         """Log a debug message."""
-        return await self.log("DEBUG", message, trace_id, **kwargs)
+        return await self.log("DEBUG", message, trace_id, component, **kwargs)
     
-    async def info(self, message: str, trace_id: Optional[str] = None, **kwargs):
+    async def info(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
         """Log an info message."""
-        return await self.log("INFO", message, trace_id, **kwargs)
+        return await self.log("INFO", message, trace_id, component, **kwargs)
     
-    async def warning(self, message: str, trace_id: Optional[str] = None, **kwargs):
+    async def warning(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
         """Log a warning message."""
-        return await self.log("WARNING", message, trace_id, **kwargs)
+        return await self.log("WARNING", message, trace_id, component, **kwargs)
     
-    async def error(self, message: str, trace_id: Optional[str] = None, **kwargs):
+    async def error(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
         """Log an error message."""
-        return await self.log("ERROR", message, trace_id, **kwargs)
+        return await self.log("ERROR", message, trace_id, component, **kwargs)
     
-    async def critical(self, message: str, trace_id: Optional[str] = None, **kwargs):
+    async def critical(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
         """Log a critical message."""
-        return await self.log("CRITICAL", message, trace_id, **kwargs)
+        return await self.log("CRITICAL", message, trace_id, component, **kwargs)
     
     # Specialized logging methods
     
@@ -630,6 +634,6 @@ async def initialize_unified_logger(redis_clients: RedisClients) -> UnifiedAsync
         Initialized UnifiedAsyncLogger
     """
     global _unified_logger
-    _unified_logger = UnifiedAsyncLogger(redis_clients)
+    _unified_logger = UnifiedAsyncLogger(redis_clients, component="global")
     logger.info("Unified async logger initialized")
     return _unified_logger

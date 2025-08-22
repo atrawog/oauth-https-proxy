@@ -12,6 +12,7 @@ from typing import Any, Dict, List, Optional
 
 from ....shared.unified_logger import UnifiedAsyncLogger
 from ....storage.async_redis_storage import AsyncRedisStorage
+from ....storage.redis_clients import RedisClients
 
 
 class MCPSessionManager:
@@ -25,20 +26,19 @@ class MCPSessionManager:
     def __init__(
         self,
         async_storage: AsyncRedisStorage,
-        unified_logger: UnifiedAsyncLogger
+        redis_clients: RedisClients
     ):
         """Initialize the session manager.
 
         Args:
             async_storage: Async Redis storage instance
-            unified_logger: Unified async logger for events and logs
+            redis_clients: Redis clients for creating component logger
         """
         self.storage = async_storage
-        self.logger = unified_logger
         self.redis = async_storage.redis_client
-
-        # Set component name for logging
-        self.logger.set_component("mcp_session_manager")
+        
+        # Create component-specific logger
+        self.logger = UnifiedAsyncLogger(redis_clients, component="mcp_session_manager")
 
     def generate_session_id(self) -> str:
         """Generate a unique session ID.
