@@ -1,19 +1,54 @@
-# Advanced Logging Architecture Documentation
+# Unified Async Logging Architecture Documentation
 
 ## Overview
 
-The logging system uses a fully async Redis architecture for high-performance logging with multiple indexes, real-time streaming, and comprehensive analytics.
+The logging system uses a unified async logging architecture with fire-and-forget patterns for high-performance, non-blocking logging. All components use a centralized `UnifiedAsyncLogger` that writes to Redis Streams with multiple indexes, real-time streaming, and comprehensive analytics.
 
 ## Configuration
 
-- `LOG_LEVEL` - Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
+- `LOG_LEVEL` - Application log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
+- **TRACE Level**: Custom level (value=5) for very verbose debugging, below DEBUG
 
 ## Architecture
 
-The system uses a fully async Redis architecture:
-- **Async Redis Primary**: High-frequency request/response logging with minimal latency
-- **Async Redis Storage**: All configuration and state management operations
-- **Unified Async Layer**: Single async Redis client pool for all operations
+### Unified Async Logger
+The system uses a centralized `UnifiedAsyncLogger` with fire-and-forget patterns:
+- **Fire-and-Forget Logging**: All log calls use `asyncio.create_task()` for non-blocking operation
+- **Component Isolation**: Each component has immutable component name to prevent contamination
+- **No Logger Instances**: Direct function calls (`log_info()`, `log_debug()`, etc.) instead of logger objects
+- **Async Redis Streams**: All logs written to Redis Streams for persistence and querying
+- **Unified Stream Publisher**: Single publisher instance for all log events
+
+## Logging API
+
+### Fire-and-Forget Functions
+All logging uses non-blocking fire-and-forget patterns:
+
+```python
+from src.shared.logger import log_info, log_debug, log_warning, log_error, log_trace
+
+# Basic logging - all are non-blocking
+log_info("Server started", component="api_server")
+log_debug("Processing request", component="handler", request_id="123")
+log_warning("High memory usage", component="monitor", memory_mb=1024)
+log_error("Connection failed", component="proxy", error=e)
+log_trace("Detailed trace info", component="debug")  # TRACE level for verbose debugging
+
+# Request/Response logging
+log_request("GET", "/api/health", "192.168.1.1", "api.example.com")
+log_response(200, 45.3, trace_id="req-123")
+
+# Event logging
+log_event("proxy_created", {"hostname": "example.com"}, trace_id="evt-456")
+```
+
+### Component Isolation
+Each component uses an immutable component name:
+```python
+# Component name is passed with each call, not stored in logger instance
+log_info("Message", component="my_component")
+# NOT: logger = get_logger("my_component"); logger.info("Message")
+```
 
 ## RequestLogger System
 
@@ -85,27 +120,49 @@ Access logs via the `/logs` endpoints:
 ## Log Query Commands
 
 ```bash
-just logs [hours] [event] [level] [hostname] [limit] [token]  # Show recent logs (default)
+just logs [hours] [event] [level] [hostname] [limit] [token]  # Show recent logs (oldest to newest)
 just logs-ip <ip> [hours] [event] [level] [limit] [token]    # Query logs by client IP
-just logs-host <fqdn> [hours] [limit] [token]                 # Query logs by client FQDN (reverse DNS)
 just logs-proxy <hostname> [hours] [limit] [token]            # Query logs by proxy hostname
-just logs-client <client-id> [hours] [event] [level] [limit] [token]  # Query logs by OAuth client
+just logs-hostname <hostname> [hours] [limit] [token]         # Query logs by hostname
+just logs-oauth-client <client-id> [hours] [event] [level] [limit] [token]  # Query logs by OAuth client
 just logs-search [query] [hours] [event] [level] [hostname] [limit] [token]  # Search logs with filters
 just logs-errors [hours] [limit] [token]                      # Show recent errors
 just logs-errors-debug [hours] [include-warnings] [limit] [token]  # Detailed errors with debugging
-just logs-follow [service]                                    # Follow Docker container logs
+just logs-follow [interval] [event] [level] [hostname] [token] # Follow logs in real-time with ANSI colors
 just logs-oauth <ip> [hours] [limit] [token]                  # OAuth activity summary
 just logs-oauth-debug <ip> [hours] [limit] [token]            # Full OAuth flow debugging
 just logs-oauth-flow [client-id] [username] [hours] [token]   # Track OAuth flows
 just logs-stats [hours] [token]                               # Show event statistics
 just logs-test [token]                                        # Test logging system
-just logs-service [service] [lines]                           # Docker container logs
-just logs-all [lines] [hours] [token]                         # Show all logs (Docker + application)
+just logs-user <user-id> [hours] [limit] [token]              # Query logs by user ID
+just logs-session <session-id> [hours] [limit] [token]        # Query logs by session ID
+just logs-method <method> [hours] [limit] [token]             # Query logs by HTTP method
+just logs-status <code> [hours] [limit] [token]               # Query logs by status code
+just logs-slow [threshold-ms] [hours] [limit] [token]         # Query slow requests
+just logs-path <pattern> [hours] [limit] [token]              # Query logs by path pattern
+just logs-oauth-user <username> [hours] [limit] [token]       # Query logs by OAuth username
+just logs-docker [lines] [follow]                             # Docker container logs only
+just logs-service [service] [lines]                           # Service-specific Docker logs
 just logs-clear [token]                                       # Clear all log entries from Redis
 just logs-help                                                # Show logging commands help
 ```
 
+### Key Features
+- **Chronological Order**: Logs displayed oldest to newest (most recent at bottom)
+- **No Summary**: Clean output without summary statistics
+- **ANSI Colors**: Full color support in `logs-follow` for visual distinction
+- **Real-time Following**: Live log streaming with configurable interval
+
 ## Performance Optimizations
+
+### Fire-and-Forget Pattern
+All log operations are non-blocking:
+```python
+def log_info(message: str, component: Optional[str] = None, **kwargs):
+    """Fire-and-forget info log."""
+    if _logger:
+        asyncio.create_task(_logger.info(message, component=component, **kwargs))
+```
 
 ### Batch Processing
 Logs are batched with 100ms windows:

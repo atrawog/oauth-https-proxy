@@ -16,6 +16,10 @@ from contextlib import asynccontextmanager
 from ..storage.redis_clients import RedisClients
 from ..storage.unified_stream_publisher import UnifiedStreamPublisher
 from ..shared.dns_resolver import get_dns_resolver
+from ..shared.log_levels import TRACE, setup_trace_logging
+
+# Set up TRACE logging level
+setup_trace_logging()
 
 logger = logging.getLogger(__name__)
 
@@ -216,7 +220,7 @@ class UnifiedAsyncLogger:
         """Publish a log entry.
         
         Args:
-            level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+            level: Log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
             message: Log message
             trace_id: Optional trace ID for correlation
             component: Optional component override (uses instance component if not provided)
@@ -261,6 +265,10 @@ class UnifiedAsyncLogger:
     async def critical(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
         """Log a critical message."""
         return await self.log("CRITICAL", message, trace_id, component, **kwargs)
+    
+    async def trace(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Log a trace message (very verbose debugging)."""
+        return await self.log("TRACE", message, trace_id, component, **kwargs)
     
     # Specialized logging methods
     

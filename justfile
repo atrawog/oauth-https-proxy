@@ -578,17 +578,13 @@ logs-path pattern hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", 
 logs-oauth-user username hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log oauth-user {{username}} --hours {{hours}} --limit {{limit}}
 
-# Combined logs (Docker + API)
-logs-all lines="50" hours="1" token=env_var_or_default("ADMIN_TOKEN", ""):
-    @echo "=== Docker Logs ===" 
-    @docker-compose logs --tail={{lines}}
-    @echo ""
-    @echo "=== Application Logs ==="
-    TOKEN={{token}} pixi run proxy-client log search --hours {{hours}} --limit {{lines}}
+# Docker container logs only
+logs-docker lines="50" follow="false":
+    {{ if follow == "true" { "docker-compose logs --tail=" + lines + " --follow" } else { "docker-compose logs --tail=" + lines } }}
 
 # Docker service logs (not migrated - Docker specific)
 logs-service service="" lines="100":
-    {{ if service != "" { "docker-compose logs --tail=" + lines + " " + service } else { "docker-compose logs --tail=" + lines } }}
+    -{{ if service != "" { "docker-compose logs --tail=" + lines + " " + service + " 2>/dev/null || true" } else { "docker-compose logs --tail=" + lines + " 2>/dev/null || true" } }}
 
 # Help for logging commands
 logs-help:

@@ -17,7 +17,6 @@ Workflow:
 
 import asyncio
 import json
-import logging
 import os
 from typing import Dict, Optional, Any
 from datetime import datetime, timezone
@@ -25,8 +24,7 @@ from datetime import datetime, timezone
 from ..storage.redis_stream_publisher import RedisStreamPublisher
 from ..storage.instance_state import InstanceStateTracker, InstanceState
 from ..dispatcher.redis_stream_consumer import RedisStreamConsumer
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class InstanceWorkflowOrchestrator:
@@ -89,36 +87,36 @@ class InstanceWorkflowOrchestrator:
         """Start the workflow orchestrator."""
         # Force immediate flush to ensure logs appear
         import sys
-        logger.info("[WORKFLOW] Starting workflow orchestrator initialization")
+        log_info("[WORKFLOW] Starting workflow orchestrator initialization", component="workflow")
         sys.stderr.flush()
         sys.stdout.flush()
         
         await self.consumer.initialize()
-        logger.info("[WORKFLOW] Consumer initialized")
+        log_info("[WORKFLOW] Consumer initialized", component="workflow")
         # Publisher and state tracker don't need initialization - they connect on first use
         
         # Start consuming workflow events
         self.consumer_task = asyncio.create_task(
             self.consumer.consume_events(self.handle_workflow_event)
         )
-        logger.info("[WORKFLOW] Consumer task created")
+        log_info("[WORKFLOW] Consumer task created", component="workflow")
         
         # Start handling pending messages
         self.pending_task = asyncio.create_task(
             self.consumer.claim_pending_messages(idle_time_ms=30000)  # 30 seconds
         )
-        logger.info("[WORKFLOW] Pending task created")
+        log_info("[WORKFLOW] Pending task created", component="workflow")
         
         # CRITICAL FIX: Publish events for all existing proxies on startup
         await self._publish_events_for_existing_proxies()
         
-        logger.info("[WORKFLOW] Instance workflow orchestrator started with event processing")
+        log_info("[WORKFLOW] Instance workflow orchestrator started with event processing", component="workflow")
         sys.stderr.flush()
         sys.stdout.flush()
     
     async def _publish_events_for_existing_proxies(self):
         """Publish proxy_creation_requested events for all existing proxies on startup."""
-        logger.info("[WORKFLOW] Publishing events for existing proxies...")
+        log_info("[WORKFLOW] Publishing events for existing proxies...", component="workflow")
         
         try:
             # Get all existing proxies
@@ -136,10 +134,10 @@ class InstanceWorkflowOrchestrator:
                 hostname = proxy.hostname if hasattr(proxy, 'hostname') else proxy.get('hostname')
                 
                 if hostname in skip_hostnames:
-                    logger.debug(f"[WORKFLOW] Skipping special hostname: {hostname}")
+                    log_debug(f"[WORKFLOW] Skipping special hostname: {hostname}", component="workflow")
                     continue
                 
-                logger.info(f"[WORKFLOW] Publishing proxy_creation_requested for existing proxy: {hostname}")
+                log_info(f"[WORKFLOW] Publishing proxy_creation_requested for existing proxy: {hostname}", component="workflow")
                 
                 # Publish event to trigger instance creation
                 event_data = {
@@ -158,10 +156,10 @@ class InstanceWorkflowOrchestrator:
                 # Small delay to avoid overwhelming the system
                 await asyncio.sleep(0.1)
             
-            logger.info(f"[WORKFLOW] Published events for {count} existing proxies")
+            log_info(f"[WORKFLOW] Published events for {count} existing proxies", component="workflow")
             
         except Exception as e:
-            logger.error(f"[WORKFLOW] Error publishing events for existing proxies: {e}", exc_info=True)
+            log_error(f"[WORKFLOW] Error publishing events for existing proxies: {e}", component="workflow")
     
     async def handle_workflow_event(self, event: Dict[str, Any]):
         """
@@ -174,7 +172,7 @@ class InstanceWorkflowOrchestrator:
         event_type = event.get('event_type', event.get('type'))
         hostname = event.get('hostname')
         
-        logger.info(f"[WORKFLOW] Processing {event_type} for {hostname}")
+        log_info(f"[WORKFLOW] Processing {event_type} for {hostname}", component="workflow")
         print(f"[WORKFLOW] Processing {event_type} for {hostname}", file=sys.stderr)
         sys.stderr.flush()
         
@@ -230,10 +228,10 @@ class InstanceWorkflowOrchestrator:
                 await self.handle_certificate_updated(event)
                 
             else:
-                logger.debug(f"[WORKFLOW] Unhandled event type: {event_type}")
+                log_debug(f"[WORKFLOW] Unhandled event type: {event_type}", component="workflow")
                 
         except Exception as e:
-            logger.error(f"[WORKFLOW] Error handling {event_type} for {hostname}: {e}", exc_info=True)
+            log_error(f"[WORKFLOW] Error handling {event_type} for {hostname}: {e}", component="workflow")
             
             # Publish failure event
             await self.publisher.publish_instance_failed(
@@ -260,7 +258,7 @@ class InstanceWorkflowOrchestrator:
         owner_token_hash = event.get('owner_token_hash')
         created_by = event.get('created_by')
         
-        logger.info(f"[WORKFLOW] Analyzing resources for proxy creation: {hostname}")
+        log_info(f"[WORKFLOW] Analyzing resources for proxy creation: {hostname}", component="workflow")
         
         # Set initial state
         await self.state_tracker.set_instance_state(
@@ -276,7 +274,7 @@ class InstanceWorkflowOrchestrator:
         # CRITICAL: Check if proxy already exists in storage
         existing_proxy = await self._get_proxy_target(hostname)
         if existing_proxy:
-            logger.info(f"[WORKFLOW] Proxy {hostname} already exists in storage")
+            log_info(f"[WORKFLOW] Proxy {hostname} already exists in storage", component="workflow")
             
             # Check if certificate exists and is ready
             cert_ready = False
@@ -284,11 +282,11 @@ class InstanceWorkflowOrchestrator:
                 cert = await self._get_certificate(existing_proxy.cert_name)
                 if cert and cert.status == 'active':
                     cert_ready = True
-                    logger.info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is ready for {hostname}")
+                    log_info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is ready for {hostname}", component="workflow")
                 elif cert and cert.status == 'pending':
-                    logger.info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is still pending for {hostname}")
+                    log_info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is still pending for {hostname}", component="workflow")
                 else:
-                    logger.info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} not found or failed for {hostname}")
+                    log_info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} not found or failed for {hostname}", component="workflow")
             
             # Check what instances exist
             # For now, just proceed with port allocation
@@ -303,7 +301,7 @@ class InstanceWorkflowOrchestrator:
         
         # Proxy doesn't exist - this shouldn't happen as API creates it first
         # But handle it anyway for completeness
-        logger.warning(f"[WORKFLOW] Proxy {hostname} not found in storage, creating it")
+        log_warning(f"[WORKFLOW] Proxy {hostname} not found in storage, creating it", component="workflow")
         
         # Store proxy configuration
         from ..proxy.models import ProxyTarget
@@ -319,7 +317,7 @@ class InstanceWorkflowOrchestrator:
         )
         
         if await self._store_proxy_target(hostname, proxy):
-            logger.info(f"[WORKFLOW] Proxy {hostname} stored successfully")
+            log_info(f"[WORKFLOW] Proxy {hostname} stored successfully", component="workflow")
             
             # Publish proxy_stored event
             await self.publisher.publish_event("proxy_stored", {
@@ -331,7 +329,7 @@ class InstanceWorkflowOrchestrator:
                 "cert_name": cert_name
             })
         else:
-            logger.error(f"[WORKFLOW] Failed to store proxy {hostname}")
+            log_error(f"[WORKFLOW] Failed to store proxy {hostname}", component="workflow")
             await self.state_tracker.set_instance_state(
                 hostname=hostname,
                 state=InstanceState.FAILED,
@@ -351,11 +349,11 @@ class InstanceWorkflowOrchestrator:
         cert_email = event.get('cert_email')
         cert_name = event.get('cert_name')
         
-        logger.info(f"[WORKFLOW] Proxy {hostname} stored, proceeding with setup")
+        log_info(f"[WORKFLOW] Proxy {hostname} stored, proceeding with setup", component="workflow")
         
         # Request certificate if HTTPS is enabled
         if enable_https and cert_name:
-            logger.info(f"[WORKFLOW] Requesting certificate for {hostname}")
+            log_info(f"[WORKFLOW] Requesting certificate for {hostname}", component="workflow")
             
             await self.state_tracker.set_pending_operation(
                 hostname=hostname,
@@ -390,7 +388,7 @@ class InstanceWorkflowOrchestrator:
         cert_email = event.get('cert_email')
         domains = event.get('domains', [hostname])
         
-        logger.info(f"[WORKFLOW] Starting certificate generation for {hostname}")
+        log_info(f"[WORKFLOW] Starting certificate generation for {hostname}", component="workflow")
         
         if self.cert_manager:
             # Trigger certificate generation
@@ -412,7 +410,7 @@ class InstanceWorkflowOrchestrator:
                 )
             )
         else:
-            logger.warning(f"[WORKFLOW] No certificate manager available")
+            log_warning(f"[WORKFLOW] No certificate manager available", component="workflow")
     
     async def handle_allocate_ports(self, event: Dict):
         """
@@ -429,7 +427,7 @@ class InstanceWorkflowOrchestrator:
         cert_ready = event.get('cert_ready', False)
         cert_name = event.get('cert_name')
         
-        logger.info(f"[WORKFLOW] Allocating ports for {hostname} (cert_ready={cert_ready})")
+        log_info(f"[WORKFLOW] Allocating ports for {hostname} (cert_ready={cert_ready})", component="workflow")
         
         allocated = {
             'cert_ready': cert_ready,
@@ -448,7 +446,7 @@ class InstanceWorkflowOrchestrator:
             self.allocated_ports.add(allocated['http_internal_port'])
             self.next_http_port += 1
             
-            logger.info(f"[WORKFLOW] Allocated HTTP port {allocated['http_port']} for {hostname}")
+            log_info(f"[WORKFLOW] Allocated HTTP port {allocated['http_port']} for {hostname}", component="workflow")
         
         # Allocate HTTPS port
         if enable_https:
@@ -462,7 +460,7 @@ class InstanceWorkflowOrchestrator:
             self.allocated_ports.add(allocated['https_internal_port'])
             self.next_https_port += 1
             
-            logger.info(f"[WORKFLOW] Allocated HTTPS port {allocated['https_port']} for {hostname}")
+            log_info(f"[WORKFLOW] Allocated HTTPS port {allocated['https_port']} for {hostname}", component="workflow")
         
         # Publish ports allocated event with cert status
         await self.publisher.publish_event("ports_allocated", {
@@ -494,7 +492,7 @@ class InstanceWorkflowOrchestrator:
         cert_ready = event.get('cert_ready', False)
         cert_name = event.get('cert_name')
         
-        logger.info(f"[WORKFLOW] Ports allocated for {hostname}, creating instances")
+        log_info(f"[WORKFLOW] Ports allocated for {hostname}, creating instances", component="workflow")
         
         # Update state
         state_details = {
@@ -538,7 +536,7 @@ class InstanceWorkflowOrchestrator:
         if https_port:
             if cert_ready:
                 # Certificate is already ready, start HTTPS immediately!
-                logger.info(f"[WORKFLOW] Certificate ready for {hostname}, creating HTTPS instance immediately")
+                log_info(f"[WORKFLOW] Certificate ready for {hostname}, creating HTTPS instance immediately", component="workflow")
                 await self.publisher.publish_event("create_https_instance", {
                     "hostname": hostname,
                     "https_port": https_port,
@@ -549,7 +547,7 @@ class InstanceWorkflowOrchestrator:
                 # Need to wait for certificate
                 pending_op = await self.state_tracker.get_pending_operation(hostname)
                 if pending_op and pending_op.get('operation') == 'waiting_for_certificate':
-                    logger.info(f"[WORKFLOW] HTTPS port allocated for {hostname}, waiting for certificate")
+                    log_info(f"[WORKFLOW] HTTPS port allocated for {hostname}, waiting for certificate", component="workflow")
                 else:
                     # Check if certificate exists now (race condition handling)
                     proxy = await self._get_proxy_target(hostname)
@@ -557,7 +555,7 @@ class InstanceWorkflowOrchestrator:
                         cert = await self._get_certificate(proxy.cert_name)
                         if cert and cert.status == 'active':
                             # Certificate became ready, start HTTPS
-                            logger.info(f"[WORKFLOW] Certificate now ready for {hostname}, creating HTTPS instance")
+                            log_info(f"[WORKFLOW] Certificate now ready for {hostname}, creating HTTPS instance", component="workflow")
                             await self.publisher.publish_event("create_https_instance", {
                                 "hostname": hostname,
                                 "https_port": https_port,
@@ -565,7 +563,7 @@ class InstanceWorkflowOrchestrator:
                                 "cert_name": proxy.cert_name
                             })
                         else:
-                            logger.info(f"[WORKFLOW] Certificate {proxy.cert_name} not ready for {hostname}, will wait")
+                            log_info(f"[WORKFLOW] Certificate {proxy.cert_name} not ready for {hostname}, will wait", component="workflow")
     
     async def handle_http_instance_started(self, event: Dict):
         """
@@ -579,7 +577,7 @@ class InstanceWorkflowOrchestrator:
         hostname = event.get('hostname')
         http_port = event.get('port')
         
-        logger.info(f"[WORKFLOW] HTTP instance started for {hostname} on port {http_port}")
+        log_info(f"[WORKFLOW] HTTP instance started for {hostname} on port {http_port}", component="workflow")
         
         # Register HTTP route if dispatcher available
         # Note: self.dispatcher is actually the UnifiedMultiInstanceServer
@@ -593,7 +591,7 @@ class InstanceWorkflowOrchestrator:
                 enable_https=False
             )
             
-            logger.info(f"[WORKFLOW] HTTP route registered for {hostname}")
+            log_info(f"[WORKFLOW] HTTP route registered for {hostname}", component="workflow")
         
         # Update state based on what's pending
         pending_op = await self.state_tracker.get_pending_operation(hostname)
@@ -639,7 +637,7 @@ class InstanceWorkflowOrchestrator:
         cert_name = event.get('cert_name')
         domains = event.get('domains', [])
         
-        logger.info(f"[WORKFLOW] Certificate {cert_name} ready for domains {domains}")
+        log_info(f"[WORKFLOW] Certificate {cert_name} ready for domains {domains}", component="workflow")
         
         for hostname in domains:
             # Clear pending operation
@@ -648,13 +646,13 @@ class InstanceWorkflowOrchestrator:
             # Get current state
             state_data = await self.state_tracker.get_instance_state(hostname)
             if not state_data:
-                logger.warning(f"[WORKFLOW] No state found for {hostname}")
+                log_warning(f"[WORKFLOW] No state found for {hostname}", component="workflow")
                 continue
             
             # Check if HTTPS port was allocated
             https_port = state_data.get('details', {}).get('https_port')
             if https_port:
-                logger.info(f"[WORKFLOW] Starting HTTPS for {hostname} on port {https_port}")
+                log_info(f"[WORKFLOW] Starting HTTPS for {hostname} on port {https_port}", component="workflow")
                 
                 await self.publisher.publish_event("create_https_instance", {
                     "hostname": hostname,
@@ -663,7 +661,7 @@ class InstanceWorkflowOrchestrator:
                     "cert_name": cert_name
                 })
             else:
-                logger.warning(f"[WORKFLOW] No HTTPS port allocated for {hostname}")
+                log_warning(f"[WORKFLOW] No HTTPS port allocated for {hostname}", component="workflow")
     
     async def handle_https_instance_started(self, event: Dict):
         """
@@ -677,7 +675,7 @@ class InstanceWorkflowOrchestrator:
         hostname = event.get('hostname')
         https_port = event.get('port')
         
-        logger.info(f"[WORKFLOW] HTTPS instance started for {hostname} on port {https_port}")
+        log_info(f"[WORKFLOW] HTTPS instance started for {hostname} on port {https_port}", component="workflow")
         
         # Register HTTPS route if dispatcher available
         # Note: self.dispatcher is actually the UnifiedMultiInstanceServer
@@ -696,7 +694,7 @@ class InstanceWorkflowOrchestrator:
                 enable_https=True
             )
             
-            logger.info(f"[WORKFLOW] HTTPS route registered for {hostname}")
+            log_info(f"[WORKFLOW] HTTPS route registered for {hostname}", component="workflow")
         
         # Update state to fully running
         state_data = await self.state_tracker.get_instance_state(hostname)
@@ -716,7 +714,7 @@ class InstanceWorkflowOrchestrator:
             "https_port": https_port
         })
         
-        logger.info(f"[WORKFLOW] Instance {hostname} is fully operational")
+        log_info(f"[WORKFLOW] Instance {hostname} is fully operational", component="workflow")
     
     async def handle_instance_failed(self, event: Dict):
         """
@@ -731,7 +729,7 @@ class InstanceWorkflowOrchestrator:
         error = event.get('error')
         instance_type = event.get('instance_type')
         
-        logger.error(f"[WORKFLOW] Instance {instance_type} failed for {hostname}: {error}")
+        log_error(f"[WORKFLOW] Instance {instance_type} failed for {hostname}: {error}", component="workflow")
         
         # Update state
         await self.state_tracker.set_instance_state(
@@ -757,7 +755,7 @@ class InstanceWorkflowOrchestrator:
                         service=hostname
                     )
                     
-                    logger.info(f"[WORKFLOW] Released port {port} for failed instance {hostname}")
+                    log_info(f"[WORKFLOW] Released port {port} for failed instance {hostname}", component="workflow")
         
         # TODO: Clean up any partial resources (routes, instances, etc.)
     
@@ -771,7 +769,7 @@ class InstanceWorkflowOrchestrator:
         http_port = event.get('http_port')
         http_internal_port = event.get('http_internal_port', http_port)
         
-        logger.info(f"[WORKFLOW] Creating HTTP instance for {hostname} on port {http_port}")
+        log_info(f"[WORKFLOW] Creating HTTP instance for {hostname} on port {http_port}", component="workflow")
         
         if self.dispatcher:
             try:
@@ -786,17 +784,17 @@ class InstanceWorkflowOrchestrator:
                     "internal_port": http_internal_port
                 })
                 
-                logger.info(f"[WORKFLOW] HTTP instance created for {hostname}")
+                log_info(f"[WORKFLOW] HTTP instance created for {hostname}", component="workflow")
                 
             except Exception as e:
-                logger.error(f"[WORKFLOW] Failed to create HTTP instance for {hostname}: {e}")
+                log_error(f"[WORKFLOW] Failed to create HTTP instance for {hostname}: {e}", component="workflow")
                 await self.publisher.publish_instance_failed(
                     hostname=hostname,
                     instance_type="http",
                     error=str(e)
                 )
         else:
-            logger.error(f"[WORKFLOW] No dispatcher available to create HTTP instance for {hostname}")
+            log_error(f"[WORKFLOW] No dispatcher available to create HTTP instance for {hostname}", component="workflow")
     
     async def handle_create_https_instance(self, event: Dict):
         """
@@ -810,13 +808,13 @@ class InstanceWorkflowOrchestrator:
         cert_name = event.get('cert_name')
         force_recreate = event.get('force_recreate', False)
         
-        logger.info(f"[WORKFLOW] {'Recreating' if force_recreate else 'Creating'} HTTPS instance for {hostname} on port {https_port} with cert {cert_name}")
+        log_info(f"[WORKFLOW] {'Recreating' if force_recreate else 'Creating'} HTTPS instance for {hostname} on port {https_port} with cert {cert_name}", component="workflow")
         
         # Verify certificate exists and is active
         cert = await self._get_certificate(cert_name)
         cert_status = cert.get('status') if isinstance(cert, dict) else getattr(cert, 'status', None)
         if not cert or cert_status != 'active':
-            logger.error(f"[WORKFLOW] Certificate {cert_name} not ready for {hostname}")
+            log_error(f"[WORKFLOW] Certificate {cert_name} not ready for {hostname}", component="workflow")
             await self.publisher.publish_instance_failed(
                 hostname=hostname,
                 instance_type="https",
@@ -828,7 +826,7 @@ class InstanceWorkflowOrchestrator:
             try:
                 # If this is a certificate update, call update_ssl_context on dispatcher
                 if force_recreate and hasattr(self.dispatcher, 'update_ssl_context'):
-                    logger.info(f"[WORKFLOW] Calling update_ssl_context for {hostname}")
+                    log_info(f"[WORKFLOW] Calling update_ssl_context for {hostname}", component="workflow")
                     # Convert cert dict to object if needed
                     self.dispatcher.update_ssl_context(cert)
                 else:
@@ -845,17 +843,17 @@ class InstanceWorkflowOrchestrator:
                     "cert_name": cert_name
                 })
                 
-                logger.info(f"[WORKFLOW] HTTPS instance {'recreated' if force_recreate else 'created'} for {hostname}")
+                log_info(f"[WORKFLOW] HTTPS instance {'recreated' if force_recreate else 'created'} for {hostname}", component="workflow")
                 
             except Exception as e:
-                logger.error(f"[WORKFLOW] Failed to create HTTPS instance for {hostname}: {e}")
+                log_error(f"[WORKFLOW] Failed to create HTTPS instance for {hostname}: {e}", component="workflow")
                 await self.publisher.publish_instance_failed(
                     hostname=hostname,
                     instance_type="https",
                     error=str(e)
                 )
         else:
-            logger.error(f"[WORKFLOW] No dispatcher available to create HTTPS instance for {hostname}")
+            log_error(f"[WORKFLOW] No dispatcher available to create HTTPS instance for {hostname}", component="workflow")
     
     async def handle_certificate_renewal(self, event: Dict):
         """
@@ -866,7 +864,7 @@ class InstanceWorkflowOrchestrator:
         cert_name = event.get('cert_name')
         force = event.get('force', False)
         
-        logger.info(f"[WORKFLOW] Processing certificate renewal for {cert_name}")
+        log_info(f"[WORKFLOW] Processing certificate renewal for {cert_name}", component="workflow")
         
         if self.cert_manager:
             try:
@@ -874,16 +872,16 @@ class InstanceWorkflowOrchestrator:
                 await self.cert_manager.renew_certificate(cert_name, force)
                 
                 # The cert_manager will publish certificate_renewed when done
-                logger.info(f"[WORKFLOW] Certificate renewal initiated for {cert_name}")
+                log_info(f"[WORKFLOW] Certificate renewal initiated for {cert_name}", component="workflow")
                 
             except Exception as e:
-                logger.error(f"[WORKFLOW] Failed to start renewal for {cert_name}: {e}")
+                log_error(f"[WORKFLOW] Failed to start renewal for {cert_name}: {e}", component="workflow")
                 await self.publisher.publish_event("certificate_renewal_failed", {
                     "cert_name": cert_name,
                     "error": str(e)
                 })
         else:
-            logger.error(f"[WORKFLOW] No certificate manager available for renewal")
+            log_error(f"[WORKFLOW] No certificate manager available for renewal", component="workflow")
     
     async def handle_certificate_renewed(self, event: Dict):
         """
@@ -894,7 +892,7 @@ class InstanceWorkflowOrchestrator:
         cert_name = event.get('cert_name')
         domains = event.get('domains', [])
         
-        logger.info(f"[WORKFLOW] Certificate {cert_name} renewed, updating instances")
+        log_info(f"[WORKFLOW] Certificate {cert_name} renewed, updating instances", component="workflow")
         
         # Find all proxies using this certificate
         for hostname in domains:
@@ -903,7 +901,7 @@ class InstanceWorkflowOrchestrator:
                 # Trigger SSL context reload
                 if self.dispatcher:
                     await self.dispatcher.reload_ssl_context(hostname)
-                    logger.info(f"[WORKFLOW] Reloaded SSL context for {hostname}")
+                    log_info(f"[WORKFLOW] Reloaded SSL context for {hostname}", component="workflow")
         
         # Publish completion event
         await self.publisher.publish_event("certificate_renewal_complete", {
@@ -917,12 +915,12 @@ class InstanceWorkflowOrchestrator:
         """
         cert_name = event.get('cert_name')
         
-        logger.info(f"[WORKFLOW] Converting {cert_name} from staging to production")
+        log_info(f"[WORKFLOW] Converting {cert_name} from staging to production", component="workflow")
         
         # Get current certificate
         cert = await self._get_certificate(cert_name)
         if not cert:
-            logger.error(f"[WORKFLOW] Certificate {cert_name} not found")
+            log_error(f"[WORKFLOW] Certificate {cert_name} not found", component="workflow")
             return
         
         # Backup staging certificate
@@ -960,24 +958,24 @@ class InstanceWorkflowOrchestrator:
         cert_name = event.get('cert_name')
         action = event.get('action', 'reload_ssl_context')
         
-        logger.info(f"[WORKFLOW] Certificate updated for {hostname}, action: {action}")
+        log_info(f"[WORKFLOW] Certificate updated for {hostname}, action: {action}", component="workflow")
         
         if action == 'reload_ssl_context':
             # Get the updated certificate
             cert = await self._get_certificate(cert_name)
             if not cert:
-                logger.error(f"[WORKFLOW] Certificate {cert_name} not found for SSL context reload")
+                log_error(f"[WORKFLOW] Certificate {cert_name} not found for SSL context reload", component="workflow")
                 return
             
             cert_status = cert.get('status') if isinstance(cert, dict) else getattr(cert, 'status', None)
             if cert_status != 'active':
-                logger.warning(f"[WORKFLOW] Certificate {cert_name} not active, skipping SSL reload")
+                log_warning(f"[WORKFLOW] Certificate {cert_name} not active, skipping SSL reload", component="workflow")
                 return
             
             # Trigger instance recreation with new certificate
             # The dispatcher's update_ssl_context method requires direct access
             # So we'll trigger a create_https_instance event which will recreate with new cert
-            logger.info(f"[WORKFLOW] Triggering HTTPS instance recreation for {hostname} with updated cert {cert_name}")
+            log_info(f"[WORKFLOW] Triggering HTTPS instance recreation for {hostname} with updated cert {cert_name}", component="workflow")
             
             # Get current state to preserve port allocation
             state_data = await self.state_tracker.get_instance_state(hostname)
@@ -999,7 +997,7 @@ class InstanceWorkflowOrchestrator:
         cert_name = event.get('cert_name')
         domains = event.get('domains', [])
         
-        logger.info(f"[WORKFLOW] Production certificate {cert_name} ready, updating instances")
+        log_info(f"[WORKFLOW] Production certificate {cert_name} ready, updating instances", component="workflow")
         
         # Update all affected instances
         for hostname in domains:
@@ -1008,7 +1006,7 @@ class InstanceWorkflowOrchestrator:
                 # Reload SSL context with new production cert
                 if self.dispatcher:
                     await self.dispatcher.reload_ssl_context(hostname)
-                    logger.info(f"[WORKFLOW] Updated {hostname} to production certificate")
+                    log_info(f"[WORKFLOW] Updated {hostname} to production certificate", component="workflow")
         
         # Publish completion event
         await self.publisher.publish_event("staging_to_production_complete", {
@@ -1018,7 +1016,7 @@ class InstanceWorkflowOrchestrator:
     
     async def close(self):
         """Clean up resources."""
-        logger.info("[WORKFLOW] Shutting down workflow orchestrator")
+        log_info("[WORKFLOW] Shutting down workflow orchestrator", component="workflow")
         
         # Cancel consumer tasks
         if hasattr(self, 'consumer_task'):
@@ -1039,4 +1037,4 @@ class InstanceWorkflowOrchestrator:
         await self.state_tracker.close()
         await self.consumer.stop()
         
-        logger.info("[WORKFLOW] Workflow orchestrator shutdown complete")
+        log_info("[WORKFLOW] Workflow orchestrator shutdown complete", component="workflow")

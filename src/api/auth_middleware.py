@@ -1,11 +1,9 @@
 """Middleware for capturing full request paths and managing auth configuration."""
 
-import logging
 from typing import Optional
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class AuthConfigMiddleware(BaseHTTPMiddleware):
@@ -34,14 +32,13 @@ class AuthConfigMiddleware(BaseHTTPMiddleware):
         request.state.method = request.method
         
         # Log the captured path for debugging
-        logger.debug(
+        log_debug(
             f"AuthConfigMiddleware captured request",
-            extra={
-                "full_path": full_path,
-                "method": request.method,
-                "url": str(request.url),
-                "headers": dict(request.headers)
-            }
+            component="auth_middleware",
+            full_path=full_path,
+            method=request.method,
+            url=str(request.url),
+            headers=dict(request.headers)
         )
         
         # Continue with the request

@@ -4,13 +4,14 @@ This module provides a simple interface to the UnifiedAsyncLogger that can be
 used throughout the codebase without needing to manage the logger instance.
 
 Usage:
-    from src.shared.logger import log_info, log_error, log_debug, log_warning
+    from src.shared.logger import log_info, log_error, log_debug, log_warning, log_trace
     
     # Fire-and-forget logging - no await needed!
     log_info("Server started", port=8080)
     log_error("Connection failed", error=str(e))
     log_debug("Processing request", path="/api/data")
     log_warning("Rate limit approaching", current=95, max=100)
+    log_trace("Detailed internal state", data=complex_object)
 """
 
 import asyncio
@@ -116,6 +117,18 @@ def log_critical(message: str, component: Optional[str] = None, **kwargs):
         asyncio.create_task(_logger.critical(message, component=component, **kwargs))
 
 
+def log_trace(message: str, component: Optional[str] = None, **kwargs):
+    """Fire-and-forget trace log (very verbose debugging).
+    
+    Args:
+        message: Log message
+        component: Optional component name override
+        **kwargs: Additional structured data
+    """
+    if _logger:
+        asyncio.create_task(_logger.trace(message, component=component, **kwargs))
+
+
 # Specialized logging helpers
 
 def log_request(method: str, path: str, ip: str, proxy_hostname: str, trace_id: Optional[str] = None, **kwargs):
@@ -186,44 +199,3 @@ async def end_trace(trace_id: str, status: str = "success", **metadata):
     if _logger and trace_id:
         await _logger.end_trace(trace_id, status, **metadata)
 
-
-# Backwards compatibility wrapper for gradual migration
-class LoggerCompat:
-    """Compatibility wrapper for old logger interface.
-    
-    This provides a logger-like interface that uses the unified logger
-    underneath, allowing gradual migration of existing code.
-    """
-    
-    def __init__(self, component: str):
-        self.component = component
-    
-    def debug(self, message: str, *args, **kwargs):
-        log_debug(message % args if args else message, component=self.component, **kwargs)
-    
-    def info(self, message: str, *args, **kwargs):
-        log_info(message % args if args else message, component=self.component, **kwargs)
-    
-    def warning(self, message: str, *args, **kwargs):
-        log_warning(message % args if args else message, component=self.component, **kwargs)
-    
-    def error(self, message: str, *args, **kwargs):
-        log_error(message % args if args else message, component=self.component, **kwargs)
-    
-    def critical(self, message: str, *args, **kwargs):
-        log_critical(message % args if args else message, component=self.component, **kwargs)
-
-
-def get_logger_compat(name: str) -> LoggerCompat:
-    """Get a compatibility logger for gradual migration.
-    
-    This can be used as a drop-in replacement for logging.getLogger()
-    to ease migration to the unified logger.
-    
-    Args:
-        name: Logger name (used as component)
-        
-    Returns:
-        LoggerCompat instance that mimics standard logger interface
-    """
-    return LoggerCompat(name)

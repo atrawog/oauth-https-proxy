@@ -124,12 +124,10 @@ class Route(BaseModel):
         else:
             result = path.startswith(self.path_pattern)
         
-        # Log for debugging
-        # Use unified async logger for better performance
-        from ..shared.logger import get_logger_compat
-        logger = get_logger_compat(__name__)
+        # Log for debugging using unified async logger
         if self.path_pattern == "/.well-known/oauth-authorization-server":
-            logger.debug(f"Route match check: path='{path}' pattern='{self.path_pattern}' result={result}")
+            from ..shared.logger import log_trace
+            log_trace(f"Route match check: path='{path}' pattern='{self.path_pattern}' result={result}", component="route_manager")
         
         return result
     

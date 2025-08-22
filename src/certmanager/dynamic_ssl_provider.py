@@ -6,15 +6,13 @@ mechanism to select the appropriate certificate at connection time.
 """
 
 import ssl
-import logging
 import tempfile
 import os
 from typing import Dict, Optional, Any
 from datetime import datetime, timezone
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 from .models import Certificate
-
-logger = logging.getLogger(__name__)
 
 
 class DynamicSSLContextProvider:
@@ -35,7 +33,7 @@ class DynamicSSLContextProvider:
         # Initialize default context
         self._create_default_context()
         
-        logger.info("DynamicSSLContextProvider initialized")
+        log_info("DynamicSSLContextProvider initialized", component="ssl_provider")
     
     def _create_default_context(self) -> None:
         """Create a default SSL context with a self-signed certificate."""
@@ -45,7 +43,7 @@ class DynamicSSLContextProvider:
             
             if default_cert and default_cert.fullchain_pem and default_cert.private_key_pem:
                 self.default_context = self._create_context_from_cert(default_cert)
-                logger.info("Default SSL context created from stored self-signed certificate")
+                log_info("Default SSL context created from stored self-signed certificate", component="ssl_provider")
             else:
                 # Create a new self-signed certificate
                 from .https_server import HTTPSServer
@@ -57,11 +55,11 @@ class DynamicSSLContextProvider:
                 default_cert = self.cert_manager.get_certificate("localhost-self-signed")
                 if default_cert:
                     self.default_context = self._create_context_from_cert(default_cert)
-                    logger.info("Default SSL context created with new self-signed certificate")
+                    log_info("Default SSL context created with new self-signed certificate", component="ssl_provider")
                 else:
-                    logger.error("Failed to create default SSL context")
+                    log_error("Failed to create default SSL context", component="ssl_provider")
         except Exception as e:
-            logger.error(f"Error creating default SSL context: {e}")
+            log_error(f"Error creating default SSL context: {e}", component="ssl_provider")
             # Create a minimal context as fallback
             self.default_context = ssl.create_default_context(ssl.Purpose.CLIENT_AUTH)
     
@@ -115,7 +113,7 @@ class DynamicSSLContextProvider:
                     os.unlink(key_path)
                 del self._temp_files[cert_key]
             except Exception as e:
-                logger.warning(f"Error cleaning up temp files: {e}")
+                log_warning(f"Error cleaning up temp files: {e}", component="ssl_provider")
     
     def get_sni_callback(self):
         """Returns SNI callback for SSL context selection.
@@ -126,10 +124,10 @@ class DynamicSSLContextProvider:
         def sni_callback(ssl_socket, server_name: Optional[str], ssl_context):
             """SNI callback to select appropriate SSL context."""
             if not server_name:
-                logger.debug("No SNI provided, using default context")
+                log_debug("No SNI provided, using default context", component="ssl_provider")
                 return
             
-            logger.debug(f"SNI callback for domain: {server_name}")
+            log_debug(f"SNI callback for domain: {server_name}", component="ssl_provider")
             
             try:
                 # Check if we need to refresh the cached context
@@ -139,7 +137,7 @@ class DynamicSSLContextProvider:
                 # Get context from cache or create new one
                 if server_name in self.context_cache:
                     ssl_socket.context = self.context_cache[server_name]
-                    logger.debug(f"Using cached SSL context for {server_name}")
+                    log_trace(f"Using cached SSL context for {server_name}", component="ssl_provider")
                 else:
                     # Try to load certificate
                     cert = self._get_certificate_for_domain(server_name)
@@ -150,14 +148,14 @@ class DynamicSSLContextProvider:
                         self.context_cache[server_name] = context
                         self.cert_versions[server_name] = self._get_cert_version(cert)
                         ssl_socket.context = context
-                        logger.info(f"Created new SSL context for {server_name}")
+                        log_info(f"Created new SSL context for {server_name}", component="ssl_provider")
                     else:
                         # Use default context
                         ssl_socket.context = self.default_context
-                        logger.info(f"No certificate found for {server_name}, using default")
+                        log_info(f"No certificate found for {server_name}, using default", component="ssl_provider")
                         
             except Exception as e:
-                logger.error(f"Error in SNI callback for {server_name}: {e}")
+                log_error(f"Error in SNI callback for {server_name}: {e}", component="ssl_provider")
                 # Fall back to default context on error
                 ssl_socket.context = self.default_context
         
@@ -235,7 +233,7 @@ class DynamicSSLContextProvider:
         Args:
             domain: Domain to refresh
         """
-        logger.info(f"Refreshing SSL context for {domain}")
+        log_info(f"Refreshing SSL context for {domain}", component="ssl_provider")
         
         # Remove old context
         if domain in self.context_cache:
@@ -257,7 +255,7 @@ class DynamicSSLContextProvider:
         Args:
             domain: Domain to invalidate
         """
-        logger.info(f"Invalidating SSL context cache for {domain}")
+        log_info(f"Invalidating SSL context cache for {domain}", component="ssl_provider")
         self._refresh_context(domain)
     
     def invalidate_certificate(self, cert_name: str) -> None:
@@ -270,7 +268,7 @@ class DynamicSSLContextProvider:
         if cert:
             for domain in cert.domains:
                 self.invalidate_cache(domain)
-            logger.info(f"Invalidated SSL contexts for certificate {cert_name} domains: {cert.domains}")
+            log_info(f"Invalidated SSL contexts for certificate {cert_name} domains: {cert.domains}", component="ssl_provider")
     
     def get_cached_domains(self) -> list:
         """Get list of domains with cached SSL contexts.
@@ -282,7 +280,7 @@ class DynamicSSLContextProvider:
     
     def cleanup(self) -> None:
         """Clean up all temporary files and resources."""
-        logger.info("Cleaning up DynamicSSLContextProvider resources")
+        log_info("Cleaning up DynamicSSLContextProvider resources", component="ssl_provider")
         
         # Clean up all temp files
         for cert_key in list(self._temp_files.keys()):

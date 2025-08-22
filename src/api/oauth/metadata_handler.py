@@ -4,9 +4,9 @@ import logging
 from typing import Dict, Any, Optional
 from fastapi import Request, HTTPException
 from ...shared.client_ip import get_real_client_ip
-from ...shared.logging import get_logger
+from ...shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
-logger = get_logger(__name__)
+
 
 
 class OAuthMetadataHandler:
@@ -91,7 +91,7 @@ class OAuthMetadataHandler:
             try:
                 proxy_target = self.storage.get_proxy_target(hostname)
                 if proxy_target and proxy_target.oauth_server_override_defaults:
-                    logger.info(f"Using proxy-specific OAuth server config for {hostname}")
+                    log_info(f"Using proxy-specific OAuth server config for {hostname}")
                     
                     # Override with proxy-specific configuration
                     if proxy_target.oauth_server_issuer:
@@ -128,12 +128,12 @@ class OAuthMetadataHandler:
                     if proxy_target.oauth_server_custom_metadata:
                         metadata.update(proxy_target.oauth_server_custom_metadata)
                     
-                    logger.debug(f"OAuth server metadata customized for {hostname}")
+                    log_debug(f"OAuth server metadata customized for {hostname}")
             except Exception as e:
-                logger.error(f"Failed to get proxy-specific OAuth config for {hostname}: {e}")
+                log_error(f"Failed to get proxy-specific OAuth config for {hostname}: {e}")
                 # Fall back to defaults on error
         
-        logger.info(
+        log_info(
             "OAuth authorization server metadata requested",
             ip=client_ip,
             hostname=hostname,
@@ -157,7 +157,7 @@ class OAuthMetadataHandler:
         """
         client_ip = get_real_client_ip(request)
         
-        logger.info(f"Protected resource metadata requested for {hostname} from {client_ip}")
+        log_info(f"Protected resource metadata requested for {hostname} from {client_ip}")
         
         if not self.storage:
             raise HTTPException(500, "Storage not available")
@@ -165,12 +165,12 @@ class OAuthMetadataHandler:
         # Get proxy target
         target = self.storage.get_proxy_target(hostname)
         if not target:
-            logger.error(f"No proxy target configured for {hostname}")
+            log_error(f"No proxy target configured for {hostname}")
             raise HTTPException(404, f"No proxy target configured for {hostname}")
         
         # Check if protected resource metadata is configured
         if not target.resource_endpoint:
-            logger.warning(f"Protected resource metadata not configured for {hostname}")
+            log_warning(f"Protected resource metadata not configured for {hostname}")
             raise HTTPException(404, "Protected resource metadata not configured for this proxy")
         
         # Build resource URI
@@ -214,6 +214,6 @@ class OAuthMetadataHandler:
         if target.resource_custom_metadata:
             metadata.update(target.resource_custom_metadata)
         
-        logger.info(f"Protected resource metadata served for {hostname}")
+        log_info(f"Protected resource metadata served for {hostname}")
         
         return metadata

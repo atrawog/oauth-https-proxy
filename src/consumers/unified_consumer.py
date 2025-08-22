@@ -7,13 +7,11 @@ semantics using consumer groups.
 
 import asyncio
 import json
-import logging
 import time
 from typing import Any, Callable, Dict, List, Optional, Set
 from abc import ABC, abstractmethod
 import redis.asyncio as redis_async
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class UnifiedStreamConsumer(ABC):
@@ -62,7 +60,7 @@ class UnifiedStreamConsumer(ABC):
             handler: Async function to handle matching events
         """
         self.handlers[pattern] = handler
-        logger.info(f"Registered handler for pattern: {pattern}")
+        log_info(f"Registered handler for pattern: {pattern}", component="stream_consumer")
     
     def add_stream(self, stream_key: str):
         """Add a stream to consume from.
@@ -71,7 +69,7 @@ class UnifiedStreamConsumer(ABC):
             stream_key: Redis stream key
         """
         self.streams.add(stream_key)
-        logger.info(f"Added stream: {stream_key}")
+        log_info(f"Added stream: {stream_key}", component="stream_consumer")
     
     async def initialize(self):
         """Initialize consumer groups for all streams."""
@@ -84,18 +82,18 @@ class UnifiedStreamConsumer(ABC):
                     id='0',  # Start from beginning
                     mkstream=True  # Create stream if it doesn't exist
                 )
-                logger.info(f"Created consumer group {self.group_name} for stream {stream}")
+                log_info(f"Created consumer group {self.group_name} for stream {stream}", component="stream_consumer")
             except redis_async.ResponseError as e:
                 if "BUSYGROUP" in str(e):
                     # Group already exists
-                    logger.debug(f"Consumer group {self.group_name} already exists for {stream}")
+                    log_debug(f"Consumer group {self.group_name} already exists for {stream}", component="stream_consumer")
                 else:
                     raise
     
     async def start(self):
         """Start consuming from streams."""
         if self.running:
-            logger.warning("Consumer already running")
+            log_warning("Consumer already running", component="stream_consumer")
             return
         
         self.running = True
@@ -109,7 +107,7 @@ class UnifiedStreamConsumer(ABC):
         # Start pending message processor
         self.pending_task = asyncio.create_task(self._process_pending_loop())
         
-        logger.info(f"Started consumer {self.consumer_name} in group {self.group_name}")
+        log_info(f"Started consumer {self.consumer_name} in group {self.group_name}", component="stream_consumer")
     
     async def stop(self):
         """Stop consuming and clean up."""
@@ -130,7 +128,7 @@ class UnifiedStreamConsumer(ABC):
             except asyncio.CancelledError:
                 pass
         
-        logger.info(f"Stopped consumer {self.consumer_name}")
+        log_info(f"Stopped consumer {self.consumer_name}", component="stream_consumer")
     
     async def _consume_loop(self):
         """Main consumption loop."""
@@ -164,14 +162,14 @@ class UnifiedStreamConsumer(ABC):
                             self.last_activity = time.time()
                             
                         except Exception as e:
-                            logger.error(f"Failed to process message {msg_id}: {e}")
+                            log_error(f"Failed to process message {msg_id}: {e}", component="stream_consumer", error=e)
                             self.messages_failed += 1
                             # Message remains unacknowledged for retry
                 
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Consumer loop error: {e}")
+                log_error(f"Consumer loop error: {e}", component="stream_consumer", error=e)
                 await asyncio.sleep(1)  # Brief pause before retry
     
     async def _process_pending_loop(self):
@@ -187,7 +185,7 @@ class UnifiedStreamConsumer(ABC):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Pending processor error: {e}")
+                log_error(f"Pending processor error: {e}", component="stream_consumer", error=e)
     
     async def _claim_pending_messages(self, stream: str):
         """Claim and process pending messages from other consumers.
@@ -238,15 +236,15 @@ class UnifiedStreamConsumer(ABC):
                     await self._process_message(stream, msg_id, parsed_data)
                     await self.redis.xack(stream, self.group_name, msg_id)
                     
-                    logger.info(f"Successfully processed pending message {msg_id}")
+                    log_info(f"Successfully processed pending message {msg_id}", component="stream_consumer")
                     self.messages_processed += 1
                     
                 except Exception as e:
-                    logger.error(f"Failed to process claimed message {msg_id}: {e}")
+                    log_error(f"Failed to process claimed message {msg_id}: {e}", component="stream_consumer", error=e)
                     self.messages_failed += 1
                     
         except Exception as e:
-            logger.error(f"Failed to claim pending messages: {e}")
+            log_error(f"Failed to claim pending messages: {e}", component="stream_consumer", error=e)
     
     def _parse_message(self, data: dict) -> dict:
         """Parse message data from Redis.
@@ -297,7 +295,7 @@ class UnifiedStreamConsumer(ABC):
         event_type = data.get('event_type') or data.get('type') or data.get('log_type')
         
         if not event_type:
-            logger.warning(f"Message {msg_id} has no event type")
+            log_warning(f"Message {msg_id} has no event type", component="stream_consumer")
             return
         
         # Find matching handler
@@ -364,7 +362,7 @@ class UnifiedStreamConsumer(ABC):
                     lag[stream] = 0
                     
             except Exception as e:
-                logger.error(f"Failed to get lag for {stream}: {e}")
+                log_error(f"Failed to get lag for {stream}: {e}", component="stream_consumer", error=e)
                 lag[stream] = -1
         
         return lag

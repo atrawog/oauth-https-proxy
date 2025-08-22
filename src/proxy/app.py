@@ -12,12 +12,10 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
 from .async_handler import EnhancedAsyncProxyHandler
-from ..shared.logger import get_logger_compat
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
 from ..api.oauth.config import Settings
-
-logger = get_logger_compat(__name__)
 
 
 class ProxyOnlyApp:
@@ -36,18 +34,11 @@ class ProxyOnlyApp:
         self.redis_clients_initialized = False
         self.init_lock = asyncio.Lock()
         
-        # Always configure Redis logging for proxy instances
-        # Each Hypercorn instance needs its own Redis handler
-        # Configure Redis logging for this instance
-        from ..shared.logging import configure_logging
-        
+        # No longer need to configure Redis logging - unified logger handles it
         if storage and storage.redis_client:
-            # Always create new Redis logging configuration
-            self.logging_components = configure_logging(storage.redis_client)
-            logger.info("Proxy instance configured with dedicated Redis logging")
+            log_info("Proxy instance initialized with Redis storage", component="proxy_app")
         else:
-            self.logging_components = None
-            logger.warning("Proxy instance running without Redis logging - no storage/redis_client")
+            log_warning("Proxy instance running without Redis storage", component="proxy_app")
             
         # Store async_storage for proxy handler
         if async_storage:
@@ -90,24 +81,17 @@ class ProxyOnlyApp:
     
     async def startup(self):
         """Minimal startup - no lifespan complexity."""
-        logger.info("Proxy-only instance starting")
+        log_info("Proxy-only instance starting", component="proxy_app")
         
         # Initialize components eagerly if called
         await self._ensure_initialized()
         
-        # Start async Redis log handler only if we created it
-        if self.logging_components and self.logging_components.get("redis_handler"):
-            await self.logging_components["redis_handler"].start()
-            logger.info("Async Redis log handler started for proxy instance")
+        # No longer need to manage Redis log handler - unified logger handles it
+        log_info("Proxy instance startup complete", component="proxy_app")
     
     async def shutdown(self):
         """Clean shutdown of instance resources only."""
-        logger.info("Proxy-only instance shutting down")
-        
-        # Stop async Redis log handler only if we created it
-        if self.logging_components and self.logging_components.get("redis_handler"):
-            await self.logging_components["redis_handler"].stop()
-            logger.info("Async Redis log handler stopped for proxy instance")
+        log_info("Proxy-only instance shutting down", component="proxy_app")
             
         # Close proxy handler (includes httpx client) if it was created
         if self.proxy_handler:
@@ -116,12 +100,12 @@ class ProxyOnlyApp:
         # Close Redis clients
         if self.redis_clients:
             await self.redis_clients.close()
-            logger.info("Redis clients closed for proxy instance")
+            log_info("Redis clients closed for proxy instance", component="proxy_app")
         
         # Close async storage if we created it
         if hasattr(self, 'handler_storage') and hasattr(self.handler_storage, 'close'):
             await self.handler_storage.close()
-            logger.info("Async storage closed for proxy instance")
+            log_info("Async storage closed for proxy instance", component="proxy_app")
     
     async def _ensure_initialized(self):
         """Ensure the proxy handler is initialized."""
@@ -138,18 +122,18 @@ class ProxyOnlyApp:
                 if not self.redis_clients_initialized:
                     await self.redis_clients.initialize()
                     self.redis_clients_initialized = True
-                    logger.info("Redis clients initialized on first request")
+                    log_info("Redis clients initialized on first request", component="proxy_app")
                 
                 # Initialize async storage if needed
                 if hasattr(self.handler_storage, 'initialize'):
                     await self.handler_storage.initialize()
-                    logger.info("Async storage initialized on first request")
+                    log_info("Async storage initialized on first request", component="proxy_app")
                 
                 # Create the proxy handler
                 self.proxy_handler = EnhancedAsyncProxyHandler(self.handler_storage, self.redis_clients)
-                logger.info("Proxy handler created on first request")
+                log_info("Proxy handler created on first request", component="proxy_app")
             except Exception as e:
-                logger.error(f"Failed to initialize proxy handler: {e}")
+                log_error(f"Failed to initialize proxy handler: {e}", component="proxy_app")
                 import traceback
                 traceback.print_exc()
                 self.proxy_handler = None
@@ -166,7 +150,7 @@ class ProxyOnlyApp:
             metadata = await self.metadata_handler.get_authorization_server_metadata(request, hostname)
             return JSONResponse(metadata)
         except Exception as e:
-            logger.error(f"OAuth metadata error: {e}")
+            log_error(f"OAuth metadata error: {e}", component="proxy_app")
             return JSONResponse({"error": str(e)}, status_code=500)
     
     async def handle_proxy(self, request: Request) -> Response:
@@ -188,7 +172,7 @@ class ProxyOnlyApp:
                 status_code=e.response.status_code
             )
         except Exception as e:
-            logger.error(f"Proxy error: {e}")
+            log_error(f"Proxy error: {e}", component="proxy_app")
             return PlainTextResponse(
                 f"Proxy error: {str(e)}",
                 status_code=502

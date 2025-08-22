@@ -2,13 +2,11 @@
 
 import asyncio
 import json
-import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 import redis.asyncio as redis_async
 from redis.exceptions import ResponseError
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class RedisStreamConsumer:
@@ -40,7 +38,7 @@ class RedisStreamConsumer:
             
             # Test connection
             await self.redis.ping()
-            logger.info(f"[STREAM_CONSUMER] Connected to Redis for stream consumption")
+            log_info(f"[STREAM_CONSUMER] Connected to Redis for stream consumption", component="stream_consumer")
             
             # Create consumer group (ignore if exists)
             try:
@@ -50,15 +48,15 @@ class RedisStreamConsumer:
                     id="0",  # Start from beginning
                     mkstream=True  # Create stream if it doesn't exist
                 )
-                logger.info(f"[STREAM_CONSUMER] Created consumer group: {self.group_name}")
+                log_info(f"[STREAM_CONSUMER] Created consumer group: {self.group_name}", component="stream_consumer")
             except ResponseError as e:
                 if "BUSYGROUP" in str(e):
-                    logger.info(f"[STREAM_CONSUMER] Consumer group {self.group_name} already exists")
+                    log_info(f"[STREAM_CONSUMER] Consumer group {self.group_name} already exists", component="stream_consumer")
                 else:
                     raise
                     
         except Exception as e:
-            logger.error(f"[STREAM_CONSUMER] Failed to initialize: {e}", exc_info=True)
+            log_error(f"[STREAM_CONSUMER] Failed to initialize: {e}", component="stream_consumer", error=e)
             raise
     
     async def consume_events(self, handler: Callable[[Dict[str, Any]], Any]):
@@ -72,7 +70,7 @@ class RedisStreamConsumer:
             await self.initialize()
         
         self.running = True
-        logger.info(f"[STREAM_CONSUMER] Starting event consumption as {self.consumer_name}")
+        log_info(f"[STREAM_CONSUMER] Starting event consumption as {self.consumer_name}", component="stream_consumer")
         
         while self.running:
             try:
@@ -97,7 +95,7 @@ class RedisStreamConsumer:
                             event = self._parse_event(data)
                             event['_message_id'] = message_id  # Add message ID for tracking
                             
-                            logger.info(f"[STREAM_CONSUMER] Processing event {message_id}: {event.get('event_type', event.get('type', 'unknown'))} for {event.get('hostname', event.get('cert_name', 'N/A'))}")
+                            log_trace(f"[STREAM_CONSUMER] Processing event {message_id}: {event.get('event_type', event.get('type', 'unknown'))} for {event.get('hostname', event.get('cert_name', 'N/A'))}", component="stream_consumer")
                             
                             # Process event
                             await handler(event)
@@ -109,18 +107,18 @@ class RedisStreamConsumer:
                                 message_id
                             )
                             
-                            logger.info(f"[STREAM_CONSUMER] Successfully processed event {message_id}")
+                            log_trace(f"[STREAM_CONSUMER] Successfully processed event {message_id}", component="stream_consumer")
                             
                         except Exception as e:
-                            logger.error(f"[STREAM_CONSUMER] Failed to process event {message_id}: {e}", exc_info=True)
+                            log_error(f"[STREAM_CONSUMER] Failed to process event {message_id}: {e}", component="stream_consumer", error=e)
                             # Message stays in PEL for retry
                             # Could implement retry counter here
                             
             except asyncio.CancelledError:
-                logger.info("[STREAM_CONSUMER] Consumption cancelled")
+                log_info("[STREAM_CONSUMER] Consumption cancelled", component="stream_consumer")
                 break
             except Exception as e:
-                logger.error(f"[STREAM_CONSUMER] Consumer error: {e}", exc_info=True)
+                log_error(f"[STREAM_CONSUMER] Consumer error: {e}", component="stream_consumer", error=e)
                 await asyncio.sleep(5)  # Wait before retry
     
     async def claim_pending_messages(self, idle_time_ms: int = 60000):
@@ -133,7 +131,7 @@ class RedisStreamConsumer:
         if not self.redis:
             await self.initialize()
         
-        logger.info(f"[STREAM_CONSUMER] Starting pending message handler")
+        log_info(f"[STREAM_CONSUMER] Starting pending message handler", component="stream_consumer")
         
         while self.running:
             try:
@@ -144,7 +142,7 @@ class RedisStreamConsumer:
                 )
                 
                 if pending_info and pending_info['pending'] > 0:
-                    logger.debug(f"[STREAM_CONSUMER] Found {pending_info['pending']} pending messages")
+                    log_trace(f"[STREAM_CONSUMER] Found {pending_info['pending']} pending messages", component="stream_consumer")
                     
                     # Get detailed pending messages
                     pending_messages = await self.redis.xpending_range(
@@ -169,18 +167,18 @@ class RedisStreamConsumer:
                                 )
                                 
                                 if claimed:
-                                    logger.info(f"[STREAM_CONSUMER] Claimed pending message: {msg['message_id']} from {msg['consumer']}")
+                                    log_trace(f"[STREAM_CONSUMER] Claimed pending message: {msg['message_id']} from {msg['consumer']}", component="stream_consumer")
                                     
                             except Exception as e:
-                                logger.error(f"[STREAM_CONSUMER] Failed to claim message {msg['message_id']}: {e}")
+                                log_error(f"[STREAM_CONSUMER] Failed to claim message {msg['message_id']}: {e}", component="stream_consumer", error=e)
                 
                 await asyncio.sleep(30)  # Check every 30 seconds
                 
             except asyncio.CancelledError:
-                logger.info("[STREAM_CONSUMER] Pending handler cancelled")
+                log_info("[STREAM_CONSUMER] Pending handler cancelled", component="stream_consumer")
                 break
             except Exception as e:
-                logger.error(f"[STREAM_CONSUMER] Pending handler error: {e}", exc_info=True)
+                log_error(f"[STREAM_CONSUMER] Pending handler error: {e}", component="stream_consumer", error=e)
                 await asyncio.sleep(60)  # Wait longer on error
     
     def _parse_event(self, data: Dict[str, str]) -> Dict[str, Any]:
@@ -243,12 +241,12 @@ class RedisStreamConsumer:
             return info
             
         except Exception as e:
-            logger.error(f"[STREAM_CONSUMER] Failed to get stream info: {e}")
+            log_error(f"[STREAM_CONSUMER] Failed to get stream info: {e}", component="stream_consumer", error=e)
             return {}
     
     async def stop(self):
         """Stop the consumer gracefully."""
-        logger.info(f"[STREAM_CONSUMER] Stopping consumer {self.consumer_name}")
+        log_info(f"[STREAM_CONSUMER] Stopping consumer {self.consumer_name}", component="stream_consumer")
         self.running = False
         
         if self.redis:

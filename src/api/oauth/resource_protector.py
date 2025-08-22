@@ -37,12 +37,12 @@ class JWTBearerTokenValidator(BearerTokenValidator):
             Token claims if valid, None if invalid
 
         """
-        from ...shared.logging import get_logger
-        logger = get_logger(__name__)
+        from ...shared.logger import log_debug, log_info, log_warning, log_error, log_trace
+        
         
         token_preview = token_string[:20] + "..." if len(token_string) > 20 else token_string
         
-        logger.debug(
+        log_debug(
             "Starting JWT token authentication - DETAILED VALIDATION",
             token_preview=token_preview,
             jwt_algorithm=self.settings.jwt_algorithm,
@@ -56,7 +56,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
             # Don't validate issuer here - we'll check it matches our domain pattern after decode
             
             if self.settings.jwt_algorithm == "RS256":
-                logger.debug(
+                log_debug(
                     "Using RS256 algorithm for token validation",
                     token_preview=token_preview,
                     public_key_available=self.key_manager.public_key is not None
@@ -72,7 +72,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                     },
                 )
             else:
-                logger.debug(
+                log_debug(
                     "Using HS256 fallback algorithm for token validation",
                     token_preview=token_preview,
                     has_jwt_secret=bool(self.settings.jwt_secret)
@@ -101,7 +101,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
             )
             
             if not valid_issuer:
-                logger.warning(
+                log_warning(
                     "JWT token has invalid issuer",
                     token_issuer=issuer,
                     expected_pattern=f"*.{self.settings.base_domain}",
@@ -109,7 +109,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                 )
                 raise ValueError(f"Invalid issuer: {issuer}")
 
-            logger.debug(
+            log_debug(
                 "JWT token decoded successfully - CLAIMS EXTRACTED",
                 token_preview=token_preview,
                 claims_keys=list(claims.keys()),
@@ -126,14 +126,14 @@ class JWTBearerTokenValidator(BearerTokenValidator):
 
             # Validate claims
             claims.validate()
-            logger.debug("JWT claims validation passed", token_jti=claims.get("jti"))
+            log_debug("JWT claims validation passed", token_jti=claims.get("jti"))
 
             # Check if token exists in Redis (not revoked)
             jti = claims["jti"]
             token_key = f"oauth:token:{jti}"
             token_data = await self.redis_client.get(token_key)
 
-            logger.debug(
+            log_debug(
                 "Checking token revocation status in Redis",
                 token_jti=jti,
                 redis_key=token_key,
@@ -143,7 +143,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
 
             if not token_data:
                 # Token has been revoked or doesn't exist
-                logger.warning(
+                log_warning(
                     "JWT token validation failed - token revoked or not found in Redis",
                     token_jti=jti,
                     token_preview=token_preview,
@@ -152,7 +152,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
                 )
                 return None
 
-            logger.info(
+            log_info(
                 "JWT token authentication successful - TOKEN VALIDATED",
                 token_jti=jti,
                 token_sub=claims.get("sub"),
@@ -169,7 +169,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
 
         except JoseError as e:
             # Token validation failed
-            logger.error(
+            log_error(
                 "JWT validation failed - JOSE error",
                 token_preview=token_preview,
                 error_type=type(e).__name__,
@@ -180,7 +180,7 @@ class JWTBearerTokenValidator(BearerTokenValidator):
             )
             return None
         except Exception as e:
-            logger.error(
+            log_error(
                 "JWT validation failed - unexpected error",
                 token_preview=token_preview,
                 error_type=type(e).__name__,

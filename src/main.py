@@ -1,13 +1,11 @@
 """Main entry point for OAuth HTTPS Proxy."""
 
 import asyncio
-import logging
 import sys
 from typing import Optional
 
 from .shared.config import Config, get_config
-from .shared.utils import setup_logging
-# Legacy logging imports removed - using UnifiedAsyncLogger now
+from .shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 from .storage import RedisStorage
 from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
@@ -19,7 +17,7 @@ from .orchestration.instance_workflow import InstanceWorkflowOrchestrator
 from .docker.async_manager import AsyncDockerManager
 from .certmanager.async_manager import AsyncCertificateManager
 
-logger = logging.getLogger(__name__)
+# Using unified async logger
 
 # Global instances
 manager: Optional[CertificateManager] = None
@@ -41,10 +39,10 @@ async def initialize_components(config: Config) -> tuple:
     
     # Initialize async components
     async_components = await init_async_components(redis_url)
-    logger.info("Async components initialized")
+    log_info("Async components initialized", component="main")
     
     # Logging is now handled by UnifiedAsyncLogger initialized in async_components
-    logger.info("Using UnifiedAsyncLogger for all logging")
+    log_info("Using UnifiedAsyncLogger for all logging", component="main")
     
     # Initialize certificate manager (sync for now, will be replaced by async)
     manager = CertificateManager(storage)
@@ -60,7 +58,7 @@ async def initialize_components(config: Config) -> tuple:
     proxy_handler = ProxyHandler(storage)
     
     # Initialize workflow orchestrator
-    logger.info("Creating InstanceWorkflowOrchestrator...")
+    log_info("Creating InstanceWorkflowOrchestrator...", component="main")
     workflow_orchestrator = InstanceWorkflowOrchestrator(
         redis_url=redis_url,
         storage=storage,
@@ -68,7 +66,7 @@ async def initialize_components(config: Config) -> tuple:
         dispatcher=None,  # Will be set later when dispatcher is created
         async_components=async_components
     )
-    logger.info(f"InstanceWorkflowOrchestrator created: {workflow_orchestrator}")
+    log_info(f"InstanceWorkflowOrchestrator created: {workflow_orchestrator}", component="main")
     
     # Initialize default routes
     storage.initialize_default_routes()
@@ -78,7 +76,7 @@ async def initialize_components(config: Config) -> tuple:
     
     # Note: Flexible auth system is initialized directly in run_server()
     
-    logger.info("All components initialized successfully")
+    log_info("All components initialized successfully", component="main")
     
     return storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server
 
@@ -102,9 +100,8 @@ def create_asgi_app():
         config = get_config()
         
         # Setup logging
-        setup_logging(config.LOG_LEVEL)
-        
-        logger.info("Starting OAuth HTTPS Proxy (ASGI mode)...")
+
+        log_info("Starting OAuth HTTPS Proxy (ASGI mode)", component="main")
         
         # Initialize all components
         storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
@@ -132,7 +129,7 @@ def create_asgi_app():
         
         # Use AsyncLogStorage for request logging (already initialized in async_components)
         # The middleware will access it via app.state.async_storage
-        logger.info("Using AsyncLogStorage for request logging via Redis Streams")
+        log_info("Using AsyncLogStorage for request logging via Redis Streams", component="main")
         
         # Initialize auth service
         from src.auth import FlexibleAuthService
@@ -151,30 +148,30 @@ def create_asgi_app():
                 load_defaults=True,
                 migrate=True
             )
-            logger.info("✓ Flexible auth system initialized")
+            log_info("✓ Flexible auth system initialized", component="main")
         except Exception as e:
-            logger.error(f"Failed to initialize auth: {e}")
+            log_error(f"Failed to initialize auth: {e}", component="main")
         
         # Register all routers using unified registry
-        logger.info("Registering all routers with Unified Router Registry...")
+        log_info("Registering all routers with Unified Router Registry...", component="main")
         try:
             from .api.routers.registry import register_all_routers
             register_all_routers(app)
-            logger.info("✓ All routers registered successfully")
+            log_info("✓ All routers registered successfully", component="main")
         except Exception as e:
-            logger.error(f"✗ Router registration failed: {e}")
+            log_error(f"✗ Router registration failed: {e}", component="main")
             raise
         
         # Start scheduler
         scheduler.start()
         
         # For ASGI mode, we don't start the full server here
-        logger.info("ASGI app initialized and ready")
+        log_info("ASGI app initialized and ready", component="main")
         
         yield
         
         # Shutdown
-        logger.info("Shutting down OAuth HTTPS Proxy...")
+        log_info("Shutting down OAuth HTTPS Proxy...", component="main")
         scheduler.stop()
         if proxy_handler:
             await proxy_handler.close()
@@ -204,12 +201,12 @@ async def run_server(config: Config) -> None:
     storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
     
     # Create FastAPI app
-    logger.info("Creating FastAPI app...")
+    log_info("Creating FastAPI app...", component="main")
     app = create_api_app(storage, manager, scheduler)
-    logger.info("FastAPI app created successfully")
+    log_info("FastAPI app created successfully", component="main")
     
     # ========== ATTACH COMPONENTS DIRECTLY ==========
-    logger.info("Attaching async components to app state...")
+    log_info("Attaching async components to app state...", component="main")
     
     # Core components needed by routers
     app.state.async_components = async_components
@@ -223,7 +220,7 @@ async def run_server(config: Config) -> None:
     
     # Use AsyncLogStorage for request logging (already initialized in async_components)
     # The middleware will access it via app.state.async_storage
-    logger.info("Using AsyncLogStorage for request logging via Redis Streams")
+    log_info("Using AsyncLogStorage for request logging via Redis Streams", component="main")
     
     # Initialize auth service
     from src.auth import FlexibleAuthService
@@ -243,26 +240,26 @@ async def run_server(config: Config) -> None:
                 load_defaults=True,
                 migrate=True
             )
-            logger.info("✓ Flexible auth system initialized")
+            log_info("✓ Flexible auth system initialized", component="main")
         except Exception as e:
-            logger.error(f"Failed to initialize auth: {e}")
+            log_error(f"Failed to initialize auth: {e}", component="main")
     
     asyncio.create_task(init_auth())
     
-    logger.info("✓ All components attached to app state")
+    log_info("✓ All components attached to app state", component="main")
     
     # ========== REGISTER ALL ROUTERS USING UNIFIED REGISTRY ==========
-    logger.info("=" * 60)
-    logger.info("STARTING UNIFIED ROUTER REGISTRATION")
-    logger.info("=" * 60)
-    logger.info("Starting router registration with Unified Router Registry...")
+    log_info("=" * 60, component="main")
+    log_info("STARTING UNIFIED ROUTER REGISTRATION", component="main")
+    log_info("=" * 60, component="main")
+    log_info("Starting router registration with Unified Router Registry...", component="main")
     try:
         register_all_routers(app)
-        logger.info("✓ All routers registered successfully via Unified Router Registry")
+        log_info("✓ All routers registered successfully via Unified Router Registry", component="main")
     except Exception as e:
-        logger.error(f"✗ Router registration failed: {e}")
+        log_error(f"✗ Router registration failed: {e}", component="main")
         import traceback
-        logger.error(f"Traceback: {traceback.format_exc()}")
+        log_error(f"Traceback: {traceback.format_exc()}", component="main")
         raise RuntimeError(f"Failed to register routers: {e}")
     
     # Start scheduler
@@ -279,7 +276,7 @@ async def run_server(config: Config) -> None:
         api_config.bind = ["0.0.0.0:9000"]
         api_config.loglevel = config.LOG_LEVEL.upper()
         
-        logger.info("Starting FastAPI app on port 9000 (no PROXY protocol)")
+        log_info("Starting FastAPI app on port 9000 (no PROXY protocol)", component="main")
         api_task = asyncio.create_task(serve(app, api_config))
         
         # Port 9001 - internal Hypercorn without PROXY protocol
@@ -287,11 +284,11 @@ async def run_server(config: Config) -> None:
         internal_config.bind = ["127.0.0.1:9001"]
         internal_config.loglevel = config.LOG_LEVEL.upper()
         
-        logger.info("Starting internal FastAPI app on port 9001")
+        log_info("Starting internal FastAPI app on port 9001", component="main")
         internal_task = asyncio.create_task(serve(app, internal_config))
         
         # Port 10001 - PROXY protocol handler forwarding to 9001
-        logger.info("Starting PROXY protocol handler on port 10001 -> 9001")
+        log_info("Starting PROXY protocol handler on port 10001 -> 9001", component="main")
         proxy_server = await create_proxy_protocol_server(
             backend_host="127.0.0.1",
             backend_port=9001,
@@ -302,7 +299,7 @@ async def run_server(config: Config) -> None:
         proxy_task = asyncio.create_task(proxy_server.serve_forever())
         
         # Run unified multi-instance server for proxy domains
-        logger.info(f"Creating UnifiedMultiInstanceServer with https_server={https_server is not None}")
+        log_info(f"Creating UnifiedMultiInstanceServer with https_server={https_server is not None}", component="main")
         try:
             unified_server = UnifiedMultiInstanceServer(
                 https_server_instance=https_server,
@@ -310,32 +307,32 @@ async def run_server(config: Config) -> None:
                 host=config.SERVER_HOST,
                 async_components=async_components
             )
-            logger.info("UnifiedMultiInstanceServer created successfully")
+            log_info("UnifiedMultiInstanceServer created successfully", component="main")
         except Exception as e:
-            logger.error(f"Failed to create UnifiedMultiInstanceServer: {e}")
+            log_error(f"Failed to create UnifiedMultiInstanceServer: {e}", component="main")
             import traceback
             traceback.print_exc()
             raise
         
         # Set server reference in workflow orchestrator
         workflow_orchestrator.dispatcher = unified_server
-        logger.info("Workflow orchestrator linked to unified server")
+        log_info("Workflow orchestrator linked to unified server", component="main")
         
         # Start workflow orchestrator AFTER dispatcher is set
-        logger.info("Starting workflow orchestrator...")
+        log_info("Starting workflow orchestrator...", component="main")
         await workflow_orchestrator.start()
-        logger.info("Workflow orchestrator started successfully")
+        log_info("Workflow orchestrator started successfully", component="main")
         
-        logger.info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)")
-        logger.info("Each domain will have its own dedicated Hypercorn instance")
+        log_info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)", component="main")
+        log_info("Each domain will have its own dedicated Hypercorn instance", component="main")
         
         # Create unified server task
-        logger.info("Creating unified_server.run() task")
+        log_info("Creating unified_server.run() task", component="main")
         try:
             unified_task = asyncio.create_task(unified_server.run())
-            logger.info("unified_server.run() task created")
+            log_info("unified_server.run() task created", component="main")
         except Exception as e:
-            logger.error(f"Failed to create unified_server.run() task: {e}")
+            log_error(f"Failed to create unified_server.run() task: {e}", component="main")
             import traceback
             traceback.print_exc()
             raise
@@ -355,11 +352,11 @@ async def run_server(config: Config) -> None:
         
         # Stop workflow orchestrator
         await workflow_orchestrator.close()
-        logger.info("Workflow orchestrator stopped")
+        log_info("Workflow orchestrator stopped", component="main")
         
         # Shutdown async components
         await async_components.shutdown()
-        logger.info("Async components shut down")
+        log_info("Async components shut down", component="main")
 
 
 def main() -> None:
@@ -373,22 +370,21 @@ def main() -> None:
         config = get_config()
         
         # Setup logging
-        setup_logging(config.LOG_LEVEL)
-        
-        logger.info("=" * 60)
-        logger.info("OAUTH HTTPS PROXY STARTING (CLI MODE)")
-        logger.info("=" * 60)
-        logger.info("Starting OAuth HTTPS Proxy via run.py...")
-        logger.info(f"Configuration loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}")
+
+        log_info("=" * 60, component="main")
+        log_info("OAUTH HTTPS PROXY STARTING (CLI MODE)", component="main")
+        log_info("=" * 60, component="main")
+        log_info("Starting OAuth HTTPS Proxy via run.py...", component="main")
+        log_info(f"Configuration loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}", component="main")
         
         # Run the server
         asyncio.run(run_server(config))
         
     except KeyboardInterrupt:
-        logger.info("Shutting down OAuth HTTPS Proxy (interrupted)")
+        log_info("Shutting down OAuth HTTPS Proxy (interrupted)", component="main")
         sys.exit(0)
     except Exception as e:
-        logger.error(f"Failed to start OAuth HTTPS Proxy: {e}", exc_info=True)
+        log_error(f"Failed to start OAuth HTTPS Proxy: {e}", component="main")
         sys.exit(1)
 
 

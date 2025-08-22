@@ -153,6 +153,16 @@ This documentation is organized into modular component-specific files:
 - Protected resource metadata (RFC 9728)
 - Per-proxy user allowlists
 
+### Unified Async Logging Architecture
+- **Fire-and-Forget Pattern**: All logging operations are non-blocking using `asyncio.create_task()`
+- **Component Isolation**: Each component has immutable component name to prevent contamination
+- **Redis Streams Backend**: All logs written to Redis Streams for persistence and querying
+- **TRACE Level Support**: Custom level (value=5) for very verbose debugging, below DEBUG
+- **Multiple Indexes**: Efficient querying by IP, hostname, status, user, path, etc.
+- **Real-Time Streaming**: Live log following with ANSI color support
+- **Request Analytics**: Response time percentiles, unique visitor tracking, error analysis
+- **No Logger Objects**: Direct function calls (`log_info()`, `log_debug()`, etc.) instead of logger instances
+
 ## MCP (Model Context Protocol) Support
 
 The system provides **FULL MCP SUPPORT** for LLM integration:
@@ -204,8 +214,10 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 9. **Enhanced CLI Client**: Smart table formatting with context-aware display
 10. **Exactly-Once Processing**: Redis Streams with consumer groups ensure reliability
 11. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
-12. **Async Redis Streams Logging**: High-performance logging with indexes and real-time processing
+12. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes, and real-time analytics
 13. **Organized Router Structure**: Directory structure matches API paths for intuitive navigation
+14. **Component Name Immutability**: Each logger instance has immutable component name to prevent log contamination
+15. **Chronological Log Display**: Logs displayed oldest to newest for natural reading flow
 
 ## Environment Configuration
 
@@ -215,7 +227,7 @@ Key environment variables (see component docs for complete list):
 # Core Configuration
 REDIS_PASSWORD=<strong-password>    # Required, 32+ bytes
 BASE_DOMAIN=example.com            # Base domain for services
-LOG_LEVEL=INFO                     # Logging level
+LOG_LEVEL=INFO                     # Logging level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
 # OAuth Configuration  
 GITHUB_CLIENT_ID=<github-app-id>
@@ -276,8 +288,10 @@ just shell
 just redis-cli
 
 # View logs
-just logs-service api 100
-just logs-follow
+just logs                      # Show recent logs (chronological order)
+just logs-follow               # Follow logs in real-time with ANSI colors
+just logs-errors              # Show recent errors
+just logs-docker               # View Docker container logs only
 ```
 
 ## Testing Guidelines

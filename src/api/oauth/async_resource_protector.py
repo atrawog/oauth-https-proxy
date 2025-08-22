@@ -11,10 +11,10 @@ from fastapi import HTTPException, Request
 from .config import Settings
 from .keys import RSAKeyManager
 from .resource_protector import JWTBearerTokenValidator
-from ...shared.logging import get_logger
+from ...shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 from ...shared.client_ip import get_real_client_ip
 
-logger = get_logger(__name__)
+
 
 
 class AsyncResourceProtector:
@@ -90,7 +90,7 @@ class AsyncResourceProtector:
         # Extract client IP using centralized function
         client_ip = get_real_client_ip(request)
         
-        logger.debug(
+        log_debug(
             "Starting token validation - DETAILED CONTEXT",
             ip=client_ip,
             resource=resource,
@@ -104,7 +104,7 @@ class AsyncResourceProtector:
         token_data = await self.validator.authenticate_token(token_string)
 
         if not token_data:
-            logger.warning(
+            log_warning(
                 "Token validation FAILED - invalid or expired token",
                 ip=client_ip,
                 resource=resource,
@@ -128,7 +128,7 @@ class AsyncResourceProtector:
                 headers={"WWW-Authenticate": www_auth_error},
             )
         else:
-            logger.info(
+            log_info(
                 "Token validation SUCCESSFUL - token is valid",
                 ip=client_ip,
                 resource=resource,
@@ -156,7 +156,7 @@ class AsyncResourceProtector:
             if allowed_audiences_header:
                 allowed_audiences = [a.strip() for a in allowed_audiences_header.split(",") if a.strip()]
             
-            logger.info(
+            log_info(
                 "Starting token audience validation - DETAILED CONTEXT",
                 ip=client_ip,
                 requested_resource=resource,
@@ -189,7 +189,7 @@ class AsyncResourceProtector:
                 allowed_aud_match = any(token_aud in allowed_audiences for token_aud in aud)
             
             if not resource_in_aud and not allowed_aud_match:
-                logger.error(
+                log_error(
                     "Token audience validation FAILED - CRITICAL: 403 invalid_audience error",
                     ip=client_ip,
                     requested_resource=resource,
@@ -245,7 +245,7 @@ class AsyncResourceProtector:
                     headers={"WWW-Authenticate": www_auth_error},
                 )
             else:
-                logger.info(
+                log_info(
                     "Token audience validation SUCCESSFUL",
                     ip=client_ip,
                     requested_resource=resource,

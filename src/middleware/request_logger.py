@@ -15,9 +15,7 @@ from starlette.types import Receive, Scope, Send
 
 from ..shared.client_ip import get_real_client_ip
 from ..shared.dns_resolver import get_dns_resolver
-from ..shared.logging import get_logger
-
-logger = get_logger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error
 
 
 class RequestLoggerMiddleware(BaseHTTPMiddleware):
@@ -149,6 +147,6 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                     # Log to Redis Streams using async storage
                     await async_storage.log_request(log_entry)
                 except Exception as e:
-                    logger.error(f"Failed to log to Redis Streams: {e}")
+                    log_error(f"Failed to log to Redis Streams: {e}", component="request_logger")
         
         return response

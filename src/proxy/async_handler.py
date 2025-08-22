@@ -4,7 +4,6 @@ This module provides HTTP/S proxy handling with full request tracing,
 event publishing, and correlation through the unified logging system.
 """
 
-import logging
 import os
 import json
 import secrets
@@ -29,7 +28,7 @@ from ..storage.async_redis_storage import AsyncRedisStorage
 from ..storage.redis_clients import RedisClients
 from ..auth import FlexibleAuthService, AuthResult
 
-logger = logging.getLogger(__name__)
+# Using UnifiedAsyncLogger directly
 
 
 class EnhancedAsyncProxyHandler:
@@ -69,7 +68,7 @@ class EnhancedAsyncProxyHandler:
             limits=httpx.Limits(max_keepalive_connections=100)
         )
         
-        logger.info(f"EnhancedAsyncProxyHandler initialized with timeouts: read={request_timeout}s, connect={connect_timeout}s")
+        # Initialization logged via UnifiedAsyncLogger
     
     async def handle_request(self, request: Request) -> Response:
         """Handle incoming proxy request with full tracing.

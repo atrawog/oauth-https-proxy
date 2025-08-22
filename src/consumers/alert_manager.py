@@ -6,7 +6,6 @@ anomalies and trigger alerts.
 
 import asyncio
 import json
-import logging
 import time
 from typing import Dict, List, Optional, Set
 from datetime import datetime, timezone, timedelta
@@ -14,8 +13,7 @@ from collections import defaultdict
 
 from .unified_consumer import UnifiedStreamConsumer
 import redis.asyncio as redis_async
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class AlertManager(UnifiedStreamConsumer):
@@ -104,7 +102,7 @@ class AlertManager(UnifiedStreamConsumer):
                     )
             
         except Exception as e:
-            logger.error(f"Failed to check error rate: {e}")
+            log_error(f"Failed to check error rate: {e}", component="alert_manager", error=e)
     
     async def alert_service_failure(self, stream: str, msg_id: str, data: dict):
         """Alert on service failures.
@@ -133,7 +131,7 @@ class AlertManager(UnifiedStreamConsumer):
                 )
             
         except Exception as e:
-            logger.error(f"Failed to alert service failure: {e}")
+            log_error(f"Failed to alert service failure: {e}", component="alert_manager", error=e)
     
     async def alert_cert_expiry(self, stream: str, msg_id: str, data: dict):
         """Alert on certificate expiry.
@@ -172,7 +170,7 @@ class AlertManager(UnifiedStreamConsumer):
                 )
             
         except Exception as e:
-            logger.error(f"Failed to alert cert expiry: {e}")
+            log_error(f"Failed to alert cert expiry: {e}", component="alert_manager", error=e)
     
     async def alert_cert_failure(self, stream: str, msg_id: str, data: dict):
         """Alert on certificate generation/renewal failures.
@@ -203,7 +201,7 @@ class AlertManager(UnifiedStreamConsumer):
                 )
             
         except Exception as e:
-            logger.error(f"Failed to alert cert failure: {e}")
+            log_error(f"Failed to alert cert failure: {e}", component="alert_manager", error=e)
     
     async def check_response_time(self, stream: str, msg_id: str, data: dict):
         """Check response times for anomalies.
@@ -270,7 +268,7 @@ class AlertManager(UnifiedStreamConsumer):
                         )
             
         except Exception as e:
-            logger.error(f"Failed to check response time: {e}")
+            log_error(f"Failed to check response time: {e}", component="alert_manager", error=e)
     
     async def _should_alert(self, alert_key: str) -> bool:
         """Check if we should send an alert (respecting cooldown).
@@ -337,10 +335,10 @@ class AlertManager(UnifiedStreamConsumer):
                 await self._send_webhook(alert_data)
             
             # Log the alert
-            logger.warning(f"ALERT [{severity}] {title}: {message}")
+            log_warning(f"ALERT [{severity}] {title}: {message}", component="alert_manager")
             
         except Exception as e:
-            logger.error(f"Failed to send alert: {e}")
+            log_error(f"Failed to send alert: {e}", component="alert_manager", error=e)
     
     async def _send_webhook(self, alert_data: dict):
         """Send alert to webhook URL.
@@ -362,7 +360,7 @@ class AlertManager(UnifiedStreamConsumer):
         """
         # Log unknown message types for debugging
         event_type = data.get("event_type") or data.get("type") or "unknown"
-        logger.debug(f"No handler for event type: {event_type}")
+        log_debug(f"No handler for event type: {event_type}", component="alert_manager")
     
     async def get_alert_summary(self) -> dict:
         """Get summary of alerts.

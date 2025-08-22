@@ -19,9 +19,9 @@ from authlib.oauth2.rfc6749 import ClientMixin
 
 from .config import Settings
 from .keys import RSAKeyManager
-from ...shared.logging import get_logger
+from ...shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
-logger = get_logger(__name__)
+
 
 
 class OAuth2Client(ClientMixin):
@@ -115,7 +115,7 @@ class AuthManager:
         if resources:
             # If resources specified, use them as audience (RFC 8707)
             aud = resources if len(resources) > 1 else resources[0]
-            logger.debug(
+            log_debug(
                 "Setting token audience from resources",
                 resources=resources,
                 audience=aud,
@@ -124,7 +124,7 @@ class AuthManager:
         else:
             # Fallback to auth server URL for backward compatibility
             aud = issuer
-            logger.debug(
+            log_debug(
                 "No resources specified, using issuer as audience",
                 audience=aud,
                 client_id=claims.get("client_id")
@@ -149,7 +149,7 @@ class AuthManager:
             token = self.jwt.encode(header, payload, self.settings.jwt_secret)
         
         # Comprehensive logging of token creation
-        logger.info(
+        log_info(
             "JWT token created - COMPLETE TOKEN PAYLOAD",
             jti=jti,
             subject=payload.get("sub"),
@@ -210,7 +210,7 @@ class AuthManager:
                     else:
                         await redis_client.set(client_key, json.dumps(client))
                 except Exception as e:
-                    logger.warning(f"Failed to update last_token_issued for client {claims['client_id']}: {e}")
+                    log_warning(f"Failed to update last_token_issued for client {claims['client_id']}: {e}")
 
         return token.decode("utf-8") if isinstance(token, bytes) else token
 
@@ -281,10 +281,10 @@ class AuthManager:
                     # Token doesn't expire or already expired, store with default lifetime
                     await redis_client.setex(usage_key, self.settings.access_token_lifetime, json.dumps(usage))
                 
-                logger.debug(f"Updated token usage for JTI {jti}: count={usage['usage_count']}")
+                log_debug(f"Updated token usage for JTI {jti}: count={usage['usage_count']}")
             except Exception as e:
                 # Don't fail token validation if usage tracking fails
-                logger.warning(f"Failed to track token usage for {jti}: {e}")
+                log_warning(f"Failed to track token usage for {jti}: {e}")
 
             return dict(claims)
 
@@ -458,9 +458,9 @@ class AuthManager:
                 else:
                     await redis_client.set(client_key, json.dumps(client))
                     
-                logger.debug(f"Updated usage tracking for client {client_id}: count={client['usage_count']}")
+                log_debug(f"Updated usage tracking for client {client_id}: count={client['usage_count']}")
         except Exception as e:
-            logger.warning(f"Failed to track usage for client {client_id}: {e}")
+            log_warning(f"Failed to track usage for client {client_id}: {e}")
 
     def create_authorization_response(self, client: OAuth2Client, request: dict) -> dict:
         """Create authorization response using Authlib patterns"""

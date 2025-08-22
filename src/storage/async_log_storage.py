@@ -241,7 +241,7 @@ class AsyncLogStorage:
                 # Convert stream entry to log format
                 log_entry = {
                     'timestamp': data.get('timestamp_iso') or data.get('timestamp', ''),
-                    'timestamp_unix': data.get('timestamp', ''),  # Add Unix timestamp for display
+                    'timestamp_unix': int(data.get('timestamp', 0)) if data.get('timestamp') else 0,  # Unix timestamp as integer (milliseconds)
                     'client_ip': data.get('client_ip', ''),
                     'client_hostname': data.get('client_hostname', ''),
                     'proxy_hostname': data.get('proxy_hostname', ''),

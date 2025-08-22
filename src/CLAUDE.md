@@ -24,7 +24,8 @@ This document describes the source code organization and technical implementatio
 ## Environment Variables
 
 ### Core Configuration
-- `LOG_LEVEL` - Application log level (DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
+- `LOG_LEVEL` - Application log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL) - default: INFO
+  - **TRACE Level**: Custom level (value=5) for very verbose debugging, below DEBUG
 - `HTTP_PORT` - HTTP server port (default: 80)
 - `HTTPS_PORT` - HTTPS server port (default: 443)
 - `SERVER_HOST` - Server bind address (default: 0.0.0.0)
@@ -58,6 +59,31 @@ The entire system has been migrated to a fully asynchronous architecture for imp
 - **Reduced Latency**: Non-blocking I/O for all operations
 - **Better Resource Utilization**: Single process handles more requests
 - **Streaming Support**: Efficient WebSocket and SSE handling
+- **Fire-and-Forget Logging**: Non-blocking log operations using `asyncio.create_task()`
+
+## Unified Async Logging Architecture
+
+The system uses a centralized unified async logging architecture:
+
+### Key Features
+- **Fire-and-Forget Pattern**: All log operations are non-blocking using `asyncio.create_task()`
+- **Component Isolation**: Each component has immutable component name to prevent contamination
+- **No Logger Objects**: Direct function calls (`log_info()`, `log_debug()`, etc.) instead of logger instances
+- **TRACE Level Support**: Custom level (value=5) for very verbose debugging, below DEBUG
+- **Redis Streams Backend**: All logs written to Redis Streams for persistence and querying
+- **Multiple Indexes**: Efficient querying by IP, hostname, status, user, path, etc.
+- **Real-Time Streaming**: Live log following with ANSI color support
+- **Request Analytics**: Response time percentiles, unique visitor tracking, error analysis
+
+### Usage
+```python
+from src.shared.logger import log_info, log_debug, log_warning, log_error, log_trace
+
+# All logging is non-blocking
+log_info("Server started", component="api_server")
+log_debug("Processing request", component="handler", request_id="123")
+log_trace("Detailed trace info", component="debug")  # TRACE level for verbose debugging
+```
 
 ## Component Documentation
 

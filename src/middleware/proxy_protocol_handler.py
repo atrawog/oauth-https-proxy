@@ -8,14 +8,12 @@ This creates a TCP server that:
 4. Stores client info in Redis for unified HTTP/HTTPS handling
 """
 import asyncio
-import logging
 import json
 import ipaddress
 from typing import Optional, Tuple
 import redis.asyncio as redis
 from ..shared.dns_resolver import get_dns_resolver
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 # PROXY protocol v1 constants
 PROXY_V1_MAX_LENGTH = 107  # Maximum header length per spec
@@ -105,7 +103,7 @@ class ProxyProtocolHandler:
                     # Resolve client hostname
                     client_hostname = await self.dns_resolver.resolve_ptr(real_client_ip)
                     
-                    logger.info(f"PROXY protocol: {real_client_ip}:{real_client_port} ({client_hostname})")
+                    log_info(f"PROXY protocol: {real_client_ip}:{real_client_port} ({client_hostname})", component="proxy_protocol")
                     
                     # Use remaining data after PROXY header
                     first_data = remaining_data
@@ -113,17 +111,17 @@ class ProxyProtocolHandler:
                     if not first_data:
                         first_data = await asyncio.wait_for(reader.read(1024), timeout=5.0)
                 except UnicodeDecodeError as e:
-                    logger.error(f"Invalid PROXY protocol header - non-ASCII characters: {e}")
+                    log_error(f"Invalid PROXY protocol header - non-ASCII characters: {e}", component="proxy_protocol", error=e)
                     writer.close()
                     await writer.wait_closed()
                     return
                 except (ValueError, ipaddress.AddressValueError) as e:
-                    logger.error(f"Invalid PROXY protocol header: {e}")
+                    log_error(f"Invalid PROXY protocol header: {e}", component="proxy_protocol", error=e)
                     writer.close()
                     await writer.wait_closed()
                     return
                 except Exception as e:
-                    logger.error(f"Unexpected error parsing PROXY protocol: {e}")
+                    log_error(f"Unexpected error parsing PROXY protocol: {e}", component="proxy_protocol", error=e)
                     writer.close()
                     await writer.wait_closed()
                     return
@@ -215,9 +213,9 @@ class ProxyProtocolHandler:
             )
             
         except asyncio.TimeoutError:
-            logger.error("Timeout reading from client")
+            log_error("Timeout reading from client", component="proxy_protocol")
         except Exception as e:
-            logger.error(f"Error handling connection: {e}")
+            log_error(f"Error handling connection: {e}", component="proxy_protocol", error=e)
         finally:
             writer.close()
             await writer.wait_closed()
@@ -237,9 +235,9 @@ class ProxyProtocolHandler:
             # Set with 60 second TTL - connections shouldn't last longer
             # The redis client should be async (redis.asyncio.Redis)
             await self.redis_client.setex(key, 60, value)
-            logger.debug(f"Stored client info in Redis: {key} -> {client_ip}:{client_port}")
+            log_debug(f"Stored client info in Redis: {key} -> {client_ip}:{client_port}", component="proxy_protocol")
         except Exception as e:
-            logger.error(f"Failed to store client info in Redis: {e}")
+            log_error(f"Failed to store client info in Redis: {e}", component="proxy_protocol", error=e)
             
     async def _forward_data(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, direction: str):
         """Forward data between connections."""
@@ -251,7 +249,7 @@ class ProxyProtocolHandler:
                 writer.write(data)
                 await writer.drain()
         except Exception as e:
-            logger.debug(f"Forward {direction} ended: {e}")
+            log_debug(f"Forward {direction} ended: {e}", component="proxy_protocol")
         finally:
             writer.close()
             await writer.wait_closed()
@@ -273,5 +271,5 @@ async def create_proxy_protocol_server(
         listen_port
     )
     
-    logger.info(f"PROXY protocol server listening on {listen_host}:{listen_port}, forwarding to {backend_host}:{backend_port}")
+    log_info(f"PROXY protocol server listening on {listen_host}:{listen_port}, forwarding to {backend_host}:{backend_port}", component="proxy_protocol")
     return server

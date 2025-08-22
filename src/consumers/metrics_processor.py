@@ -6,7 +6,6 @@ real-time metrics and statistics.
 
 import asyncio
 import json
-import logging
 import time
 from typing import Dict, List, Optional
 from collections import defaultdict
@@ -14,8 +13,7 @@ from datetime import datetime, timezone
 
 from .unified_consumer import UnifiedStreamConsumer
 import redis.asyncio as redis_async
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class MetricsProcessor(UnifiedStreamConsumer):
@@ -64,7 +62,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
         
         # Start aggregation task
         self.aggregation_task = asyncio.create_task(self._aggregation_loop())
-        logger.info("Started metrics aggregation task")
+        log_info("Started metrics aggregation task", component="metrics_processor")
     
     async def stop(self):
         """Stop the metrics processor."""
@@ -90,7 +88,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
             except asyncio.CancelledError:
                 break
             except Exception as e:
-                logger.error(f"Aggregation error: {e}")
+                log_error(f"Aggregation error: {e}", component="metrics_processor", error=e)
     
     async def _aggregate_metrics(self):
         """Aggregate collected metrics and store in Redis."""
@@ -156,10 +154,10 @@ class MetricsProcessor(UnifiedStreamConsumer):
                 )
                 await self.redis.expire(f"metrics:errors:{current_hour}", 86400 * 7)
             
-            logger.info(f"Aggregated metrics for {len(self.response_times)} hostnames")
+            log_info(f"Aggregated metrics for {len(self.response_times)} hostnames", component="metrics_processor")
             
         except Exception as e:
-            logger.error(f"Failed to aggregate metrics: {e}")
+            log_error(f"Failed to aggregate metrics: {e}", component="metrics_processor", error=e)
     
     def _percentile(self, values: List[float], percentile: int) -> float:
         """Calculate percentile of values.
@@ -215,7 +213,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
             await self.redis.expire(f"stats:realtime:{proxy_hostname}", 300)  # 5 min TTL
             
         except Exception as e:
-            logger.error(f"Failed to process HTTP metrics: {e}")
+            log_error(f"Failed to process HTTP metrics: {e}", component="metrics_processor", error=e)
     
     async def process_service_metrics(self, stream: str, msg_id: str, data: dict):
         """Process service lifecycle metrics.
@@ -246,7 +244,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
                 self.error_counts[f"service:{service_name}"] += 1
             
         except Exception as e:
-            logger.error(f"Failed to process service metrics: {e}")
+            log_error(f"Failed to process service metrics: {e}", component="metrics_processor", error=e)
     
     async def process_cert_metrics(self, stream: str, msg_id: str, data: dict):
         """Process certificate lifecycle metrics.
@@ -291,7 +289,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
                 )
             
         except Exception as e:
-            logger.error(f"Failed to process certificate metrics: {e}")
+            log_error(f"Failed to process certificate metrics: {e}", component="metrics_processor", error=e)
     
     async def process_proxy_metrics(self, stream: str, msg_id: str, data: dict):
         """Process proxy lifecycle metrics.
@@ -319,7 +317,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
                 await self.redis.srem("proxies:active", proxy_hostname)
             
         except Exception as e:
-            logger.error(f"Failed to process proxy metrics: {e}")
+            log_error(f"Failed to process proxy metrics: {e}", component="metrics_processor", error=e)
     
     async def process_error_metrics(self, stream: str, msg_id: str, data: dict):
         """Process error metrics.
@@ -353,7 +351,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
             await self.redis.ltrim("errors:recent", 0, 999)  # Keep last 1000
             
         except Exception as e:
-            logger.error(f"Failed to process error metrics: {e}")
+            log_error(f"Failed to process error metrics: {e}", component="metrics_processor", error=e)
     
     async def handle_unknown(self, stream: str, msg_id: str, data: dict):
         """Handle messages with no matching handler.

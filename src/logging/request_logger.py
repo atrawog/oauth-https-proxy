@@ -161,8 +161,8 @@ class RequestLogger:
                                 result[k] = v
                         results.append(result)
             
-            # Sort by timestamp descending (most recent first)
-            results.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+            # Sort by timestamp ascending (oldest first, newest at bottom)
+            results.sort(key=lambda x: x.get('timestamp', 0), reverse=False)
             
         except Exception as e:
             logger.error(f"Error querying logs by IP: {e}")
@@ -200,6 +200,9 @@ class RequestLogger:
         except Exception as e:
             logger.error(f"Error querying error logs: {e}")
         
+        # Sort by timestamp ascending (oldest first, newest at bottom)
+        results.sort(key=lambda x: x.get('timestamp', 0), reverse=False)
+        
         return results
     
     async def query_by_hostname(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
@@ -230,6 +233,9 @@ class RequestLogger:
                     })
         except Exception as e:
             logger.error(f"Error querying logs by hostname: {e}")
+        
+        # Sort by timestamp ascending (oldest first, newest at bottom)
+        results.sort(key=lambda x: x.get('timestamp', 0), reverse=False)
         
         return results
     

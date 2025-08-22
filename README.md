@@ -261,8 +261,10 @@ just proxy-create <hostname> <target-url>  # Without --staging flag
 
 ```bash
 # Check logs
-just logs-follow
-just logs-service api 100
+just logs                        # Show recent logs (chronological order)
+just logs-follow                 # Follow logs in real-time with ANSI colors
+just logs-errors                 # View recent errors
+just logs-docker                 # View Docker container logs only
 
 # Debug certificate issues
 just cert-show <cert-name>

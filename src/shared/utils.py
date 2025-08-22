@@ -2,7 +2,6 @@
 
 import hashlib
 import secrets
-import logging
 from typing import Optional
 from datetime import datetime, timezone
 
@@ -15,19 +14,6 @@ def generate_token() -> str:
 def hash_token(token: str) -> str:
     """Create SHA256 hash of API token."""
     return f"sha256:{hashlib.sha256(token.encode()).hexdigest()}"
-
-
-def setup_logging(log_level: str = "INFO") -> None:
-    """Configure logging for the application."""
-    numeric_level = getattr(logging, log_level.upper(), None)
-    if not isinstance(numeric_level, int):
-        numeric_level = logging.INFO
-    
-    logging.basicConfig(
-        level=numeric_level,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-        datefmt='%Y-%m-%d %H:%M:%S'
-    )
 
 
 def get_current_timestamp() -> datetime:

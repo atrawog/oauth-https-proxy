@@ -6,7 +6,6 @@ the event loop. It replaces the synchronous RedisStorage class.
 
 import base64
 import json
-import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, List, Optional
 import redis.asyncio as redis
@@ -15,8 +14,7 @@ from redis.exceptions import RedisError
 from ..certmanager.models import Certificate
 from ..proxy.models import ProxyTarget
 from ..proxy.routes import Route
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class ChallengeToken:
@@ -61,7 +59,7 @@ class AsyncRedisStorage:
             )
             # Test connection
             await self.redis_client.ping()
-            logger.info("AsyncRedisStorage initialized successfully")
+            log_info("AsyncRedisStorage initialized successfully", component="redis_storage")
     
     async def close(self):
         """Close Redis connection."""
@@ -86,9 +84,10 @@ class AsyncRedisStorage:
             for domain in certificate.domains:
                 existing_cert_name = await self.redis_client.get(f"cert:domain:{domain}")
                 if existing_cert_name and existing_cert_name != cert_name:
-                    logger.error(
+                    log_error(
                         f"Domain {domain} already has certificate {existing_cert_name}. "
-                        f"Cannot create certificate {cert_name}"
+                        f"Cannot create certificate {cert_name}",
+                        component="redis_storage"
                     )
                     return False
             
@@ -102,16 +101,16 @@ class AsyncRedisStorage:
                 for domain in certificate.domains:
                     await self.redis_client.set(f"cert:domain:{domain}", cert_name)
                 
-                logger.info(f"Successfully stored certificate {cert_name} for domains {certificate.domains}")
+                log_info(f"Successfully stored certificate {cert_name} for domains {certificate.domains}", component="redis_storage")
             else:
-                logger.error(f"Redis set returned False for certificate {cert_name}")
+                log_error(f"Redis set returned False for certificate {cert_name}", component="redis_storage")
             
             return result
         except RedisError as e:
-            logger.error(f"Failed to store certificate {cert_name}: {e}")
+            log_error(f"Failed to store certificate {cert_name}: {e}", component="redis_storage", error=e)
             return False
         except Exception as e:
-            logger.error(f"Unexpected error storing certificate {cert_name}: {e}")
+            log_error(f"Unexpected error storing certificate {cert_name}: {e}", component="redis_storage", error=e)
             return False
     
     async def get_certificate(self, cert_name: str) -> Optional[Certificate]:
@@ -123,7 +122,7 @@ class AsyncRedisStorage:
                 return Certificate.parse_raw(value)
             return None
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to get certificate: {e}")
+            log_error(f"Failed to get certificate: {e}", component="redis_storage", error=e)
             return None
     
     async def list_certificates(self) -> List[Certificate]:
@@ -140,7 +139,7 @@ class AsyncRedisStorage:
                     certificates.append(cert)
             return certificates
         except RedisError as e:
-            logger.error(f"Failed to list certificates: {e}")
+            log_error(f"Failed to list certificates: {e}", component="redis_storage", error=e)
             return []
     
     async def delete_certificate(self, cert_name: str) -> bool:
@@ -163,22 +162,22 @@ class AsyncRedisStorage:
                         proxy_data['cert_name'] = None
                         await self.redis_client.set(key, json.dumps(proxy_data))
                         proxy_targets_cleaned += 1
-                        logger.info(f"Cleaned up cert_name from proxy target: {key.split(':', 1)[1]}")
+                        log_info(f"Cleaned up cert_name from proxy target: {key.split(':', 1)[1]}", component="redis_storage")
             
             if proxy_targets_cleaned > 0:
-                logger.info(f"Cleaned up {proxy_targets_cleaned} proxy targets that referenced certificate {cert_name}")
+                log_info(f"Cleaned up {proxy_targets_cleaned} proxy targets that referenced certificate {cert_name}", component="redis_storage")
             
             # Delete domain indexes if certificate exists
             if cert and cert.domains:
                 for domain in cert.domains:
                     await self.redis_client.delete(f"cert:domain:{domain}")
-                logger.info(f"Cleaned up domain indexes for domains: {cert.domains}")
+                log_info(f"Cleaned up domain indexes for domains: {cert.domains}", component="redis_storage")
             
             # Now delete the certificate
             key = f"cert:{cert_name}"
             return bool(await self.redis_client.delete(key))
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to delete certificate: {e}")
+            log_error(f"Failed to delete certificate: {e}", component="redis_storage", error=e)
             return False
     
     async def get_expiring_certificates(self, days: int = 30) -> List[tuple[str, Certificate]]:
@@ -199,7 +198,7 @@ class AsyncRedisStorage:
             
             return expiring
         except RedisError as e:
-            logger.error(f"Failed to get expiring certificates: {e}")
+            log_error(f"Failed to get expiring certificates: {e}", component="redis_storage", error=e)
             return []
     
     # Challenge operations
@@ -218,7 +217,7 @@ class AsyncRedisStorage:
                 challenge.json()
             )
         except RedisError as e:
-            logger.error(f"Failed to store challenge: {e}")
+            log_error(f"Failed to store challenge: {e}", component="redis_storage", error=e)
             return False
     
     async def get_challenge(self, token: str) -> Optional[str]:
@@ -231,7 +230,7 @@ class AsyncRedisStorage:
                 return challenge.authorization
             return None
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to get challenge: {e}")
+            log_error(f"Failed to get challenge: {e}", component="redis_storage", error=e)
             return None
     
     async def delete_challenge(self, token: str) -> bool:
@@ -240,7 +239,7 @@ class AsyncRedisStorage:
             key = f"challenge:{token}"
             return bool(await self.redis_client.delete(key))
         except RedisError as e:
-            logger.error(f"Failed to delete challenge: {e}")
+            log_error(f"Failed to delete challenge: {e}", component="redis_storage", error=e)
             return False
     
     # Account key operations
@@ -250,7 +249,7 @@ class AsyncRedisStorage:
             key = f"account:{provider}:{email}"
             return await self.redis_client.set(key, key_pem)
         except RedisError as e:
-            logger.error(f"Failed to store account key: {e}")
+            log_error(f"Failed to store account key: {e}", component="redis_storage", error=e)
             return False
     
     async def get_account_key(self, provider: str, email: str) -> Optional[str]:
@@ -259,7 +258,7 @@ class AsyncRedisStorage:
             key = f"account:{provider}:{email}"
             return await self.redis_client.get(key)
         except RedisError as e:
-            logger.error(f"Failed to get account key: {e}")
+            log_error(f"Failed to get account key: {e}", component="redis_storage", error=e)
             return None
     
     # API Token operations
@@ -282,11 +281,11 @@ class AsyncRedisStorage:
             auth_key = f"auth:token:{token_hash}"
             try:
                 json_data = json.dumps(data)
-                logger.debug(f"Storing auth key {auth_key} with data length: {len(json_data)}")
+                log_debug(f"Storing auth key {auth_key} with data length: {len(json_data)}", component="redis_storage")
                 result1 = await self.redis_client.set(auth_key, json_data)
-                logger.debug(f"Stored auth key {auth_key}: {result1}")
+                log_debug(f"Stored auth key {auth_key}: {result1}", component="redis_storage")
             except Exception as e:
-                logger.error(f"Failed to store auth key {auth_key}: {e}")
+                log_error(f"Failed to store auth key {auth_key}: {e}", component="redis_storage", error=e)
                 raise
             
             # Store by name (for management)
@@ -298,20 +297,20 @@ class AsyncRedisStorage:
                 "cert_email": cert_email or "",
                 "created_at": data["created_at"]
             })
-            logger.debug(f"Stored name key {name_key}: {result2}")
+            log_debug(f"Stored name key {name_key}: {result2}", component="redis_storage")
             
             # Verify storage
             auth_check = await self.redis_client.get(auth_key)
             name_check = await self.redis_client.hgetall(name_key)
-            logger.debug(f"Auth key verification: {auth_check is not None}")
-            logger.debug(f"Name key verification: {bool(name_check)}")
+            log_debug(f"Auth key verification: {auth_check is not None}", component="redis_storage")
+            log_debug(f"Name key verification: {bool(name_check)}", component="redis_storage")
             
             # Both operations should succeed
             success = bool(result1) and (result2 >= 0)
-            logger.info(f"Token storage for '{name}' success: {success}")
+            log_info(f"Token storage for '{name}' success: {success}", component="redis_storage")
             return success
         except RedisError as e:
-            logger.error(f"Failed to store API token: {e}")
+            log_error(f"Failed to store API token: {e}", component="redis_storage", error=e)
             return False
     
     async def get_api_token(self, token_hash: str) -> Optional[dict]:
@@ -321,7 +320,7 @@ class AsyncRedisStorage:
             value = await self.redis_client.get(key)
             return json.loads(value) if value else None
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to get API token: {e}")
+            log_error(f"Failed to get API token: {e}", component="redis_storage", error=e)
             return None
     
     async def get_api_token_by_name(self, name: str) -> Optional[dict]:
@@ -331,7 +330,7 @@ class AsyncRedisStorage:
             data = await self.redis_client.hgetall(key)
             return data if data else None
         except RedisError as e:
-            logger.error(f"Failed to get API token by name: {e}")
+            log_error(f"Failed to get API token by name: {e}", component="redis_storage", error=e)
             return None
     
     async def delete_api_token(self, token_hash: str) -> bool:
@@ -356,7 +355,7 @@ class AsyncRedisStorage:
             
             return False
         except RedisError as e:
-            logger.error(f"Failed to delete API token: {e}")
+            log_error(f"Failed to delete API token: {e}", component="redis_storage", error=e)
             return False
     
     async def delete_api_token_by_name(self, name: str) -> bool:
@@ -379,7 +378,7 @@ class AsyncRedisStorage:
             
             return False
         except RedisError as e:
-            logger.error(f"Failed to delete API token by name: {e}")
+            log_error(f"Failed to delete API token by name: {e}", component="redis_storage", error=e)
             return False
     
     async def delete_api_token_cascade(self, token_hash: str) -> dict:
@@ -442,7 +441,7 @@ class AsyncRedisStorage:
             return stats
             
         except Exception as e:
-            logger.error(f"Failed to cascade delete token: {e}")
+            log_error(f"Failed to cascade delete token: {e}", component="redis_storage", error=e)
             return {
                 'token_deleted': False,
                 'certificates_deleted': 0,
@@ -477,7 +476,7 @@ class AsyncRedisStorage:
             }
             
         except Exception as e:
-            logger.error(f"Failed to cascade delete token by name: {e}")
+            log_error(f"Failed to cascade delete token by name: {e}", component="redis_storage", error=e)
             return {
                 'token_deleted': False,
                 'certificates_deleted': 0,
@@ -511,7 +510,7 @@ class AsyncRedisStorage:
             return result1
             
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to update API token email: {e}")
+            log_error(f"Failed to update API token email: {e}", component="redis_storage", error=e)
             return False
     
     # Proxy Target operations
@@ -521,7 +520,7 @@ class AsyncRedisStorage:
             key = f"proxy:{hostname}"
             return await self.redis_client.set(key, target.json())
         except RedisError as e:
-            logger.error(f"Failed to store proxy target: {e}")
+            log_error(f"Failed to store proxy target: {e}", component="redis_storage", error=e)
             return False
     
     async def get_proxy_target(self, hostname: str) -> Optional[ProxyTarget]:
@@ -533,15 +532,15 @@ class AsyncRedisStorage:
                 # Decode bytes to string if needed
                 if isinstance(value, bytes):
                     value = value.decode('utf-8')
-                logger.debug(f"Parsing proxy data for {hostname}: {value[:100]}")
+                log_trace(f"Parsing proxy data for {hostname}: {value[:100]}", component="redis_storage")
                 parsed = ProxyTarget.parse_raw(value)
-                logger.debug(f"Successfully parsed proxy target for {hostname}")
+                log_trace(f"Successfully parsed proxy target for {hostname}", component="redis_storage")
                 return parsed
             else:
-                logger.warning(f"No data found for key {key}")
+                log_warning(f"No data found for key {key}", component="redis_storage")
             return None
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to get proxy target for {hostname}: {e}", exc_info=True)
+            log_error(f"Failed to get proxy target for {hostname}: {e}", exc_info=True)
             return None
     
     async def list_proxy_targets(self) -> List[ProxyTarget]:
@@ -558,20 +557,20 @@ class AsyncRedisStorage:
                     key = key.decode('utf-8')
                 # Skip client info keys (proxy:client:*) and event streams  
                 if ":client:" in key or key == "proxy:events:stream":
-                    logger.debug(f"Skipping non-proxy key: {key}")
+                    log_trace(f"Skipping non-proxy key: {key}", component="redis_storage")
                     continue
                 hostname = key.split(":", 1)[1]
-                logger.debug(f"Getting proxy target for hostname: {hostname}")
+                log_trace(f"Getting proxy target for hostname: {hostname}", component="redis_storage")
                 target = await self.get_proxy_target(hostname)
                 if target:
                     targets.append(target)
-                    logger.debug(f"Added proxy target: {hostname}")
+                    log_trace(f"Added proxy target: {hostname}", component="redis_storage")
                 else:
-                    logger.error(f"Could not get proxy target for {hostname} - get_proxy_target returned None")
-            logger.info(f"list_proxy_targets: scanned {key_count} keys, found {len(targets)} proxy targets")
+                    log_error(f"Could not get proxy target for {hostname} - get_proxy_target returned None", component="redis_storage")
+            log_debug(f"list_proxy_targets: scanned {key_count} keys, found {len(targets)} proxy targets", component="redis_storage")
             return targets
         except RedisError as e:
-            logger.error(f"Failed to list proxy targets: {e}")
+            log_error(f"Failed to list proxy targets: {e}", component="redis_storage", error=e)
             return []
     
     async def delete_proxy_target(self, hostname: str) -> bool:
@@ -580,7 +579,7 @@ class AsyncRedisStorage:
             key = f"proxy:{hostname}"
             return bool(await self.redis_client.delete(key))
         except RedisError as e:
-            logger.error(f"Failed to delete proxy target: {e}")
+            log_error(f"Failed to delete proxy target: {e}", component="redis_storage", error=e)
             return False
     
     async def get_targets_by_owner(self, token_hash: str) -> List[ProxyTarget]:
@@ -592,7 +591,7 @@ class AsyncRedisStorage:
                     targets.append(target)
             return targets
         except Exception as e:
-            logger.error(f"Failed to get targets by owner: {e}")
+            log_error(f"Failed to get targets by owner: {e}", component="redis_storage", error=e)
             return []
     
     async def update_proxy_target(self, hostname: str, updates) -> bool:
@@ -608,7 +607,7 @@ class AsyncRedisStorage:
             
             return await self.store_proxy_target(hostname, target)
         except Exception as e:
-            logger.error(f"Failed to update proxy target: {e}")
+            log_error(f"Failed to update proxy target: {e}", component="redis_storage", error=e)
             return False
     
     # Protected Resource Metadata operations
@@ -621,7 +620,7 @@ class AsyncRedisStorage:
                     targets.append(target)
             return targets
         except Exception as e:
-            logger.error(f"Failed to get proxy targets with resource metadata: {e}")
+            log_error(f"Failed to get proxy targets with resource metadata: {e}", component="redis_storage", error=e)
             return []
     
     # Route operations
@@ -637,7 +636,7 @@ class AsyncRedisStorage:
             existing_route_id = await self.redis_client.get(unique_key)
             if existing_route_id and existing_route_id != route.route_id:
                 # A different route already exists with same path and priority
-                logger.error(
+                log_error(
                     f"Route already exists with path={route.path_pattern} and priority={route.priority}. "
                     f"Existing route ID: {existing_route_id}"
                 )
@@ -656,7 +655,7 @@ class AsyncRedisStorage:
             
             return result1 and result2 and result3
         except RedisError as e:
-            logger.error(f"Failed to store route: {e}")
+            log_error(f"Failed to store route: {e}", component="redis_storage", error=e)
             return False
     
     async def get_route(self, route_id: str) -> Optional[Route]:
@@ -676,7 +675,7 @@ class AsyncRedisStorage:
                     return Route(**route_dict)
             return None
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to get route: {e}")
+            log_error(f"Failed to get route: {e}", component="redis_storage", error=e)
             return None
     
     async def list_routes(self) -> List[Route]:
@@ -708,7 +707,7 @@ class AsyncRedisStorage:
             return routes
             
         except RedisError as e:
-            logger.error(f"Failed to list routes: {e}")
+            log_error(f"Failed to list routes: {e}", component="redis_storage", error=e)
             return []
     
     async def delete_route(self, route_id: str) -> bool:
@@ -733,13 +732,13 @@ class AsyncRedisStorage:
             
             return result1 and result2 and result3
         except RedisError as e:
-            logger.error(f"Failed to delete route: {e}")
+            log_error(f"Failed to delete route: {e}", component="redis_storage", error=e)
             return False
     
     async def initialize_default_routes(self) -> None:
         """Initialize default routing rules that don't already exist."""
         try:
-            logger.info("Checking default routes...")
+            log_info("Checking default routes...", component="redis_storage")
             
             # Import DEFAULT_ROUTES from proxy module
             from ..proxy.routes import DEFAULT_ROUTES, Route
@@ -758,23 +757,23 @@ class AsyncRedisStorage:
                 # Create the missing default route
                 route = Route(**route_dict)
                 if await self.store_route(route):
-                    logger.info(f"Created missing default route: {route.route_id}")
+                    log_info(f"Created missing default route: {route.route_id}", component="redis_storage")
                     created_count += 1
                 else:
-                    logger.error(f"Failed to create default route: {route.route_id}")
+                    log_error(f"Failed to create default route: {route.route_id}", component="redis_storage")
             
             if created_count > 0:
-                logger.info(f"Created {created_count} missing default routes")
+                log_info(f"Created {created_count} missing default routes", component="redis_storage")
             if existing_count > 0:
-                logger.info(f"Found {existing_count} existing default routes")
+                log_info(f"Found {existing_count} existing default routes", component="redis_storage")
                     
         except Exception as e:
-            logger.error(f"Failed to initialize default routes: {e}")
+            log_error(f"Failed to initialize default routes: {e}", component="redis_storage", error=e)
     
     async def initialize_default_proxies(self) -> None:
         """Initialize default proxy configurations that don't already exist."""
         try:
-            logger.info("Checking default proxies...")
+            log_info("Checking default proxies...", component="redis_storage")
             
             # Import DEFAULT_PROXIES from proxy module
             from ..proxy.models import DEFAULT_PROXIES, ProxyTarget
@@ -797,18 +796,18 @@ class AsyncRedisStorage:
                 # Create the missing default proxy
                 proxy = ProxyTarget(**proxy_dict)
                 if await self.store_proxy_target(hostname, proxy):
-                    logger.info(f"Created missing default proxy: {hostname}")
+                    log_info(f"Created missing default proxy: {hostname}", component="redis_storage")
                     created_count += 1
                 else:
-                    logger.error(f"Failed to create default proxy: {hostname}")
+                    log_error(f"Failed to create default proxy: {hostname}", component="redis_storage")
             
             if created_count > 0:
-                logger.info(f"Created {created_count} missing default proxies")
+                log_info(f"Created {created_count} missing default proxies", component="redis_storage")
             if existing_count > 0:
-                logger.info(f"Found {existing_count} existing default proxies")
+                log_info(f"Found {existing_count} existing default proxies", component="redis_storage")
                     
         except Exception as e:
-            logger.error(f"Failed to initialize default proxies: {e}")
+            log_error(f"Failed to initialize default proxies: {e}", component="redis_storage", error=e)
     
     async def count_certificates_by_owner(self, owner_token_hash: str) -> int:
         """Count certificates owned by a specific token."""
@@ -825,7 +824,7 @@ class AsyncRedisStorage:
                         count += 1
             return count
         except Exception as e:
-            logger.error(f"Failed to count certificates by owner: {e}")
+            log_error(f"Failed to count certificates by owner: {e}", component="redis_storage", error=e)
             return 0
     
     async def count_proxies_by_owner(self, owner_token_hash: str) -> int:
@@ -843,7 +842,7 @@ class AsyncRedisStorage:
                         count += 1
             return count
         except Exception as e:
-            logger.error(f"Failed to count proxies by owner: {e}")
+            log_error(f"Failed to count proxies by owner: {e}", component="redis_storage", error=e)
             return 0
     
     async def list_certificates_by_owner(self, owner_token_hash: str) -> List[Dict]:
@@ -861,7 +860,7 @@ class AsyncRedisStorage:
                         certificates.append(cert_dict)
             return certificates
         except Exception as e:
-            logger.error(f"Failed to list certificates by owner: {e}")
+            log_error(f"Failed to list certificates by owner: {e}", component="redis_storage", error=e)
             return []
     
     async def list_certificate_names_by_owner(self, owner_token_hash: str) -> List[str]:
@@ -879,7 +878,7 @@ class AsyncRedisStorage:
                         names.append(cert_dict.get('cert_name', ''))
             return names
         except Exception as e:
-            logger.error(f"Failed to list certificate names by owner: {e}")
+            log_error(f"Failed to list certificate names by owner: {e}", component="redis_storage", error=e)
             return []
     
     async def list_proxies_by_owner(self, owner_token_hash: str) -> List[Dict]:
@@ -897,7 +896,7 @@ class AsyncRedisStorage:
                         proxies.append(proxy_dict)
             return proxies
         except Exception as e:
-            logger.error(f"Failed to list proxies by owner: {e}")
+            log_error(f"Failed to list proxies by owner: {e}", component="redis_storage", error=e)
             return []
     
     async def list_proxy_names_by_owner(self, owner_token_hash: str) -> List[str]:
@@ -915,7 +914,7 @@ class AsyncRedisStorage:
                         names.append(proxy_dict.get('hostname', ''))
             return names
         except Exception as e:
-            logger.error(f"Failed to list proxy names by owner: {e}")
+            log_error(f"Failed to list proxy names by owner: {e}", component="redis_storage", error=e)
             return []
     
     # Authentication Configuration operations
@@ -945,7 +944,7 @@ class AsyncRedisStorage:
             
             return bool(result)
         except Exception as e:
-            logger.error(f"Failed to store auth config: {e}")
+            log_error(f"Failed to store auth config: {e}", component="redis_storage", error=e)
             return False
     
     async def get_auth_config(self, config_id: str) -> Optional[dict]:
@@ -964,7 +963,7 @@ class AsyncRedisStorage:
                 return json.loads(data)
             return None
         except Exception as e:
-            logger.error(f"Failed to get auth config: {e}")
+            log_error(f"Failed to get auth config: {e}", component="redis_storage", error=e)
             return None
     
     async def list_auth_configs(self) -> List[dict]:
@@ -989,7 +988,7 @@ class AsyncRedisStorage:
             
             return configs
         except Exception as e:
-            logger.error(f"Failed to list auth configs: {e}")
+            log_error(f"Failed to list auth configs: {e}", component="redis_storage", error=e)
             return []
     
     async def delete_auth_config(self, config_id: str) -> bool:
@@ -1016,7 +1015,7 @@ class AsyncRedisStorage:
             
             return bool(result)
         except Exception as e:
-            logger.error(f"Failed to delete auth config: {e}")
+            log_error(f"Failed to delete auth config: {e}", component="redis_storage", error=e)
             return False
     
     async def find_auth_configs_by_pattern(self, path_pattern: str) -> List[dict]:
@@ -1038,7 +1037,7 @@ class AsyncRedisStorage:
             
             return configs
         except Exception as e:
-            logger.error(f"Failed to find auth configs by pattern: {e}")
+            log_error(f"Failed to find auth configs by pattern: {e}", component="redis_storage", error=e)
             return []
     
     async def update_auth_config(self, config_id: str, updates: dict) -> bool:
@@ -1064,7 +1063,7 @@ class AsyncRedisStorage:
             # Store updated config
             return await self.store_auth_config(config_id, config)
         except Exception as e:
-            logger.error(f"Failed to update auth config: {e}")
+            log_error(f"Failed to update auth config: {e}", component="redis_storage", error=e)
             return False
     
     async def clear_auth_config_cache(self) -> int:
@@ -1079,10 +1078,10 @@ class AsyncRedisStorage:
                 if await self.redis_client.delete(cache_key):
                     count += 1
             
-            logger.info(f"Cleared {count} auth config cache entries")
+            log_info(f"Cleared {count} auth config cache entries", component="redis_storage")
             return count
         except Exception as e:
-            logger.error(f"Failed to clear auth config cache: {e}")
+            log_error(f"Failed to clear auth config cache: {e}", component="redis_storage", error=e)
             return 0
     
     # =====================================================================
@@ -1096,9 +1095,9 @@ class AsyncRedisStorage:
             from .async_log_storage import AsyncLogStorage
             self.log_storage = AsyncLogStorage(self.redis_client)
             await self.log_storage.initialize()
-            logger.info("Async logging initialized with Redis Streams")
+            log_info("Async logging initialized with Redis Streams", component="redis_storage")
         except Exception as e:
-            logger.error(f"Failed to initialize logging: {e}")
+            log_error(f"Failed to initialize logging: {e}", component="redis_storage", error=e)
             self.log_storage = None
     
     async def log_request(self, log_entry: dict) -> str:

@@ -12,12 +12,10 @@ This ensures local /etc/hosts entries take priority over DNS.
 
 import asyncio
 import socket
-import logging
 import time
 from typing import Dict, Optional, List
 from ipaddress import ip_address, IPv4Address, IPv6Address
-
-logger = logging.getLogger(__name__)
+from .logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class AsyncDNSResolver:
@@ -57,12 +55,12 @@ class AsyncDNSResolver:
         try:
             ip_obj = ip_address(ip)
         except ValueError:
-            logger.debug(f"Invalid IP address: {ip}")
+            log_debug(f"Invalid IP address: {ip}", component="dns_resolver")
             return ip
         
         # Optionally skip private IPs (for backward compatibility)
         if self.skip_private_ips and (ip_obj.is_private or ip_obj.is_loopback or ip_obj.is_link_local):
-            logger.debug(f"Skipping lookup for private/local IP: {ip} (skip_private_ips=True)")
+            log_debug(f"Skipping lookup for private/local IP: {ip} (skip_private_ips=True)", component="dns_resolver")
             return ip
         
         # Check cache
@@ -70,7 +68,7 @@ class AsyncDNSResolver:
             if ip in self._cache:
                 fqdn, timestamp = self._cache[ip]
                 if time.time() - timestamp < self.cache_ttl:
-                    logger.debug(f"Cache hit for {ip}: {fqdn}")
+                    log_trace(f"Cache hit for {ip}: {fqdn}", component="dns_resolver")
                     return fqdn
                 else:
                     # Remove expired entry
@@ -78,7 +76,7 @@ class AsyncDNSResolver:
         
         # Perform lookup (checks /etc/hosts first, then DNS)
         try:
-            logger.debug(f"Performing reverse lookup for {ip} (checks /etc/hosts then DNS)")
+            log_trace(f"Performing reverse lookup for {ip} (checks /etc/hosts then DNS)", component="dns_resolver")
             
             # socket.gethostbyaddr respects system resolution order:
             # typically /etc/hosts first, then DNS
@@ -95,12 +93,12 @@ class AsyncDNSResolver:
             async with self._lock:
                 self._cache[ip] = (fqdn, time.time())
             
-            logger.debug(f"Resolved {ip} to {fqdn}")
+            log_debug(f"Resolved {ip} to {fqdn}", component="dns_resolver")
             return fqdn
             
         except (socket.herror, socket.gaierror, socket.timeout) as e:
             # Lookup failed - this is expected for many IPs without PTR records
-            logger.debug(f"Lookup failed for {ip}: {e}")
+            log_debug(f"Lookup failed for {ip}: {e}", component="dns_resolver")
             
             # Cache the failure to avoid repeated lookups
             async with self._lock:
@@ -109,7 +107,7 @@ class AsyncDNSResolver:
             return ip
         except Exception as e:
             # Unexpected error
-            logger.warning(f"Unexpected error during DNS lookup for {ip}: {e}")
+            log_warning(f"Unexpected error during DNS lookup for {ip}: {e}", component="dns_resolver")
             return ip
     
     async def batch_resolve(self, ips: List[str]) -> Dict[str, str]:
@@ -131,7 +129,7 @@ class AsyncDNSResolver:
         resolved = {}
         for ip, result in zip(ips, results):
             if isinstance(result, Exception):
-                logger.warning(f"Failed to resolve {ip}: {result}")
+                log_warning(f"Failed to resolve {ip}: {result}", component="dns_resolver")
                 resolved[ip] = ip
             else:
                 resolved[ip] = result
@@ -141,7 +139,7 @@ class AsyncDNSResolver:
     def clear_cache(self):
         """Clear the DNS cache."""
         self._cache.clear()
-        logger.info("DNS cache cleared")
+        log_info("DNS cache cleared", component="dns_resolver")
     
     async def get_cache_stats(self) -> Dict[str, int]:
         """Get cache statistics.

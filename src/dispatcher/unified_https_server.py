@@ -6,7 +6,6 @@ load and serve certificates for multiple domains without requiring restarts.
 
 import asyncio
 import ssl
-import logging
 from typing import Optional, Dict, Any
 
 from hypercorn.asyncio import serve
@@ -14,8 +13,7 @@ from hypercorn.config import Config as HypercornConfig
 
 from ..certmanager.dynamic_ssl_provider import DynamicSSLContextProvider
 from ..shared.config import Config, get_config
-
-logger = logging.getLogger(__name__)
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 
 
 class UnifiedHTTPSServer:
@@ -38,12 +36,12 @@ class UnifiedHTTPSServer:
         self.server_task: Optional[asyncio.Task] = None
         self.is_running = False
         
-        logger.info(f"UnifiedHTTPSServer initialized for {host}:{port}")
+        log_info(f"UnifiedHTTPSServer initialized for {host}:{port}", component="https_server")
     
     async def start(self) -> None:
         """Start the unified HTTPS server."""
         if self.is_running:
-            logger.warning("UnifiedHTTPSServer already running")
+            log_warning("UnifiedHTTPSServer already running", component="https_server")
             return
         
         try:
@@ -67,26 +65,26 @@ class UnifiedHTTPSServer:
             config.h2_max_inbound_frame_size = 65536  # 64KB for HTTP/2
             config.h2_max_concurrent_streams = 200  # More concurrent streams
             
-            logger.info(f"Starting UnifiedHTTPSServer on {self.host}:{self.port}")
+            log_info(f"Starting UnifiedHTTPSServer on {self.host}:{self.port}", component="https_server")
             
             # Start server
             self.server_task = asyncio.create_task(serve(self.app, config))
             self.is_running = True
             
-            logger.info("UnifiedHTTPSServer started successfully")
+            log_info("UnifiedHTTPSServer started successfully", component="https_server")
             
         except Exception as e:
-            logger.error(f"Failed to start UnifiedHTTPSServer: {e}")
+            log_error(f"Failed to start UnifiedHTTPSServer: {e}", component="https_server", error=e)
             self.is_running = False
             raise
     
     async def stop(self) -> None:
         """Stop the unified HTTPS server."""
         if not self.is_running:
-            logger.warning("UnifiedHTTPSServer not running")
+            log_warning("UnifiedHTTPSServer not running", component="https_server")
             return
         
-        logger.info("Stopping UnifiedHTTPSServer")
+        log_info("Stopping UnifiedHTTPSServer", component="https_server")
         
         if self.server_task and not self.server_task.done():
             self.server_task.cancel()
@@ -99,7 +97,7 @@ class UnifiedHTTPSServer:
         self.ssl_provider.cleanup()
         
         self.is_running = False
-        logger.info("UnifiedHTTPSServer stopped")
+        log_info("UnifiedHTTPSServer stopped", component="https_server")
     
     def update_certificate(self, cert_name: str) -> None:
         """Update certificate in the SSL provider.
@@ -111,7 +109,7 @@ class UnifiedHTTPSServer:
         Args:
             cert_name: Name of the certificate that was updated
         """
-        logger.info(f"Updating certificate {cert_name} in UnifiedHTTPSServer")
+        log_info(f"Updating certificate {cert_name} in UnifiedHTTPSServer", component="https_server")
         self.ssl_provider.invalidate_certificate(cert_name)
     
     def get_cached_domains(self) -> list:
@@ -149,7 +147,7 @@ class UnifiedHTTPSDispatcher:
         # Pass empty list - the app will dynamically route based on Host header
         self.app = create_proxy_app(cert_manager.storage, [])
         
-        logger.info("UnifiedHTTPSDispatcher initialized")
+        log_info("UnifiedHTTPSDispatcher initialized", component="https_dispatcher")
     
     async def start(self) -> None:
         """Start the HTTPS dispatcher."""
@@ -163,13 +161,13 @@ class UnifiedHTTPSDispatcher:
         )
         
         await self.https_server.start()
-        logger.info("UnifiedHTTPSDispatcher started")
+        log_info("UnifiedHTTPSDispatcher started", component="https_dispatcher")
     
     async def stop(self) -> None:
         """Stop the HTTPS dispatcher."""
         if self.https_server:
             await self.https_server.stop()
-        logger.info("UnifiedHTTPSDispatcher stopped")
+        log_info("UnifiedHTTPSDispatcher stopped", component="https_dispatcher")
     
     def update_certificate(self, cert_name: str) -> None:
         """Update certificate in the HTTPS server.
@@ -189,10 +187,10 @@ class UnifiedHTTPSDispatcher:
             cert_name: Name of the certificate
             certificate: Certificate object
         """
-        logger.info(f"Certificate {cert_name} ready, updating HTTPS server")
+        log_info(f"Certificate {cert_name} ready, updating HTTPS server", component="https_dispatcher")
         
         # The certificate is already stored in Redis by the certificate manager
         # Just invalidate the SSL context cache
         self.update_certificate(cert_name)
         
-        logger.info(f"Certificate {cert_name} is now available for domains: {certificate.domains}")
+        log_info(f"Certificate {cert_name} is now available for domains: {certificate.domains}", component="https_dispatcher")
