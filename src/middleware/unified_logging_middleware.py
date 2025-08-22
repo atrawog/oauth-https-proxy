@@ -6,6 +6,8 @@ using the UnifiedAsyncLogger without blocking request processing.
 """
 
 import time
+import os
+import json
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 
@@ -38,6 +40,26 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
         query = str(request.url.query) if request.url.query else ""
         user_agent = request.headers.get("user-agent", "")
         referer = request.headers.get("referer", "")
+        
+        # Capture headers in DEBUG mode
+        headers = None
+        if os.environ.get('LOG_LEVEL', 'INFO') == 'DEBUG':
+            headers = dict(request.headers)
+        
+        # Capture body in DEBUG mode (for non-GET requests)
+        body = None
+        if os.environ.get('LOG_LEVEL', 'INFO') == 'DEBUG' and method != 'GET':
+            try:
+                # Store body for later use since we can only read it once
+                body_bytes = await request.body()
+                # Create a new request with the body we read
+                from starlette.datastructures import Headers
+                async def receive():
+                    return {"type": "http.request", "body": body_bytes}
+                request._receive = receive
+                body = body_bytes
+            except:
+                pass
         
         # Get auth info if available
         auth_user = getattr(request.state, 'auth_user', None)
@@ -83,7 +105,9 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                 referer=referer,
                 user_id=auth_user or "anonymous",
                 oauth_client_id=oauth_client_id or "",
-                oauth_username=oauth_username or ""
+                oauth_username=oauth_username or "",
+                headers=headers,
+                body=body
             )
             
             # Log the response (fire-and-forget, no await!)

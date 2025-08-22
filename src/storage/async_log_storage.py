@@ -230,6 +230,7 @@ class AsyncLogStorage:
                 # Convert stream entry to log format
                 log_entry = {
                     'timestamp': data.get('timestamp_iso') or data.get('timestamp', ''),
+                    'timestamp_unix': data.get('timestamp', ''),  # Add Unix timestamp for display
                     'client_ip': data.get('client_ip', ''),
                     'client_hostname': data.get('client_hostname', ''),
                     'proxy_hostname': data.get('proxy_hostname', ''),
@@ -241,6 +242,7 @@ class AsyncLogStorage:
                     'user_id': data.get('user_id', 'anonymous'),
                     'user_agent': data.get('user_agent', ''),
                     'referrer': data.get('referrer', ''),
+                    'referer': data.get('referer', ''),  # Support both spellings
                     'bytes_sent': int(data.get('bytes_sent', 0)) if data.get('bytes_sent') else 0,
                     'auth_type': data.get('auth_type', ''),
                     'oauth_client_id': data.get('oauth_client_id', ''),
@@ -250,7 +252,15 @@ class AsyncLogStorage:
                     'component': data.get('component', ''),
                     'log_type': data.get('log_type', 'http_request'),
                     'error': data.get('error', ''),
-                    'error_type': data.get('error_type', '')
+                    'error_type': data.get('error_type', ''),
+                    # Include additional debug fields
+                    'headers': data.get('headers', ''),  # Request headers (JSON string)
+                    'body': data.get('body', ''),  # Request body
+                    'backend_url': data.get('backend_url', ''),  # Backend URL for proxy requests
+                    'session_id': data.get('session_id', ''),  # Session ID
+                    'trace_id': data.get('trace_id', ''),  # Trace ID for correlation
+                    'event_type': data.get('event_type', ''),  # Event type
+                    'worker_id': data.get('worker_id', '')  # Worker ID for debugging
                 }
                 
                 logs.append(log_entry)
