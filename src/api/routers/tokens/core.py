@@ -49,21 +49,27 @@ def create_core_router(async_storage) -> APIRouter:
         # Generate secure token
         token_value = f"acm_{secrets.token_urlsafe(32)}"
         
+        # Get trace_id from request.state
+        trace_id = getattr(request.state, 'trace_id', None)
+        
         # Store token
         result = await async_storage.store_api_token(
             token_request.name, 
             token_value, 
             cert_email=token_request.cert_email
         )
-        log_info(f"Token async_storage result for '{token_request.name}': {result}", component="api.tokens")
+        log_info(f"Token async_storage result for '{token_request.name}': {result}", 
+                component="api.tokens", trace_id=trace_id)
         
         if not result:
             raise HTTPException(500, "Failed to create token")
         
         # Verify token was stored correctly
         token_data = await async_storage.get_api_token_by_name(token_request.name)
-        log_info(f"Token verification for '{token_request.name}': {token_data}", component="api.tokens")
-        log_info(f"Created token '{token_request.name}' with email {token_request.cert_email}", component="api.tokens")
+        log_info(f"Token verification for '{token_request.name}': {token_data}", 
+                component="api.tokens", trace_id=trace_id)
+        log_info(f"Created token '{token_request.name}' with email {token_request.cert_email}", 
+                component="api.tokens", trace_id=trace_id)
         
         return TokenResponse(
             name=token_request.name,

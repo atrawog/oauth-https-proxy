@@ -86,28 +86,35 @@ class EnhancedAsyncProxyHandler:
         # Extract client IP and resolve hostname
         client_ip = get_real_client_ip(request)
         
-        # Resolve client hostname via reverse DNS
-        from ..shared.dns_resolver import get_dns_resolver
-        dns_resolver = get_dns_resolver()
-        client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        # Try to get client_hostname from header first (set by ProxyClientMiddleware)
+        client_hostname = request.headers.get("x-client-hostname")
+        if not client_hostname:
+            # Fallback to DNS resolution if not in headers
+            from ..shared.dns_resolver import get_dns_resolver
+            dns_resolver = get_dns_resolver()
+            client_hostname = await dns_resolver.resolve_ptr(client_ip)
         
         # Extract proxy hostname from request (the hostname being proxied)
-        proxy_hostname = request.headers.get("host", "").split(":")[0]
+        # Try X-Proxy-Hostname header first (set by ProxyClientMiddleware)
+        proxy_hostname = request.headers.get("x-proxy-hostname")
+        if not proxy_hostname:
+            # Fallback to Host header
+            proxy_hostname = request.headers.get("host", "").split(":")[0]
         
-        # Check for existing trace_id from upstream (dispatcher)
-        trace_id = request.headers.get("X-Trace-Id")
+        # ALWAYS use trace_id from upstream - NEVER generate
+        trace_id = request.headers.get("X-Trace-Id") or request.state.get("trace_id")
         
         if not trace_id:
-            # Generate new trace ID for this request with full metadata
-            trace_id = self.logger.start_trace(
-                "proxy_request",
+            # This should never happen - log error and use fallback
+            import time
+            trace_id = f"missing-trace-proxy-{int(time.time() * 1000)}"
+            await self.logger.error(
+                "No trace_id found in proxy request - this should not happen!",
+                client_ip=client_ip,
                 proxy_hostname=proxy_hostname,
                 method=request.method,
                 path=str(request.url.path),
-                client_ip=client_ip,
-                client_hostname=client_hostname,
-                user_agent=request.headers.get("user-agent", ""),
-                referer=request.headers.get("referer", "")
+                fallback_trace_id=trace_id
             )
         
         # Store trace ID and context in request state for downstream use

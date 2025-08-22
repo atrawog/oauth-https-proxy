@@ -24,15 +24,35 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
         # Start timing
         start_time = time.time()
         
+        # Check for existing trace_id from dispatcher (via X-Trace-Id header)
+        trace_id = request.headers.get('x-trace-id')
+        
+        if not trace_id:
+            # This is the entry point - generate new trace_id
+            from ..shared.logger import start_trace
+            trace_id = start_trace("http_request")
+        
+        # Store trace_id in request.state for all downstream use
+        request.state.trace_id = trace_id
+        
         # Extract request information
         client_ip = get_real_client_ip(request)
         
-        # Get hostname from headers
-        hostname = request.headers.get("x-forwarded-host", "")
-        if not hostname:
-            hostname = request.headers.get("host", "")
-        if hostname:
-            hostname = hostname.split(":")[0]
+        # Get proxy hostname from headers (the hostname being proxied to)
+        proxy_hostname = request.headers.get("x-forwarded-host", "")
+        if not proxy_hostname:
+            proxy_hostname = request.headers.get("host", "")
+        if proxy_hostname:
+            proxy_hostname = proxy_hostname.split(":")[0]
+        
+        # Resolve client hostname (reverse DNS of client IP)
+        from ..shared.dns_resolver import get_dns_resolver
+        dns_resolver = get_dns_resolver()
+        import asyncio
+        try:
+            client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        except:
+            client_hostname = client_ip  # Fallback to IP if resolution fails
         
         # Request details
         method = request.method
@@ -94,39 +114,48 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                     except:
                         pass
             
-            # Log the request (fire-and-forget, no await!)
+            # Log the request with trace_id (fire-and-forget, no await!)
             log_request(
                 method=method,
                 path=path,
                 ip=client_ip,
-                proxy_hostname=hostname or "unknown",
+                proxy_hostname=proxy_hostname or "unknown",
+                trace_id=trace_id,
+                client_hostname=client_hostname,
                 query=query,
                 user_agent=user_agent,
                 referer=referer,
                 user_id=auth_user or "anonymous",
-                oauth_client_id=oauth_client_id or "",
-                oauth_username=oauth_username or "",
+                client_id=oauth_client_id or "",  # OAuth client ID when present
+                oauth_user=oauth_username or "",
                 headers=headers,
                 body=body
             )
             
-            # Log the response (fire-and-forget, no await!)
+            # Log the response with same trace_id (fire-and-forget, no await!)
             log_response(
                 status=status,
                 duration_ms=duration_ms,
-                bytes_sent=response_size or 0
+                trace_id=trace_id,
+                bytes_sent=response_size or 0,
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname or "unknown"
             )
             
-            # Log error if there was one (fire-and-forget, no await!)
+            # Log error if there was one with trace_id (fire-and-forget, no await!)
             if error_info:
                 log_error(
                     message=f"Request failed: {method} {path}",
                     component="unified_logging_middleware",
+                    trace_id=trace_id,
                     error_type=error_info["error_type"],
                     error_message=error_info["error"],
                     path=path,
                     method=method,
-                    client_ip=client_ip
+                    client_ip=client_ip,
+                    client_hostname=client_hostname,
+                    proxy_hostname=proxy_hostname or "unknown"
                 )
         
         return response

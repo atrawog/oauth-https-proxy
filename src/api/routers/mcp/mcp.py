@@ -104,6 +104,13 @@ def mount_mcp_app(
         # Start timing
         start_time = time.time()
         
+        # Get trace_id from request.state (set by UnifiedLoggingMiddleware)
+        trace_id = getattr(request.state, 'trace_id', None)
+        if not trace_id:
+            # Fallback - this shouldn't happen
+            trace_id = f"mcp-no-trace-{int(time.time() * 1000)}"
+            logger.warning(f"[MCP] No trace_id in request.state, using fallback: {trace_id}")
+        
         # Get client info
         client_ip = request.client.host if request.client else "127.0.0.1"
         user_agent = request.headers.get('user-agent', 'unknown')
@@ -116,6 +123,7 @@ def mount_mcp_app(
         # Log to async storage for unified logging
         log_entry = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
+            'trace_id': trace_id,
             'client_ip': client_ip,
             'client_hostname': client_hostname,
             'proxy_hostname': request.headers.get('host', 'localhost'),
@@ -124,7 +132,7 @@ def mount_mcp_app(
             'user': 'anonymous',
             'user_agent': user_agent,
             'referrer': request.headers.get('referer', ''),
-            'session_id': session_id,
+            'mcp_session_id': session_id,  # MCP-specific session
             'status': 0,  # Will be updated later
             'response_time': 0  # Will be updated later
         }
@@ -175,9 +183,12 @@ def mount_mcp_app(
             await _unified_logger.log(
                 "info",
                 "MCP GET request for SSE stream",
+                trace_id=trace_id,
                 method="GET",
                 client_ip=client_ip,
-                session_id=session_id,
+                client_hostname=client_hostname,
+                proxy_hostname=request.headers.get('host', 'localhost'),
+                mcp_session_id=session_id,
                 accept=accept_header
             )
         else:

@@ -11,6 +11,7 @@ import os
 import tempfile
 import struct
 import json
+import time
 import httpx
 from typing import Dict, Optional, List, Tuple, Set, Union
 from datetime import datetime
@@ -584,6 +585,56 @@ class UnifiedDispatcher:
             pass
         return None
     
+    def _inject_http_header(self, data: bytes, header_name: str, header_value: str) -> bytes:
+        """Inject a header into HTTP request data.
+        
+        Args:
+            data: Raw HTTP request data
+            header_name: Name of header to inject
+            header_value: Value of header to inject
+            
+        Returns:
+            Modified HTTP request data with injected header
+        """
+        try:
+            request_str = data.decode('utf-8', errors='ignore')
+            lines = request_str.split('\r\n')
+            
+            # Find the end of headers (empty line)
+            header_end_idx = -1
+            for i, line in enumerate(lines):
+                if line == '':  # Empty line marks end of headers
+                    header_end_idx = i
+                    break
+            
+            # Insert the new header before the empty line
+            if header_end_idx > 0:
+                # Check if header already exists (case-insensitive)
+                header_exists = False
+                header_lower = header_name.lower()
+                for i in range(1, header_end_idx):
+                    if ':' in lines[i]:
+                        existing_key = lines[i].split(':', 1)[0].strip().lower()
+                        if existing_key == header_lower:
+                            # Replace existing header
+                            lines[i] = f"{header_name}: {header_value}"
+                            header_exists = True
+                            break
+                
+                # Add header if it doesn't exist
+                if not header_exists:
+                    lines.insert(header_end_idx, f"{header_name}: {header_value}")
+                
+                # Reconstruct the request
+                modified_request = '\r\n'.join(lines)
+                return modified_request.encode('utf-8')
+            
+            return data  # Return original if we couldn't parse
+            
+        except Exception as e:
+            logger.debug(f"Error injecting header: {e}")
+            return data  # Return original on error
+    
     async def handle_http_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTP connection and forward to appropriate instance."""
         print(f"[DEBUG] handle_http_connection called", flush=True)
@@ -744,6 +795,12 @@ class UnifiedDispatcher:
                 return
             
             
+            # Inject X-Trace-Id header into the HTTP request if we have a trace_id
+            if self.unified_logger and 'trace_id' in locals():
+                # Inject the trace_id into the HTTP request
+                data = self._inject_http_header(data, 'X-Trace-Id', trace_id)
+                logger.debug(f"Injected X-Trace-Id header: {trace_id}")
+            
             # Determine if this is a named instance or proxy target
             service_name = None
             for name, port in self.named_services.items():
@@ -755,7 +812,8 @@ class UnifiedDispatcher:
             await self._forward_connection(
                 reader, writer, data, '127.0.0.1', target_port, 
                 client_ip=client_ip, client_port=client_port, use_proxy_protocol=True,
-                hostname=hostname, service_name=service_name
+                hostname=hostname, service_name=service_name, 
+                trace_id=trace_id if 'trace_id' in locals() else None
             )
             
         except Exception as e:
@@ -919,11 +977,15 @@ class UnifiedDispatcher:
     async def _forward_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
                                   initial_data: bytes, target_host: str, target_port: int, 
                                   client_ip: str = None, client_port: int = None, use_proxy_protocol: bool = False,
-                                  hostname: str = None, service_name: str = None):
+                                  hostname: str = None, service_name: str = None, trace_id: str = None):
         """Forward a connection to target host:port with optional PROXY protocol support."""
         try:
             # Connect to the target
             target_reader, target_writer = await asyncio.open_connection(target_host, target_port)
+            
+            # Get the local port of our connection to backend (for Redis key)
+            backend_local_addr = target_writer.get_extra_info('sockname')
+            backend_local_port = backend_local_addr[1] if backend_local_addr else 0
             
             # Send PROXY protocol header to preserve real client IP
             if use_proxy_protocol:
@@ -932,6 +994,36 @@ class UnifiedDispatcher:
                     client_ip = '127.0.0.1'
                 if not client_port:
                     client_port = 0
+                
+                # Store trace_id and metadata in Redis BEFORE sending PROXY protocol
+                # This allows the proxy handler to retrieve it
+                if trace_id and (self.storage or self.async_storage):
+                    try:
+                        # Use same key format as ProxyProtocolHandler expects
+                        key = f"proxy:client:{target_port}:{backend_local_port}"
+                        
+                        # Resolve client hostname if not already done
+                        client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
+                        
+                        # Store comprehensive metadata
+                        value = {
+                            "client_ip": client_ip,
+                            "client_port": client_port,
+                            "client_hostname": client_hostname,
+                            "proxy_hostname": hostname or "",
+                            "trace_id": trace_id,
+                            "service_name": service_name or "",
+                            "timestamp": time.time()
+                        }
+                        
+                        if self.async_storage:
+                            await self.async_storage.redis_client.setex(key, 60, json.dumps(value))
+                        else:
+                            await self.storage.set(key, json.dumps(value), ex=60)
+                        
+                        logger.debug(f"Stored trace metadata in Redis: {key} -> trace_id={trace_id}")
+                    except Exception as e:
+                        logger.error(f"Failed to store trace metadata in Redis: {e}")
                 
                 # Enhanced logging with hostname and instance
                 service_info = f" (service: {service_name})" if service_name else ""

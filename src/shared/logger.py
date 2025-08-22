@@ -104,19 +104,23 @@ def log_warning(message: str, component: Optional[str] = None, **kwargs):
             asyncio.create_task(_logger.warning(message, **kwargs))
 
 
-def log_error(message: str, component: Optional[str] = None, error: Optional[Exception] = None, **kwargs):
+def log_error(message: str, component: Optional[str] = None, error: Optional[Exception] = None, trace_id: Optional[str] = None, **kwargs):
     """Fire-and-forget error log.
     
     Args:
         message: Log message
         component: Optional component name override
         error: Optional exception to log
+        trace_id: Optional trace ID for correlation
         **kwargs: Additional structured data
     """
     if _logger:
         if error:
             kwargs['error'] = str(error)
             kwargs['error_type'] = type(error).__name__
+        
+        if trace_id:
+            kwargs['trace_id'] = trace_id
         
         if component:
             # Temporarily set component
@@ -149,7 +153,7 @@ def log_critical(message: str, component: Optional[str] = None, **kwargs):
 
 # Specialized logging helpers
 
-def log_request(method: str, path: str, ip: str, proxy_hostname: str, **kwargs):
+def log_request(method: str, path: str, ip: str, proxy_hostname: str, trace_id: Optional[str] = None, **kwargs):
     """Fire-and-forget HTTP request log.
     
     Args:
@@ -157,10 +161,11 @@ def log_request(method: str, path: str, ip: str, proxy_hostname: str, **kwargs):
         path: Request path
         ip: Client IP
         proxy_hostname: Target hostname being accessed
+        trace_id: Request trace ID
         **kwargs: Additional request data
     """
     if _logger:
-        asyncio.create_task(_logger.log_request(method, path, ip, proxy_hostname, **kwargs))
+        asyncio.create_task(_logger.log_request(method, path, ip, proxy_hostname, trace_id=trace_id, **kwargs))
 
 
 def log_response(status: int, duration_ms: float, trace_id: Optional[str] = None, **kwargs):

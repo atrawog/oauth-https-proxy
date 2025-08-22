@@ -50,7 +50,23 @@ class ProxyClientMiddleware:
                         if not headers.get("x-forwarded-for"):
                             headers["x-forwarded-for"] = real_client_ip
                         
-                        logger.debug(f"Injected client IP {real_client_ip} from Redis (key: {key})")
+                        # Add trace_id if present in metadata
+                        trace_id = client_info.get("trace_id")
+                        if trace_id and not headers.get("x-trace-id"):
+                            headers["x-trace-id"] = trace_id
+                            logger.debug(f"Injected trace_id {trace_id} from Redis")
+                        
+                        # Add client_hostname if present
+                        client_hostname = client_info.get("client_hostname")
+                        if client_hostname and not headers.get("x-client-hostname"):
+                            headers["x-client-hostname"] = client_hostname
+                        
+                        # Add proxy_hostname if present
+                        proxy_hostname = client_info.get("proxy_hostname")
+                        if proxy_hostname and not headers.get("x-proxy-hostname"):
+                            headers["x-proxy-hostname"] = proxy_hostname
+                        
+                        logger.debug(f"Injected metadata from Redis (key: {key}): IP={real_client_ip}, trace={trace_id}")
                     else:
                         logger.debug(f"No client info found in Redis for key: {key}")
                 except Exception as e:

@@ -85,6 +85,7 @@ class AsyncLogStorage:
             stream_data = {
                 'timestamp': str(timestamp_ms),  # Store as milliseconds for stream queries
                 'timestamp_iso': timestamp_str,   # Also keep ISO format for display
+                'trace_id': log_entry.get('trace_id', ''),  # Request trace ID
                 'client_ip': log_entry.get('client_ip', '127.0.0.1'),
                 'client_hostname': log_entry.get('client_hostname', ''),
                 'proxy_hostname': log_entry.get('proxy_hostname', ''),
@@ -98,8 +99,9 @@ class AsyncLogStorage:
                 'referrer': log_entry.get('referrer', ''),
                 'bytes_sent': str(log_entry.get('bytes_sent', 0)),
                 'auth_type': log_entry.get('auth_type', ''),
-                'oauth_client_id': log_entry.get('oauth_client_id', ''),
-                'oauth_username': log_entry.get('oauth_username', ''),
+                'client_id': log_entry.get('client_id', ''),  # OAuth client ID
+                'oauth_user': log_entry.get('oauth_user', ''),  # OAuth username
+                'mcp_session_id': log_entry.get('mcp_session_id', ''),  # MCP session
                 'error': log_entry.get('error', ''),
                 'error_type': log_entry.get('error_type', ''),
                 'message': log_entry.get('message', ''),
