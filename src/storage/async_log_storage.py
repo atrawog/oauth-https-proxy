@@ -55,25 +55,42 @@ class AsyncLogStorage:
             Stream entry ID
         """
         try:
-            timestamp = log_entry.get('timestamp', datetime.now(timezone.utc).isoformat())
-            client_ip = log_entry.get('client_ip', '127.0.0.1')
+            # Get timestamp - convert to Unix if ISO format provided
+            timestamp_str = log_entry.get('timestamp', '')
+            if timestamp_str:
+                try:
+                    # Try to parse ISO format
+                    dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+                    unix_timestamp = dt.timestamp()
+                except:
+                    # Assume it's already Unix timestamp
+                    unix_timestamp = float(timestamp_str) if timestamp_str else time.time()
+            else:
+                unix_timestamp = time.time()
+            
+            # Also keep ISO format for display
+            if not timestamp_str:
+                timestamp_str = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).isoformat()
+            
+            client_ip = log_entry.get('ip', log_entry.get('client_ip', '127.0.0.1'))
             hostname = log_entry.get('hostname', '')
             method = log_entry.get('method', 'GET')
             path = log_entry.get('path', '/')
-            status_code = log_entry.get('status_code', 0)
-            response_time_ms = log_entry.get('response_time_ms', 0)
-            user_id = log_entry.get('user_id', '')
+            status_code = log_entry.get('status', log_entry.get('status_code', 0))
+            response_time_ms = log_entry.get('response_time', log_entry.get('response_time_ms', 0))
+            user_id = log_entry.get('user', log_entry.get('user_id', ''))
             
-            # Create request key
-            req_key = f"req:{timestamp}:{client_ip}"
+            # Create request key using Unix timestamp for proper ordering
+            req_key = f"req:{unix_timestamp}:{client_ip}"
             
             # Store request data as hash
             await self.redis.hset(req_key, mapping={
-                'timestamp': timestamp,
+                'timestamp': timestamp_str,
                 'ip': client_ip,
                 'hostname': hostname,
                 'method': method,
                 'path': path,
+                'query': log_entry.get('query', ''),  # Store query parameters
                 'status': str(status_code),
                 'response_time': str(response_time_ms),
                 'user': user_id,
@@ -87,8 +104,12 @@ class AsyncLogStorage:
             # Set TTL for request data (7 days by default)
             await self.redis.expire(req_key, 7 * 24 * 3600)
             
-            # Add to indexes with timestamp score
-            timestamp_score = time.time()
+            # Add to indexes with Unix timestamp score for proper sorting
+            timestamp_score = unix_timestamp
+            
+            # Add to global "all logs" index
+            await self.redis.zadd("idx:req:all", {req_key: timestamp_score})
+            await self.redis.expire("idx:req:all", 7 * 24 * 3600)
             
             # Index by IP
             await self.redis.zadd(f"idx:req:ip:{client_ip}", {req_key: timestamp_score})
@@ -121,7 +142,7 @@ class AsyncLogStorage:
             # Publish to stream for real-time processing
             stream_data = {
                 'data': json.dumps(log_entry),
-                'timestamp': timestamp,
+                'timestamp': timestamp_str,
                 'ip': client_ip,
                 'hostname': hostname,
                 'status': str(status_code)
@@ -163,8 +184,11 @@ class AsyncLogStorage:
             offset = kwargs.get('offset', 0)
             
             # Calculate time window
-            cutoff = datetime.now(timezone.utc) - timedelta(hours=hours)
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(hours=hours)
             cutoff_timestamp = cutoff.timestamp()
+            
+            logger.info(f"Search logs: now={now.timestamp()}, cutoff={cutoff_timestamp}, hours={hours}")
             
             # Determine which index to use based on filters
             index_key = None
@@ -177,8 +201,8 @@ class AsyncLogStorage:
             elif kwargs.get('status'):
                 index_key = f"idx:req:status:{kwargs['status']}"
             else:
-                # Use error index as default for recent activity
-                index_key = "idx:req:errors"
+                # Use the global "all logs" index when no specific filter
+                index_key = "idx:req:all"
             
             # Get request keys from index
             request_keys = await self.redis.zrevrangebyscore(
@@ -188,6 +212,8 @@ class AsyncLogStorage:
                 start=offset,
                 num=limit
             )
+            
+            logger.info(f"Found {len(request_keys)} keys in index {index_key} with cutoff {cutoff_timestamp}")
             
             # Fetch request data
             logs = []
@@ -208,6 +234,7 @@ class AsyncLogStorage:
                         'hostname': req_data.get('hostname', ''),
                         'method': req_data.get('method', ''),
                         'path': req_data.get('path', ''),
+                        'query': req_data.get('query', ''),  # Include query parameters
                         'status_code': int(req_data.get('status', 0)),
                         'response_time_ms': float(req_data.get('response_time', 0)),
                         'user_id': req_data.get('user', ''),
@@ -275,6 +302,7 @@ class AsyncLogStorage:
                         'hostname': req_data.get('hostname', ''),
                         'method': req_data.get('method', ''),
                         'path': req_data.get('path', ''),
+                        'query': req_data.get('query', ''),  # Include query parameters
                         'status_code': status,
                         'error': req_data.get('error', ''),
                         'message': req_data.get('message', '')

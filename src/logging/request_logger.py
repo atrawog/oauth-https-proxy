@@ -16,9 +16,65 @@ class RequestLogger:
         self._stats_cache = {}
     
     async def log_request(self, request_data: Dict[str, Any]):
-        """Log a request."""
-        # Basic logging for now
-        logger.info(f"Request: {request_data}")
+        """Log a request to Redis."""
+        if not self.redis_client:
+            logger.debug(f"No Redis client, skipping log: {request_data}")
+            return None
+        
+        try:
+            import time
+            timestamp = float(request_data.get('timestamp', time.time()))
+            ip = request_data.get('ip', 'unknown')
+            
+            # Generate unique key
+            sequence = int((timestamp * 1000) % 1000000)
+            request_key = f"req:{ip}:{int(timestamp)}:{sequence}"
+            
+            # Store in Redis
+            await self.redis_client.hset(request_key, mapping={
+                k: str(v) if v is not None else "" for k, v in request_data.items()
+            })
+            await self.redis_client.expire(request_key, 86400)  # 24 hour TTL
+            
+            # Add to indexes
+            await self.redis_client.zadd(f"idx:req:ip:{ip}", {request_key: timestamp})
+            await self.redis_client.expire(f"idx:req:ip:{ip}", 86400)
+            
+            hostname = request_data.get('hostname', '')
+            if hostname:
+                await self.redis_client.zadd(f"idx:req:host:{hostname}", {request_key: timestamp})
+                await self.redis_client.expire(f"idx:req:host:{hostname}", 86400)
+            
+            # Add to global index
+            await self.redis_client.zadd("idx:req:all", {request_key: timestamp})
+            
+            # Add to stream for real-time monitoring
+            await self.redis_client.xadd(
+                "stream:requests",
+                {
+                    "ip": ip,
+                    "hostname": hostname or "unknown",
+                    "method": request_data.get('method', ''),
+                    "path": request_data.get('path', ''),
+                    "timestamp": str(timestamp),
+                    "status": str(request_data.get('status', 0))
+                },
+                maxlen=100000
+            )
+            
+            # Update statistics
+            from datetime import datetime, timezone
+            date_hour = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d:%H")
+            if hostname:
+                await self.redis_client.hincrby(f"stats:requests:{date_hour}", hostname, 1)
+                await self.redis_client.expire(f"stats:requests:{date_hour}", 3600 * 48)
+            
+            logger.debug(f"Logged request to Redis: {request_key}")
+            return request_key
+            
+        except Exception as e:
+            logger.error(f"Failed to log request to Redis: {e}")
+            return None
     
     async def get_statistics(self, hours: int = 24) -> Dict[str, Any]:
         """Get request statistics for the specified time period."""
@@ -66,25 +122,48 @@ class RequestLogger:
         
         results = []
         try:
-            # Use index to find requests from this IP
+            import time
+            min_timestamp = time.time() - (hours * 3600)
+            
+            # Use index to find requests from this IP within time range
             index_key = f"idx:req:ip:{ip}"
-            request_ids = await self.redis_client.zrevrange(
-                index_key, 0, limit - 1
+            request_keys = await self.redis_client.zrangebyscore(
+                index_key,
+                min_timestamp,
+                "+inf",
+                start=0,
+                num=limit
             )
             
-            for req_id in request_ids:
-                req_data = await self.redis_client.hgetall(req_id)
-                if req_data:
-                    results.append({
-                        'timestamp': req_data.get('timestamp', ''),
-                        'ip': req_data.get('ip', ''),
-                        'method': req_data.get('method', ''),
-                        'path': req_data.get('path', ''),
-                        'status': int(req_data.get('status', 0)),
-                        'response_time': float(req_data.get('response_time', 0)),
-                        'hostname': req_data.get('hostname', ''),
-                        'user': req_data.get('user', '')
-                    })
+            # Fetch all request data
+            if request_keys:
+                pipeline = self.redis_client.pipeline()
+                for key in request_keys:
+                    pipeline.hgetall(key)
+                
+                all_data = await pipeline.execute()
+                for req_data in all_data:
+                    if req_data:
+                        # Convert all values to appropriate types
+                        result = {}
+                        for k, v in req_data.items():
+                            if k in ['status', 'response_size', 'content_length']:
+                                try:
+                                    result[k] = int(v) if v else 0
+                                except:
+                                    result[k] = 0
+                            elif k in ['response_time', 'duration_ms', 'timestamp']:
+                                try:
+                                    result[k] = float(v) if v else 0.0
+                                except:
+                                    result[k] = 0.0
+                            else:
+                                result[k] = v
+                        results.append(result)
+            
+            # Sort by timestamp descending (most recent first)
+            results.sort(key=lambda x: x.get('timestamp', 0), reverse=True)
+            
         except Exception as e:
             logger.error(f"Error querying logs by IP: {e}")
         

@@ -141,15 +141,9 @@ def create_asgi_app():
         app.state.docker_manager = async_components.docker_manager
         app.state.cert_manager = async_components.cert_manager
         
-        # Initialize request logger
-        from src.logging.request_logger import RequestLogger
-        app.state.request_logger = RequestLogger(
-            async_components.async_storage.redis_client if async_components.async_storage else None
-        )
-        
-        # Set global request logger
-        from src.shared.logging import set_request_logger
-        set_request_logger(app.state.request_logger)
+        # Use AsyncLogStorage for request logging (already initialized in async_components)
+        # The middleware will access it via app.state.async_storage
+        logger.info("Using AsyncLogStorage for request logging via Redis Streams")
         
         # Initialize auth service
         from src.auth import FlexibleAuthService
@@ -238,15 +232,9 @@ async def run_server(config: Config) -> None:
     app.state.cert_manager = async_components.cert_manager
     app.state.storage = storage  # Legacy storage still needed by some routers
     
-    # Initialize request logger
-    from src.logging.request_logger import RequestLogger
-    app.state.request_logger = RequestLogger(
-        async_components.async_storage.redis_client if async_components.async_storage else None
-    )
-    
-    # Set global request logger
-    from src.shared.logging import set_request_logger
-    set_request_logger(app.state.request_logger)
+    # Use AsyncLogStorage for request logging (already initialized in async_components)
+    # The middleware will access it via app.state.async_storage
+    logger.info("Using AsyncLogStorage for request logging via Redis Streams")
     
     # Initialize auth service
     from src.auth import FlexibleAuthService

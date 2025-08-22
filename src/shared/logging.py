@@ -366,8 +366,19 @@ class IPLogCapture:
                 # Add all fields from full_event
                 request_data.update(log_data["full_event"])
                 
-                # Pass as single dictionary parameter
-                await self.request_logger.log_request(request_data)
+                # Unpack dictionary to pass as individual parameters
+                await self.request_logger.log_request(
+                    ip=request_data.get("ip"),
+                    hostname=request_data.get("hostname"),
+                    method=request_data.get("method"),
+                    path=request_data.get("path"),
+                    query=request_data.get("query"),
+                    user_agent=request_data.get("user_agent"),
+                    auth_user=request_data.get("auth_user"),
+                    referer=request_data.get("referer"),
+                    **{k: v for k, v in request_data.items() 
+                       if k not in ["ip", "hostname", "method", "path", "query", "user_agent", "auth_user", "referer"]}
+                )
             except Exception:
                 # Silently fail for individual items
                 pass
@@ -635,8 +646,19 @@ async def log_request(
                 if k not in ["hostname", "auth_user"]:
                     request_data[k] = v
             
-            # Pass as single dictionary parameter
-            request_key = await request_logger.log_request(request_data)
+            # Unpack dictionary to pass as individual parameters
+            request_key = await request_logger.log_request(
+                ip=request_data.get("ip"),
+                hostname=request_data.get("hostname"),
+                method=request_data.get("method"),
+                path=request_data.get("path"),
+                query=request_data.get("query"),
+                user_agent=request_data.get("user_agent"),
+                auth_user=request_data.get("auth_user"),
+                referer=request_data.get("referer"),
+                **{k: v for k, v in request_data.items() 
+                   if k not in ["ip", "hostname", "method", "path", "query", "user_agent", "auth_user", "referer"]}
+            )
             log_data["_request_key"] = request_key  # Store for later use
         except Exception as e:
             logger.error(f"Failed to log request to RequestLogger: {e}")
@@ -798,7 +820,19 @@ async def log_response(
                     response_data[k] = v
             
             # Log as request data (but marked as response)
-            await request_logger.log_request(response_data)
+            # Unpack dictionary to pass as individual parameters
+            await request_logger.log_request(
+                ip=response_data.get("ip"),
+                hostname=response_data.get("hostname"),
+                method=response_data.get("method"),
+                path=response_data.get("path"),
+                query=response_data.get("query"),
+                user_agent=response_data.get("user_agent"),
+                auth_user=response_data.get("auth_user"),
+                referer=response_data.get("referer"),
+                **{k: v for k, v in response_data.items() 
+                   if k not in ["ip", "hostname", "method", "path", "query", "user_agent", "auth_user", "referer"]}
+            )
         except Exception as e:
             logger.error(f"Failed to log response to RequestLogger: {e}")
     

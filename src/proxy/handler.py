@@ -549,11 +549,14 @@ class EnhancedProxyHandler:
     async def _stream_response(self, response: httpx.Response) -> AsyncIterator[bytes]:
         """Stream response body."""
         try:
-            # For SSE, use smaller chunks and yield immediately
+            # CRITICAL FIX: Don't use 1-byte chunks for SSE!
+            # That causes massive overhead and limits speed to ~10KB/s
+            # Use reasonable chunk size even for SSE
             content_type = response.headers.get("content-type", "")
             if "text/event-stream" in content_type:
-                # SSE needs smaller chunks and immediate yielding
-                async for chunk in response.aiter_bytes(chunk_size=1):
+                # SSE still needs prompt delivery but not 1-byte chunks!
+                # 4KB chunks are fine and much faster
+                async for chunk in response.aiter_bytes(chunk_size=4096):
                     if chunk:
                         yield chunk
             else:
@@ -774,11 +777,13 @@ class EnhancedProxyHandler:
             headers["x-forwarded-proto"] = request.url.scheme
             headers["x-forwarded-host"] = request.headers.get("host", "")
             
-            # Get request body
-            body = await request.body()
+            # Get request body for streaming
+            body = None
+            if request.method in ["POST", "PUT", "PATCH"]:
+                body = await request.body()
             
-            # Forward the request
-            response = await self.client.request(
+            # Build and send request with streaming response
+            req = self.client.build_request(
                 method=request.method,
                 url=full_url,
                 headers=headers,
@@ -786,20 +791,48 @@ class EnhancedProxyHandler:
                 cookies=request.cookies
             )
             
-            # Create FastAPI Response
-            fastapi_response = Response(
-                content=response.content,
-                status_code=response.status_code,
-                headers=dict(response.headers)
-            )
+            # Send request and get streaming response
+            upstream_response = await self.client.send(req, stream=True)
+            
+            # Log successful proxy request
+            duration_ms = (time.time() - start_time) * 1000
+            logger.info(f"Route request to {full_url} returned {upstream_response.status_code}")
+            
+            # Prepare response headers
+            response_headers = dict(upstream_response.headers)
+            # Remove hop-by-hop headers
+            for header in ['connection', 'keep-alive', 'transfer-encoding', 'upgrade']:
+                response_headers.pop(header, None)
+            
+            # Check if it's an SSE or streaming response
+            content_type = response_headers.get('content-type', '').lower()
+            is_streaming = 'text/event-stream' in content_type or 'stream' in content_type
+            
+            if is_streaming:
+                # Return streaming response for SSE
+                response = StreamingResponse(
+                    self._stream_response(upstream_response),
+                    status_code=upstream_response.status_code,
+                    headers=response_headers,
+                    media_type=upstream_response.headers.get("content-type"),
+                    background=BackgroundTask(upstream_response.aclose)
+                )
+            else:
+                # For non-streaming responses, read the content
+                content = await upstream_response.aread()
+                await upstream_response.aclose()
+                response = Response(
+                    content=content,
+                    status_code=upstream_response.status_code,
+                    headers=response_headers
+                )
             
             # Log the response
-            duration_ms = (time.time() - start_time) * 1000
-            await log_response(logger, fastapi_response, duration_ms,
+            await log_response(logger, response, duration_ms,
                              ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key)
             
             # Return the response
-            return fastapi_response
+            return response
             
         except httpx.ConnectError:
             duration_ms = (time.time() - start_time) * 1000

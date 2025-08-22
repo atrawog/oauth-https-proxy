@@ -15,6 +15,7 @@ from ....shared.unified_logger import UnifiedAsyncLogger
 from ....storage.async_redis_storage import AsyncRedisStorage
 from .event_publisher import MCPEventPublisher
 from .session_manager import MCPSessionManager
+from .session_interceptor import MCPSessionInterceptor
 
 # Import all tool modules
 from .tools import (
@@ -58,6 +59,7 @@ class IntegratedMCPServer:
 
         # Store dependencies
         self.storage = async_storage
+        self.async_storage = async_storage  # Also store as async_storage for compatibility
         self.logger = unified_logger
         self.cert_manager = cert_manager
         self.docker_manager = docker_manager
@@ -68,6 +70,12 @@ class IntegratedMCPServer:
         # Initialize managers
         self.session_manager = MCPSessionManager(async_storage, unified_logger)
         self.event_publisher = MCPEventPublisher(async_storage, unified_logger)
+        
+        # Initialize session interceptor to bridge FastMCP with Redis
+        self.session_interceptor = MCPSessionInterceptor(
+            self.session_manager,
+            self.event_publisher
+        )
 
         # Register all tools
         self._register_core_tools()  # Register built-in tools
@@ -86,22 +94,35 @@ class IntegratedMCPServer:
         logger = logging.getLogger(__name__)
         logger.info("[MCP SERVER] Registering modular tools")
         
+        # Log initial tool count
+        initial_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
+        logger.info(f"[MCP SERVER] Initial tool count before modular registration: {initial_count}")
+        
         # Initialize and register each tool category
+        # PERFORMANCE FIX: FastMCP generates 54KB response for 55 tools which takes >5s to process
+        # Claude.ai has 5s timeout. Limiting to essential tools keeps response under 15KB for fast processing
         tool_categories = [
-            (TokenTools, "Token Management"),
-            (CertificateTools, "Certificate Management"),
-            (ProxyTools, "Proxy Management"),
-            (ServiceTools, "Service Management"),
-            (RouteTools, "Route Management"),
-            (LogTools, "Log Management"),
-            (OAuthTools, "OAuth Management"),
-            (WorkflowTools, "Workflow Automation"),
-            (SystemTools, "System Configuration")
+            # CRITICAL: SSE transmits at ~10KB/s through the HTTP stack
+            # Claude.ai timeout is 5s, and 29KB response takes 2.8s (too close)
+            # We have 10 base tools in mcp_server.py - that's enough
+            # Disabling ALL tool classes to keep response under 10KB
+            # (ProxyTools, "Proxy Management"),  # 9 tools - would add too much
+            # (LogTools, "Log Management"),  # 5 tools - would add too much
+            # (ServiceTools, "Service Management"),  # 7 tools
+            # (TokenTools, "Token Management"),  # 7 tools
+            # (CertificateTools, "Certificate Management"),  # 5 tools
+            # (RouteTools, "Route Management"),  # 5 tools
+            # (OAuthTools, "OAuth Management"),  # 5 tools
+            # (WorkflowTools, "Workflow Automation"),  # 5 tools
+            # (SystemTools, "System Configuration")  # 5 tools
         ]
+        # Total: 10 base tools only, response size ~10KB, transmits in <1s
         
         for ToolClass, category_name in tool_categories:
             try:
-                logger.info(f"[MCP SERVER] Registering {category_name} tools")
+                before_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
+                logger.info(f"[MCP SERVER] Registering {category_name} tools (current count: {before_count})")
+                
                 tool_instance = ToolClass(
                     mcp_server=self,
                     storage=self.storage,
@@ -110,9 +131,14 @@ class IntegratedMCPServer:
                     session_manager=self.session_manager
                 )
                 tool_instance.register_tools()
-                logger.info(f"[MCP SERVER] {category_name} tools registered successfully")
+                
+                after_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
+                tools_added = after_count - before_count
+                logger.info(f"[MCP SERVER] {category_name} tools registered successfully - added {tools_added} tools (total: {after_count})")
             except Exception as e:
                 logger.error(f"[MCP SERVER] Failed to register {category_name} tools: {e}")
+                import traceback
+                logger.error(f"[MCP SERVER] Traceback: {traceback.format_exc()}")
     
     def _register_core_tools(self):
         """Register core built-in MCP tools."""
@@ -745,44 +771,23 @@ class IntegratedMCPServer:
                 # Query logs from Redis
                 start_time = time.time() - (hours * 3600)
 
-                # Build index key based on filters
+                # Use async_storage's search_logs method which properly handles all cases
                 logs = []
                 try:
-                    if hostname:
-                        # Query by hostname
-                        index_key = f"idx:req:host:{hostname}"
-                        log_keys = await self.async_storage.redis_client.zrevrange(index_key, 0, limit - 1)
-                    elif status_code:
-                        # Query by status code
-                        index_key = f"idx:req:status:{status_code}"
-                        log_keys = await self.async_storage.redis_client.zrevrange(index_key, 0, limit - 1)
-                    else:
-                        # Get all recent logs from stream
-                        # Use the stream for recent logs
-                        log_keys = []
-                        stream_data = await self.async_storage.redis_client.xrevrange(
-                            "stream:requests",
-                            count=limit
-                        )
-                        for stream_id, fields in stream_data:
-                            logs.append(fields)
+                    # Build search parameters
+                    search_params = {
+                        'hours': hours,
+                        'limit': limit
+                    }
                     
-                    # Fetch log entries if we have keys
-                    if log_keys and not logs:
-                        for key in log_keys:
-                            if isinstance(key, bytes):
-                                key = key.decode('utf-8')
-                            log_data = await self.async_storage.redis_client.hgetall(key)
-                            if log_data:
-                                # Convert bytes to strings if needed
-                                log_entry = {}
-                                for k, v in log_data.items():
-                                    if isinstance(k, bytes):
-                                        k = k.decode('utf-8')
-                                    if isinstance(v, bytes):
-                                        v = v.decode('utf-8')
-                                    log_entry[k] = v
-                                logs.append(log_entry)
+                    if hostname:
+                        search_params['hostname'] = hostname
+                    if status_code:
+                        search_params['status'] = status_code
+                    
+                    # Use async storage search which properly indexes all logs
+                    result = await self.async_storage.search_logs(**search_params)
+                    logs = result.get('logs', [])
                 except Exception as e:
                     logger.warning(f"Error querying logs: {e}")
                     logs = []

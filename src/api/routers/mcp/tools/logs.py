@@ -267,9 +267,15 @@ class LogTools(BaseMCPTools):
                 # Query error logs from Redis
                 logs = []
                 try:
-                    # Get error log keys from error index
+                    # Get error log keys from error index within time range
                     index_key = "idx:req:errors"
-                    log_keys = await self.storage.redis_client.zrevrange(index_key, 0, limit - 1)
+                    log_keys = await self.storage.redis_client.zrevrangebyscore(
+                        index_key, 
+                        "+inf",
+                        start_time,
+                        start=0,
+                        num=limit * 2  # Get more to account for filtering
+                    )
                     
                     # Fetch log entries
                     if log_keys:
@@ -288,11 +294,15 @@ class LogTools(BaseMCPTools):
                                     log_entry[k] = v
                                 
                                 # Filter by status code if include_warnings is False
-                                status_code = int(log_entry.get('status_code', 0))
+                                status_code = int(log_entry.get('status', log_entry.get('status_code', 0)))
                                 if not include_warnings and 400 <= status_code < 500:
                                     continue  # Skip 4xx errors if not including warnings
                                 
                                 logs.append(log_entry)
+                                
+                                # Stop if we have enough results
+                                if len(logs) >= limit:
+                                    break
                 except Exception as e:
                     logger.warning(f"Error querying error logs: {e}")
                     logs = []
@@ -302,11 +312,13 @@ class LogTools(BaseMCPTools):
                 for log in logs:
                     formatted_logs.append({
                         "timestamp": log.get("timestamp"),
-                        "level": log.get("level"),
-                        "message": log.get("message"),
-                        "component": log.get("component"),
-                        "trace_id": log.get("trace_id"),
-                        "error_details": log.get("error_details")
+                        "client_ip": log.get("ip", log.get("client_ip")),
+                        "hostname": log.get("hostname"),
+                        "method": log.get("method"),
+                        "path": log.get("path"),
+                        "status_code": log.get("status", log.get("status_code")),
+                        "response_time": log.get("response_time", log.get("response_time_ms")),
+                        "error": log.get("error", log.get("message"))
                     })
                 
                 # Log audit event

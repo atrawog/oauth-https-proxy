@@ -1,0 +1,60 @@
+================================================================================
+MCP LOGGING TOOLS vs PROXY-CLIENT COMMANDS COMPARISON REPORT
+================================================================================
+
+📊 SUMMARY
+Total Tests: 5
+Passed: 0
+Failed: 5
+Success Rate: 0.0%
+
+📈 TEST DATA GENERATED
+Total Requests: 99
+Test IPs: 192.168.1.100, 10.0.0.50, 172.16.0.25
+Test Hostnames: api.test.com, auth.test.com, app.test.com
+
+🔍 TEST: log-search
+----------------------------------------
+❌ ERROR: MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+
+
+========================================
+
+🔍 TEST: log-errors
+----------------------------------------
+❌ ERROR: MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+
+
+========================================
+
+🔍 TEST: log-by-ip
+----------------------------------------
+❌ ERROR: MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+
+
+========================================
+
+🔍 TEST: log-by-proxy
+----------------------------------------
+❌ ERROR: MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+
+
+========================================
+
+🔍 TEST: log-events
+----------------------------------------
+❌ ERROR: MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+
+
+========================================
+
+💡 RECOMMENDATIONS
+--------------------
+🔧 Issues found that need attention:
+   • log-search: Error - MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+   • log-errors: Error - MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+   • log-by-ip: Error - MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+   • log-by-proxy: Error - MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+   • log-events: Error - MCP tool failed: MCP tool call failed: 400 - {"jsonrpc":"2.0","id":"server-error","error":{"code":-32600,"message":"Bad Request: Missing session ID"}}
+
+🕐 Report generated at: 2025-08-21T18:04:03.876196+00:00

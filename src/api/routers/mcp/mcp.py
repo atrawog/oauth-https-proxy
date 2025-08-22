@@ -40,6 +40,8 @@ def mount_mcp_app(
     """
     global _mcp_app, _mcp_session_manager, _mcp_task_group, _mcp_task, _unified_logger
     
+    logger.info(f"[MCP MOUNT] mount_mcp_app called. Current _mcp_app: {_mcp_app}")
+    
     if not unified_logger:
         raise RuntimeError("Unified logger is required for MCP server")
     
@@ -59,13 +61,21 @@ def mount_mcp_app(
     # Get FastMCP instance
     mcp = mcp_server.get_server()
     tool_count = len(mcp._tool_manager._tools) if hasattr(mcp, '_tool_manager') else 0
+    tool_names = list(mcp._tool_manager._tools.keys()) if hasattr(mcp, '_tool_manager') and hasattr(mcp._tool_manager, '_tools') else []
     logger.info(f"[MCP MOUNT] Registered {tool_count} tools")
+    if tool_names:
+        logger.info(f"[MCP MOUNT] Tool names: {tool_names[:10]}")  # Log first 10 tool names
+    else:
+        logger.warning("[MCP MOUNT] No tools found in tool manager!")
     
     # Get the streamable HTTP app from the SDK
     _mcp_app = mcp.streamable_http_app()
     
     # Store the session manager for task group initialization
     _mcp_session_manager = mcp._session_manager
+    
+    # Store MCP server in app state for session interception
+    app.state.mcp_server = mcp_server
     
     # Add CORS middleware
     _mcp_app.add_middleware(
@@ -86,27 +96,43 @@ def mount_mcp_app(
     async def mcp_no_slash(request: Request) -> Response:
         """Handle /mcp requests without redirecting to /mcp/."""
         import json
+        import time
+        import asyncio
+        from datetime import datetime, timezone
         
-        # Log request details using unified logger
-        client_ip = request.client.host if request.client else "unknown"
+        # Start timing
+        start_time = time.time()
+        
+        # Get client info
+        client_ip = request.client.host if request.client else "127.0.0.1"
         user_agent = request.headers.get('user-agent', 'unknown')
         session_id = request.headers.get('mcp-session-id', 'no-session')
         
-        # Use unified logger for async logging to Redis Streams
-        await _unified_logger.log(
-            "info",
-            f"MCP {request.method} request",
-            method=request.method,
-            path="/mcp",
-            client_ip=client_ip,
-            session_id=session_id,
-            user_agent=user_agent
-        )
+        # Log to async storage for unified logging
+        log_entry = {
+            'timestamp': datetime.now(timezone.utc).isoformat(),
+            'ip': client_ip,
+            'hostname': request.headers.get('host', 'localhost'),
+            'method': request.method,
+            'path': '/mcp',
+            'user': 'anonymous',
+            'user_agent': user_agent,
+            'referrer': request.headers.get('referer', ''),
+            'session_id': session_id,
+            'status': 0,  # Will be updated later
+            'response_time': 0  # Will be updated later
+        }
+        
+        # Log initial request (we'll update status and response time later)
+        if hasattr(request.app.state, 'async_storage'):
+            try:
+                await request.app.state.async_storage.log_request(log_entry)
+            except Exception as e:
+                logger.warning(f"[MCP] Failed to log initial request: {e}")
         
         # Simply forward to the mounted app with adjusted path
         # The mounted app at /mcp/ expects the request at the root path /
         from starlette.responses import StreamingResponse, JSONResponse
-        import asyncio
         
         # Check if Accept header includes required formats
         accept_header = request.headers.get('accept', '')
@@ -117,13 +143,42 @@ def mount_mcp_app(
         has_event_stream = 'text/event-stream' in accept_header
         has_json = 'application/json' in accept_header
         
+        # Track if we already have session header
+        has_session_header = False
+        
         for k, v in request.headers.items():
-            if k.lower() == 'accept':
-                # Ensure both required formats are in Accept header
-                if not has_event_stream or not has_json:
-                    v = 'application/json, text/event-stream'
-                    logger.info(f"[MCP HANDLER] Modified Accept header to: {v}")
+            if k.lower() == 'mcp-session-id':
+                has_session_header = True
+            # Pass Accept header as-is to respect client preference!
+            # Don't force SSE when client doesn't want it
             headers_list.append((k.encode(), v.encode()))
+        
+        # Log what the client actually wants
+        if not has_event_stream and has_json:
+            logger.info(f"[MCP HANDLER] Client wants JSON only (no SSE)")
+        elif has_event_stream and not has_json:
+            logger.info(f"[MCP HANDLER] Client wants SSE only")
+        elif has_event_stream and has_json:
+            logger.info(f"[MCP HANDLER] Client accepts both JSON and SSE")
+        
+        # Handle GET requests differently - they don't have a body
+        if request.method == 'GET':
+            # GET requests are for establishing SSE stream
+            body = b''  # No body for GET
+            logger.info(f"[MCP HANDLER] GET request for SSE stream from {client_ip}")
+            await _unified_logger.log(
+                "info",
+                "MCP GET request for SSE stream",
+                method="GET",
+                client_ip=client_ip,
+                session_id=session_id,
+                accept=accept_header
+            )
+        else:
+            # POST/PUT/etc have body
+            body = await request.body()
+        
+        body_sent = False
         
         # Build complete ASGI scope for the MCP app
         # The MCP app expects to receive requests at the root "/"
@@ -144,64 +199,23 @@ def mount_mcp_app(
             'state': {}
         }
         
-        # Get the request body
-        body = await request.body()
-        body_sent = False
-        
         # Track if we need to inject initialization
         needs_init_injection = False
         
-        # Log request body for MCP protocol messages
-        if body:
+        # Log request body for MCP protocol messages (only for non-GET)
+        if body and request.method != 'GET':
             try:
                 body_json = json.loads(body)
                 method = body_json.get('method', 'unknown')
                 request_id = body_json.get('id', 'no-id')
                 
-                # Check if this is a tools/list request that might come before initialization
+                # Log tools/list requests
                 if method == 'tools/list':
-                    # Check if session is initialized by looking at session_id
-                    if session_id == 'no-session' or not session_id:
-                        logger.info(f"[MCP FIX] Detected tools/list before initialization, will auto-initialize")
-                        needs_init_injection = True
+                    logger.info(f"[MCP] Tools/list request from {client_ip} with session {session_id}")
                 
-                # Fix incomplete initialize requests from Claude.ai
+                # Log initialize requests
                 if method == 'initialize':
-                    params = body_json.get('params', {})
-                    
-                    # Ensure capabilities exist with proper structure
-                    if 'capabilities' not in params or not params['capabilities']:
-                        params['capabilities'] = {
-                            "experimental": {},
-                            "prompts": {"listChanged": False},
-                            "resources": {"subscribe": False, "listChanged": False},
-                            "tools": {"listChanged": False}
-                        }
-                        logger.info(f"[MCP FIX] Added missing capabilities to initialize request")
-                    elif isinstance(params['capabilities'], dict):
-                        # Fill in missing capability fields
-                        caps = params['capabilities']
-                        if 'experimental' not in caps:
-                            caps['experimental'] = {}
-                        if 'prompts' not in caps:
-                            caps['prompts'] = {"listChanged": False}
-                        if 'resources' not in caps:
-                            caps['resources'] = {"subscribe": False, "listChanged": False}
-                        if 'tools' not in caps:
-                            caps['tools'] = {"listChanged": False}
-                    
-                    # Ensure clientInfo exists
-                    if 'clientInfo' not in params:
-                        params['clientInfo'] = {
-                            "name": "Claude.ai",
-                            "version": "1.0.0"
-                        }
-                    
-                    # Update the body_json with fixed params
-                    body_json['params'] = params
-                    # Re-encode the fixed body
-                    body = json.dumps(body_json).encode('utf-8')
-                    logger.info(f"[MCP FIX] Fixed initialize request for session {session_id}")
+                    logger.info(f"[MCP] Initialize request from {client_ip}")
                 
                 # Log MCP method details
                 if method == 'initialize':
@@ -232,14 +246,31 @@ def mount_mcp_app(
                         tool_args=json.dumps(tool_args)[:200]
                     )
                 elif method == 'tools/list':
+                    import time
+                    list_start = time.time()
                     await _unified_logger.log(
                         "info",
-                        "MCP List tools",
+                        "MCP List tools request received",
                         mcp_method=method,
                         mcp_id=request_id,
                         session_id=session_id,
                         client_ip=client_ip
                     )
+                    # Log what tools are available
+                    if hasattr(request.app.state, 'mcp_server'):
+                        mcp_srv = request.app.state.mcp_server
+                        if hasattr(mcp_srv, 'mcp') and hasattr(mcp_srv.mcp, '_tool_manager'):
+                            tool_count = len(mcp_srv.mcp._tool_manager._tools)
+                            tool_names = list(mcp_srv.mcp._tool_manager._tools.keys()) if hasattr(mcp_srv.mcp._tool_manager, '_tools') else []
+                            list_elapsed = (time.time() - list_start) * 1000
+                            await _unified_logger.log(
+                                "info",
+                                f"MCP Server has {tool_count} tools available (enumeration took {list_elapsed:.2f}ms)",
+                                tool_count=tool_count,
+                                tool_names=tool_names[:10],  # Log first 10 tool names
+                                session_id=session_id,
+                                enumeration_ms=list_elapsed
+                            )
                 elif method == 'notifications/initialized':
                     await _unified_logger.log(
                         "info",
@@ -272,35 +303,8 @@ def mount_mcp_app(
                     session_id=session_id
                 )
         
-        # Handle requests that come before initialization
-        if needs_init_injection and method == 'tools/list':
-            logger.info(f"[MCP FIX] Intercepting tools/list before initialization")
-            
-            # For tools/list before initialization, we'll modify the request to be an initialize first
-            # Then let the original tools/list be sent after
-            modified_request = {
-                "method": "initialize",
-                "params": {
-                    "protocolVersion": "2025-06-18",
-                    "capabilities": {
-                        "experimental": {},
-                        "prompts": {"listChanged": False},
-                        "resources": {"subscribe": False, "listChanged": False},
-                        "tools": {"listChanged": False}
-                    },
-                    "clientInfo": {
-                        "name": "Claude.ai (auto-init)",
-                        "version": "1.0.0"
-                    }
-                },
-                "jsonrpc": "2.0",
-                "id": 0
-            }
-            
-            # Replace the body with the initialize request
-            original_body = body
-            body = json.dumps(modified_request).encode('utf-8')
-            logger.info(f"[MCP FIX] Replaced tools/list with initialize request")
+        # In stateless mode, all requests are automatically initialized
+        # No need for special handling
         
         # Create receive callable
         async def receive():
@@ -321,9 +325,10 @@ def mount_mcp_app(
         response_started = False
         response_status = 200
         response_headers = {}
+        actual_session_id = None  # Track the actual session ID from response headers
         
         async def send(message):
-            nonlocal response_started, response_status, response_headers
+            nonlocal response_started, response_status, response_headers, actual_session_id
             if message['type'] == 'http.response.start':
                 response_started = True
                 response_status = message.get('status', 200)
@@ -332,22 +337,53 @@ def mount_mcp_app(
                     name_str = name.decode('utf-8') if isinstance(name, bytes) else name
                     value_str = value.decode('utf-8') if isinstance(value, bytes) else value
                     response_headers[name_str] = value_str
+                    
+                    # Store session ID for future use
+                    if name_str.lower() == 'mcp-session-id' and value_str and value_str != 'none':
+                        actual_session_id = value_str  # Capture the actual session ID
+                        logger.info(f"[MCP] Session ID in response headers: {value_str}")
             elif message['type'] == 'http.response.body':
                 body_chunk = message.get('body', b'')
                 more_body = message.get('more_body', False)
                 await response_queue.put((body_chunk, more_body))
                 if not more_body:
-                    # Signal end of stream
+                    # Signal end of stream  
                     await response_queue.put((None, False))
         
         # Run the MCP app in background
+        if _mcp_app is None:
+            logger.error("[MCP HANDLER] ERROR: _mcp_app is None! MCP not properly initialized")
+            return Response(
+                content="Bad Request: MCP server not initialized",
+                status_code=400
+            )
+        
+        # Track timing for tools/list requests
+        import time as timing_module
+        is_tools_list = b'"method": "tools/list"' in body or b'"method":"tools/list"' in body
+        if is_tools_list:
+            app_start = timing_module.time()
+            logger.info(f"[MCP TIMING] Starting FastMCP app processing for tools/list")
+        
         task = asyncio.create_task(_mcp_app(scope, receive, send))
         
+        if is_tools_list:
+            app_elapsed = (timing_module.time() - app_start) * 1000
+            logger.info(f"[MCP TIMING] FastMCP app task created in {app_elapsed:.2f}ms")
+        
         # Create streaming response generator with keepalive
-        async def generate():
+        async def generate(is_sse=False):
+            nonlocal actual_session_id
+            chunk_count = 0
+            total_bytes = 0
             try:
                 last_activity = asyncio.get_event_loop().time()
                 keepalive_interval = 15  # Send keepalive every 15 seconds (more frequent)
+                
+                # For GET requests establishing SSE, send initial comment
+                if request.method == 'GET' and is_sse:
+                    yield b': SSE stream established\n\n'
+                    logger.info(f"[MCP SSE] Established SSE stream for session {session_id}")
                 
                 while True:
                     try:
@@ -359,19 +395,72 @@ def mount_mcp_app(
                         last_activity = asyncio.get_event_loop().time()
                         
                         if chunk is None:
-                            break
+                            # End of stream - close it
+                            logger.info(f"[MCP RESPONSE] End of stream after {chunk_count} chunks, {total_bytes} bytes")
+                            return  # Properly terminate the generator
                         if chunk:
+                            chunk_count += 1
+                            total_bytes += len(chunk)
+                            
+                            # Log progress for tools/list
+                            if is_tools_list and chunk_count == 1:
+                                logger.info(f"[MCP TIMING] First chunk received after {(timing_module.time() - app_start)*1000:.2f}ms, size: {len(chunk)} bytes")
+                                logger.info(f"[MCP TIMING] First chunk content: {chunk[:200]}")
+                            
                             # Log response chunks for debugging
-                            chunk_str = chunk.decode('utf-8', errors='ignore')[:500]
-                            if 'data:' in chunk_str:
+                            # For large responses, we need to check more than 500 chars
+                            chunk_str = chunk.decode('utf-8', errors='ignore')
+                            response_complete = False
+                            
+                            # For tools/list, the response is huge (54KB) so check the full chunk
+                            if 'data:' in chunk_str[:1000]:
                                 try:
                                     # Extract and log MCP response
                                     data_start = chunk_str.find('data:') + 5
                                     data_str = chunk_str[data_start:].strip()
                                     if data_str and data_str != '[DONE]':
                                         data_json = json.loads(data_str)
+                                        
+                                        # Check if this is a complete JSON-RPC response
+                                        if 'jsonrpc' in data_json and 'id' in data_json and ('result' in data_json or 'error' in data_json):
+                                            # This is a complete response - we should close after sending it
+                                            response_complete = True
+                                            req_id = data_json.get('id', 'unknown')
+                                            logger.info(f"[MCP RESPONSE] Complete JSON-RPC response detected for id={req_id}, will close stream")
+                                        
                                         if 'result' in data_json:
-                                            logger.info(f"[MCP RESPONSE] Result for id={data_json.get('id', 'unknown')}: {str(data_json.get('result', ''))[:200]}")
+                                            result = data_json.get('result', {})
+                                            req_id = data_json.get('id', 'unknown')
+                                            
+                                            # Log initialize response (sessionId should be in headers per MCP spec)
+                                            if req_id == 0:
+                                                # Log with unified logger
+                                                if _unified_logger:
+                                                    await _unified_logger.log(
+                                                        "info",
+                                                        "MCP Initialize response received",
+                                                        session_id=actual_session_id or "none",
+                                                        session_in_header=actual_session_id is not None,
+                                                        protocol_version=result.get('protocolVersion'),
+                                                        client_ip=client_ip
+                                                    )
+                                            
+                                            # Special logging for tools/list response WITH TIMING
+                                            if req_id == 1 and isinstance(result, dict) and 'tools' in result:
+                                                tools_list = result.get('tools', [])
+                                                if is_tools_list:
+                                                    tools_elapsed = (timing_module.time() - app_start) * 1000 if 'app_start' in locals() else 0
+                                                    logger.info(f"[MCP TIMING] Tools/list response ready after {tools_elapsed:.2f}ms - returning {len(tools_list)} tools")
+                                                logger.info(f"[MCP RESPONSE] Tools/list response - returning {len(tools_list)} tools")
+                                                if tools_list:
+                                                    logger.info(f"[MCP RESPONSE] Tool names: {[t.get('name', 'unknown') for t in tools_list[:5]]}")
+                                                    # Log tool sizes to check if serialization is the issue
+                                                    tool_sizes = [len(json.dumps(t)) for t in tools_list[:5]]
+                                                    logger.info(f"[MCP RESPONSE] Tool JSON sizes (bytes): {tool_sizes}")
+                                                else:
+                                                    logger.warning(f"[MCP RESPONSE] Empty tools list returned!")
+                                            else:
+                                                logger.info(f"[MCP RESPONSE] Result for id={req_id}: {str(result)[:200]}")
                                         elif 'error' in data_json:
                                             error_code = data_json.get('error', {}).get('code')
                                             error_msg = data_json.get('error', {}).get('message')
@@ -380,15 +469,54 @@ def mount_mcp_app(
                                             # If we get an initialization error, log additional context
                                             if error_code == -32602 and 'initialization' in str(error_msg).lower():
                                                 logger.warning(f"[MCP FIX] Client needs to send initialize first. Session: {session_id}")
-                                except:
+                                except Exception as e:
+                                    if is_tools_list:
+                                        logger.warning(f"[MCP TIMING] Failed to parse tools/list response: {str(e)[:200]}")
                                     pass  # Ignore parsing errors for partial chunks
-                            yield chunk
+                            
+                            # CRITICAL FIX: For large SSE chunks, add explicit flush
+                            # The 29KB tools/list response needs immediate transmission
+                            if is_sse and len(chunk) > 10000:
+                                # Large SSE response - yield with flush signal
+                                yield chunk
+                                # SSE requires double newline to flush
+                                if not chunk.endswith(b'\n\n'):
+                                    yield b'\n\n'  # Force flush
+                            else:
+                                # Normal chunk
+                                yield chunk
+                            
+                            # If we've sent a complete JSON-RPC response, close the stream
+                            if response_complete:
+                                logger.info(f"[MCP RESPONSE] Closing SSE stream after complete response for session {session_id}")
+                                logger.info(f"[MCP RESPONSE] End of stream after {chunk_count} chunks, {total_bytes} bytes")
+                                return  # Properly terminate the generator
+                                
+                            # For tools/list specifically, if we've sent the large chunk, close
+                            # Lower threshold since 29KB is still causing timeouts
+                            if is_tools_list and chunk_count == 1 and len(chunk) > 25000:
+                                logger.info(f"[MCP TIMING] Closing stream after sending {len(chunk)} byte tools/list response")
+                                logger.info(f"[MCP RESPONSE] End of stream after {chunk_count} chunks, {total_bytes} bytes")
+                                return  # Properly terminate the generator
+                                
+                        # When response is complete, close the stream
                         if not more:
-                            logger.info(f"[MCP RESPONSE] Stream completed for session {session_id}")
-                            break
+                            logger.debug(f"[MCP RESPONSE] Response completed for session {session_id}, closing stream")
+                            logger.info(f"[MCP RESPONSE] End of stream after {chunk_count} chunks, {total_bytes} bytes")
+                            # For MCP, we should close the SSE stream after sending the response
+                            # This matches the behavior of the working mcp-echo-server
+                            return  # Properly terminate the generator
                     except asyncio.TimeoutError:
                         # Check if we need to send keepalive
                         current_time = asyncio.get_event_loop().time()
+                        
+                        # Log if we're stuck waiting for tools/list
+                        if is_tools_list:
+                            if chunk_count == 0 and (current_time - last_activity) > 2:
+                                logger.warning(f"[MCP TIMING] No chunks received after {(timing_module.time() - app_start)*1000:.2f}ms - FastMCP may be hanging!")
+                            elif chunk_count > 0 and (current_time - last_activity) > 2:
+                                logger.warning(f"[MCP TIMING] Stuck after {chunk_count} chunks ({total_bytes} bytes) - waiting {(timing_module.time() - app_start)*1000:.2f}ms total")
+                        
                         if current_time - last_activity > keepalive_interval:
                             # Send SSE comment as keepalive - more frequent to prevent timeouts
                             logger.debug(f"[MCP KEEPALIVE] Sending keepalive for session {session_id}")
@@ -397,10 +525,21 @@ def mount_mcp_app(
                         # Continue waiting for data
                         continue
             except asyncio.CancelledError:
-                logger.info(f"[MCP HANDLER] Stream cancelled for session {session_id}")
-                # Don't re-raise, just end the stream gracefully
+                logger.warning(f"[MCP HANDLER] Stream cancelled for session {session_id} - Client likely disconnected")
+                # Send connection closed error before ending
+                error_event = {
+                    "jsonrpc": "2.0",
+                    "error": {
+                        "code": -32000,
+                        "message": "Connection closed",
+                        "data": "Client disconnected"
+                    }
+                }
+                yield f"event: error\ndata: {json.dumps(error_event)}\n\n".encode('utf-8')
             except Exception as e:
-                logger.error(f"[MCP HANDLER] Error in generate for session {session_id}: {e}")
+                import traceback
+                error_trace = traceback.format_exc()
+                logger.error(f"[MCP HANDLER] Error in generate for session {session_id}: {e}\nTraceback:\n{error_trace}")
                 # Send error event to client before closing
                 error_event = {
                     "jsonrpc": "2.0",
@@ -420,7 +559,7 @@ def mount_mcp_app(
                     except asyncio.CancelledError:
                         pass
         
-        # Wait for response to start to get headers
+        # Wait for response to start to get headers from MCP server
         max_wait = 10  # Maximum 10 seconds to wait for response
         wait_time = 0
         while not response_started and wait_time < max_wait:
@@ -435,12 +574,35 @@ def mount_mcp_app(
         
         # Log response type and headers
         logger.info(f"[MCP RESPONSE] Status={response_status}, Content-Type={content_type}, Session={response_headers.get('mcp-session-id', 'none')}")
+        logger.info(f"[MCP RESPONSE] All headers: {json.dumps(response_headers, indent=2)}")
         
         if 'text/event-stream' in content_type:
             # Use StreamingResponse for SSE
             logger.info(f"[MCP RESPONSE] Starting SSE stream for session {session_id}")
+            
+            # Add headers to prevent connection drops
+            response_headers['Cache-Control'] = 'no-cache'
+            response_headers['Connection'] = 'keep-alive'
+            response_headers['X-Accel-Buffering'] = 'no'  # Disable proxy buffering
+            
+            # Log response with updated status and time
+            response_time = (time.time() - start_time) * 1000  # Convert to ms
+            if hasattr(request.app.state, 'async_storage'):
+                # Create new log entry with final status and response time
+                final_log_entry = log_entry.copy()
+                final_log_entry['status'] = response_status
+                final_log_entry['response_time'] = response_time
+                final_log_entry['message'] = f"{request.method} /mcp {response_status} {response_time:.0f}ms"
+                # Use fire-and-forget since we're returning a streaming response
+                asyncio.create_task(request.app.state.async_storage.log_request(final_log_entry))
+            
+            # CRITICAL FIX: Disable buffering for SSE streams
+            # The 3-second delay was caused by response buffering
+            response_headers['X-Accel-Buffering'] = 'no'  # Nginx
+            response_headers['Cache-Control'] = 'no-cache, no-transform'
+            
             return StreamingResponse(
-                generate(),
+                generate(is_sse=True),
                 status_code=response_status,
                 headers=response_headers,
                 media_type='text/event-stream'
@@ -449,7 +611,7 @@ def mount_mcp_app(
             # For non-SSE responses, collect all chunks
             logger.info(f"[MCP RESPONSE] Collecting non-SSE response for session {session_id}")
             chunks = []
-            async for chunk in generate():
+            async for chunk in generate(is_sse=False):
                 chunks.append(chunk)
             
             full_response = b''.join(chunks)
@@ -459,6 +621,17 @@ def mount_mcp_app(
                 logger.info(f"[MCP RESPONSE] JSON response: {json.dumps(response_json)[:500]}")
             except:
                 logger.info(f"[MCP RESPONSE] Non-JSON response: {full_response[:200]}")
+            
+            # Log response with updated status and time
+            response_time = (time.time() - start_time) * 1000  # Convert to ms
+            if hasattr(request.app.state, 'async_storage'):
+                # Create new log entry with final status and response time
+                final_log_entry = log_entry.copy()
+                final_log_entry['status'] = response_status
+                final_log_entry['response_time'] = response_time
+                final_log_entry['message'] = f"{request.method} /mcp {response_status} {response_time:.0f}ms"
+                # Use fire-and-forget since we're returning a streaming response
+                asyncio.create_task(request.app.state.async_storage.log_request(final_log_entry))
             
             return Response(
                 content=full_response,
