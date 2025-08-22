@@ -95,6 +95,23 @@ class UnifiedAsyncLogger:
             "spans": []
         }
         
+        # Store trace metadata in Redis for later resolution
+        trace_metadata = {
+            "client_id": trace_id,  # trace_id IS the client_id
+            "start_time": int(time.time() * 1000),
+            "operation": operation,
+            **metadata
+        }
+        
+        # Store with TTL (24 hours) using asyncio task
+        asyncio.create_task(
+            self.redis_clients.stream_redis.setex(
+                f"trace:metadata:{trace_id}",
+                86400,  # 24 hour TTL
+                json.dumps(trace_metadata)
+            )
+        )
+        
         # Log trace start
         asyncio.create_task(self.log(
             "DEBUG",

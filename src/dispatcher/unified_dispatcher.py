@@ -655,15 +655,7 @@ class UnifiedDispatcher:
             
             # Log detailed request with unified logger if available
             if self.unified_logger:
-                # Generate trace ID for this request
-                trace_id = self.unified_logger.start_trace(
-                    "http_request",
-                    proxy=hostname,
-                    method=method or "",
-                    path=request_path or "",
-                    client_ip=client_ip
-                )
-                
+                # First, gather all metadata
                 # Resolve client hostname
                 client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
                 
@@ -671,6 +663,20 @@ class UnifiedDispatcher:
                 headers = self._extract_http_headers(data)
                 query_params = self._extract_query_params(data)
                 body_sample = data[:1024] if data else None  # First 1KB for logging
+                
+                # Generate trace ID with COMPLETE metadata for Redis storage
+                trace_id = self.unified_logger.start_trace(
+                    "http_request",
+                    proxy_hostname=hostname,  # The proxy being accessed
+                    method=method or "",
+                    path=request_path or "",
+                    client_ip=client_ip,
+                    client_port=client_port,
+                    client_hostname=client_hostname,  # Resolved hostname
+                    user_agent=headers.get('user-agent', '') if headers else '',
+                    referer=headers.get('referer', '') if headers else '',
+                    query=self._extract_query_params(data) if data else ''
+                )
                 
                 # Log detailed request
                 await self.unified_logger.log_request(

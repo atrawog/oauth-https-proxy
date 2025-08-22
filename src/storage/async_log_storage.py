@@ -27,6 +27,15 @@ class AsyncLogStorage:
         self.stream_key = "stream:requests"
         self.consumer_group = "log-consumers"
         self.consumer_name = "log-consumer-1"
+    
+    def _safe_int(self, value):
+        """Safely convert a value to int, return None if not possible."""
+        if value is None:
+            return None
+        try:
+            return int(value)
+        except (ValueError, TypeError):
+            return None
         
     async def initialize(self):
         """Initialize stream consumer group."""
@@ -237,7 +246,7 @@ class AsyncLogStorage:
                     'method': data.get('method', ''),
                     'path': data.get('path', ''),
                     'query': data.get('query', ''),
-                    'status_code': int(data.get('status_code', 0)) if data.get('status_code') else int(data.get('status', 0)) if data.get('status') else 0,
+                    'status_code': self._safe_int(data.get('status_code')) or self._safe_int(data.get('status')) or 0,
                     'response_time_ms': float(data.get('response_time_ms', 0)) if data.get('response_time_ms') else float(data.get('duration_ms', 0)) if data.get('duration_ms') else 0.0,
                     'user_id': data.get('user_id', 'anonymous'),
                     'user_agent': data.get('user_agent', ''),
@@ -265,9 +274,12 @@ class AsyncLogStorage:
                 
                 logs.append(log_entry)
             
+            # Enrich logs with metadata from trace storage
+            enriched_logs = await self.get_logs_with_metadata(logs)
+            
             return {
-                'total': len(logs),
-                'logs': logs,
+                'total': len(enriched_logs),
+                'logs': enriched_logs,
                 'query_params': kwargs
             }
         except Exception as e:
@@ -289,11 +301,56 @@ class AsyncLogStorage:
         return await self.get_logs_by_hostname(proxy_hostname, hours, limit)
     
     async def get_logs_by_client(self, client_id: str, hours: int = 24, limit: int = 100) -> List[Dict]:
-        """Get logs by OAuth client ID."""
-        # For OAuth clients, we'd need to track client_id in the log entry
-        # For now, search in message/path for client_id
-        result = await self.search_logs(query=client_id, hours=hours, limit=limit)
+        """Get logs by client_id (which is the trace_id).
+        
+        This searches for logs with matching trace_id, since trace_id
+        is used as the client_id in our system.
+        """
+        # Search for logs with matching trace_id (client_id is trace_id)
+        result = await self.search_logs(trace_id=client_id, hours=hours, limit=limit)
+        
+        # The logs are already enriched with metadata by search_logs
         return result.get('logs', [])
+    
+    async def get_logs_with_metadata(self, logs: List[Dict]) -> List[Dict]:
+        """Enrich logs with metadata from trace storage.
+        
+        Args:
+            logs: List of log entries
+            
+        Returns:
+            Enriched log entries with client_id, client_hostname, proxy_hostname
+        """
+        enriched_logs = []
+        
+        for log in logs:
+            trace_id = log.get('trace_id')
+            if trace_id:
+                try:
+                    # Try to get metadata from Redis
+                    metadata_key = f"trace:metadata:{trace_id}"
+                    metadata_json = await self.redis.get(metadata_key)
+                    
+                    if metadata_json:
+                        metadata = json.loads(metadata_json)
+                        # Merge metadata into log entry
+                        log = {
+                            **log,
+                            "client_id": metadata.get("client_id", trace_id),
+                            "client_hostname": metadata.get("client_hostname", log.get("client_hostname", "")),
+                            "proxy_hostname": metadata.get("proxy_hostname", log.get("proxy_hostname", ""))
+                        }
+                except Exception as e:
+                    logger.debug(f"Failed to get metadata for trace {trace_id}: {e}")
+                    # Graceful degradation - continue without metadata
+            
+            # Ensure we always have client_id (fallback to trace_id)
+            if not log.get('client_id') and trace_id:
+                log['client_id'] = trace_id
+                
+            enriched_logs.append(log)
+        
+        return enriched_logs
     
     async def get_error_logs(self, hours: int = 1, include_4xx: bool = False, limit: int = 50) -> List[Dict]:
         """Get error logs."""

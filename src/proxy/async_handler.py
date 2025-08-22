@@ -94,15 +94,21 @@ class EnhancedAsyncProxyHandler:
         # Extract proxy hostname from request (the hostname being proxied)
         proxy_hostname = request.headers.get("host", "").split(":")[0]
         
-        # Generate trace ID for this request
-        trace_id = self.logger.start_trace(
-            "proxy_request",
-            proxy_hostname=proxy_hostname,
-            method=request.method,
-            path=str(request.url.path),
-            client_ip=client_ip,
-            client_hostname=client_hostname
-        )
+        # Check for existing trace_id from upstream (dispatcher)
+        trace_id = request.headers.get("X-Trace-Id")
+        
+        if not trace_id:
+            # Generate new trace ID for this request with full metadata
+            trace_id = self.logger.start_trace(
+                "proxy_request",
+                proxy_hostname=proxy_hostname,
+                method=request.method,
+                path=str(request.url.path),
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                user_agent=request.headers.get("user-agent", ""),
+                referer=request.headers.get("referer", "")
+            )
         
         # Store trace ID and context in request state for downstream use
         request.state.trace_id = trace_id
@@ -243,7 +249,7 @@ class EnhancedAsyncProxyHandler:
             )
             
             # End trace successfully
-            await self.logger.end_trace(trace_id, "success", duration_ms=duration_ms)
+            await self.logger.end_trace(trace_id, "success")
             
             return response
             
@@ -278,7 +284,7 @@ class EnhancedAsyncProxyHandler:
                 trace_id=trace_id
             )
             
-            await self.logger.end_trace(trace_id, "error", error=str(e), duration_ms=duration_ms)
+            await self.logger.end_trace(trace_id, "error", error=str(e))
             
             # Return error response
             await self._log_response_error(trace_id, 502, start_time, str(e),
