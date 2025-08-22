@@ -11,7 +11,7 @@ from starlette.responses import Response, PlainTextResponse, JSONResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
-from .handler import EnhancedProxyHandler
+from .async_handler import EnhancedAsyncProxyHandler
 from ..shared.logger import get_logger_compat
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
@@ -29,6 +29,13 @@ class ProxyOnlyApp:
         self.async_storage = async_storage
         self.domains = domains or []
         
+        # Create Redis clients for unified logging
+        from ..storage.redis_clients import RedisClients
+        import asyncio
+        self.redis_clients = RedisClients()
+        self.redis_clients_initialized = False
+        self.init_lock = asyncio.Lock()
+        
         # Always configure Redis logging for proxy instances
         # Each Hypercorn instance needs its own Redis handler
         # Configure Redis logging for this instance
@@ -42,9 +49,17 @@ class ProxyOnlyApp:
             self.logging_components = None
             logger.warning("Proxy instance running without Redis logging - no storage/redis_client")
             
-        # Each instance gets its own proxy handler with isolated httpx client
-        # Pass async_storage if available for better performance
-        self.proxy_handler = EnhancedProxyHandler(storage, async_storage=async_storage)
+        # Store async_storage for proxy handler
+        if async_storage:
+            self.handler_storage = async_storage
+        else:
+            # Create async storage from regular storage for the handler
+            from ..storage.async_redis_storage import AsyncRedisStorage
+            from ..shared.config import Config
+            self.handler_storage = AsyncRedisStorage(Config.REDIS_URL)
+        
+        # Proxy handler will be created on first request after redis_clients initialization
+        self.proxy_handler = None
         
         # Create OAuth metadata handler
         self.settings = Settings()
@@ -77,6 +92,9 @@ class ProxyOnlyApp:
         """Minimal startup - no lifespan complexity."""
         logger.info("Proxy-only instance starting")
         
+        # Initialize components eagerly if called
+        await self._ensure_initialized()
+        
         # Start async Redis log handler only if we created it
         if self.logging_components and self.logging_components.get("redis_handler"):
             await self.logging_components["redis_handler"].start()
@@ -91,8 +109,50 @@ class ProxyOnlyApp:
             await self.logging_components["redis_handler"].stop()
             logger.info("Async Redis log handler stopped for proxy instance")
             
-        # Close only this instance's httpx client
-        await self.proxy_handler.close()
+        # Close proxy handler (includes httpx client) if it was created
+        if self.proxy_handler:
+            await self.proxy_handler.close()
+        
+        # Close Redis clients
+        if self.redis_clients:
+            await self.redis_clients.close()
+            logger.info("Redis clients closed for proxy instance")
+        
+        # Close async storage if we created it
+        if hasattr(self, 'handler_storage') and hasattr(self.handler_storage, 'close'):
+            await self.handler_storage.close()
+            logger.info("Async storage closed for proxy instance")
+    
+    async def _ensure_initialized(self):
+        """Ensure the proxy handler is initialized."""
+        if self.proxy_handler:
+            return
+            
+        async with self.init_lock:
+            # Double-check after acquiring lock
+            if self.proxy_handler:
+                return
+                
+            try:
+                # Initialize Redis clients if not done
+                if not self.redis_clients_initialized:
+                    await self.redis_clients.initialize()
+                    self.redis_clients_initialized = True
+                    logger.info("Redis clients initialized on first request")
+                
+                # Initialize async storage if needed
+                if hasattr(self.handler_storage, 'initialize'):
+                    await self.handler_storage.initialize()
+                    logger.info("Async storage initialized on first request")
+                
+                # Create the proxy handler
+                self.proxy_handler = EnhancedAsyncProxyHandler(self.handler_storage, self.redis_clients)
+                logger.info("Proxy handler created on first request")
+            except Exception as e:
+                logger.error(f"Failed to initialize proxy handler: {e}")
+                import traceback
+                traceback.print_exc()
+                self.proxy_handler = None
     
     async def handle_oauth_metadata(self, request: Request) -> Response:
         """Handle OAuth authorization server metadata requests."""
@@ -112,6 +172,14 @@ class ProxyOnlyApp:
     async def handle_proxy(self, request: Request) -> Response:
         """Handle all proxy requests."""
         try:
+            # Initialize proxy handler on first request if needed
+            if not self.proxy_handler:
+                await self._ensure_initialized()
+                if not self.proxy_handler:
+                    return PlainTextResponse(
+                        "Service initialization failed",
+                        status_code=503
+                    )
             # Use the enhanced proxy handler
             return await self.proxy_handler.handle_request(request)
         except httpx.HTTPStatusError as e:

@@ -83,31 +83,40 @@ class EnhancedAsyncProxyHandler:
         """
         start_time = time.time()
         
-        # Extract client IP
+        # Extract client IP and resolve hostname
         client_ip = get_real_client_ip(request)
         
-        # Extract hostname from request
-        hostname = request.headers.get("host", "").split(":")[0]
+        # Resolve client hostname via reverse DNS
+        from ..shared.dns_resolver import get_dns_resolver
+        dns_resolver = get_dns_resolver()
+        client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        
+        # Extract proxy hostname from request (the hostname being proxied)
+        proxy_hostname = request.headers.get("host", "").split(":")[0]
         
         # Generate trace ID for this request
         trace_id = self.logger.start_trace(
             "proxy_request",
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             method=request.method,
             path=str(request.url.path),
-            client_ip=client_ip
+            client_ip=client_ip,
+            client_hostname=client_hostname
         )
         
-        # Store trace ID in request state for downstream use
+        # Store trace ID and context in request state for downstream use
         request.state.trace_id = trace_id
+        request.state.client_ip = client_ip
+        request.state.client_hostname = client_hostname
         
         try:
-            # Log incoming request
+            # Log incoming request with full context
             await self.logger.log_request(
                 method=request.method,
                 path=str(request.url.path),
-                ip=client_ip,
-                proxy_hostname=hostname,
+                client_ip=client_ip,
+                client_hostname=client_hostname,  # Pass resolved hostname
+                proxy_hostname=proxy_hostname,
                 trace_id=trace_id,
                 query=str(request.url.query) if request.url.query else None,
                 user_agent=request.headers.get("user-agent"),
@@ -115,36 +124,39 @@ class EnhancedAsyncProxyHandler:
             )
             
             # Validate host header
-            if not hostname:
+            if not proxy_hostname:
                 await self.logger.warning(
                     "No host header in request",
                     trace_id=trace_id,
                     ip=client_ip
                 )
-                await self._log_response_error(trace_id, 400, start_time, "No host header")
+                await self._log_response_error(trace_id, 400, start_time, "No host header",
+                                              request, client_ip, proxy_hostname)
                 raise HTTPException(400, "No host header")
             
             # Lookup proxy target
-            target = await self.storage.get_proxy_target(hostname)
+            target = await self.storage.get_proxy_target(proxy_hostname)
             
             if not target:
                 await self.logger.warning(
-                    f"No proxy target configured for {hostname}",
+                    f"No proxy target configured for {proxy_hostname}",
                     trace_id=trace_id,
                     ip=client_ip
                 )
-                await self._log_response_error(trace_id, 404, start_time, f"No proxy target for {hostname}")
-                raise HTTPException(404, f"No proxy target configured for {hostname}")
+                await self._log_response_error(trace_id, 404, start_time, f"No proxy target for {proxy_hostname}",
+                                              request, client_ip, proxy_hostname)
+                raise HTTPException(404, f"No proxy target configured for {proxy_hostname}")
             
             if not target.enabled:
                 await self.logger.warning(
-                    f"Proxy target {hostname} is disabled",
+                    f"Proxy target {proxy_hostname} is disabled",
                     trace_id=trace_id,
                     ip=client_ip,
                     target_url=target.target_url
                 )
-                await self._log_response_error(trace_id, 503, start_time, f"Proxy target disabled")
-                raise HTTPException(503, f"Proxy target {hostname} is disabled")
+                await self._log_response_error(trace_id, 503, start_time, f"Proxy target disabled",
+                                              request, client_ip, proxy_hostname)
+                raise HTTPException(503, f"Proxy target {proxy_hostname} is disabled")
             
             # Check routes
             route_target = await self._check_routes(request, target, trace_id)
@@ -170,7 +182,8 @@ class EnhancedAsyncProxyHandler:
                 auth_result = await self._check_authentication(request, target, trace_id, matched_route)
                 if not auth_result.authenticated:
                     await self._log_response_error(trace_id, 401, start_time, 
-                                                 auth_result.error_description or "Authentication required")
+                                                 auth_result.error_description or "Authentication required",
+                                                 request, client_ip, proxy_hostname)
                     
                     # Check if we should redirect
                     if target.auth_mode == "redirect" and target.auth_proxy:
@@ -199,20 +212,29 @@ class EnhancedAsyncProxyHandler:
             # Calculate duration
             duration_ms = (time.time() - start_time) * 1000
             
-            # Log successful response
+            # Log successful response with request context
             await self.logger.log_response(
                 status=response.status_code,
                 duration_ms=duration_ms,
                 trace_id=trace_id,
+                proxy_hostname=proxy_hostname,
                 backend_url=backend_url,
-                response_size=len(response.content) if hasattr(response, 'content') else 0
+                response_size=len(response.content) if hasattr(response, 'content') else 0,
+                # Include request context for complete log entry
+                client_ip=client_ip,
+                client_hostname=client_hostname,  # Include resolved hostname
+                method=request.method,
+                path=str(request.url.path),
+                query=str(request.url.query) if request.url.query else None,
+                user_agent=request.headers.get("user-agent"),
+                referer=request.headers.get("referer")
             )
             
             # Publish proxy success event
             await self.logger.event(
                 "proxy_request_completed",
                 {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "status": response.status_code,
                     "duration_ms": duration_ms,
                     "client_ip": client_ip
@@ -236,7 +258,7 @@ class EnhancedAsyncProxyHandler:
             await self.logger.log_error_exception(
                 error=e,
                 context={
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "path": str(request.url.path),
                     "client_ip": client_ip
                 },
@@ -247,7 +269,7 @@ class EnhancedAsyncProxyHandler:
             await self.logger.event(
                 "proxy_request_failed",
                 {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "error": str(e),
                     "error_type": type(e).__name__,
                     "duration_ms": duration_ms,
@@ -259,7 +281,8 @@ class EnhancedAsyncProxyHandler:
             await self.logger.end_trace(trace_id, "error", error=str(e), duration_ms=duration_ms)
             
             # Return error response
-            await self._log_response_error(trace_id, 502, start_time, str(e))
+            await self._log_response_error(trace_id, 502, start_time, str(e),
+                                          request, client_ip, proxy_hostname)
             raise HTTPException(502, f"Backend error: {str(e)}")
     
     async def _check_routes(self, request: Request, target: ProxyTarget, 
@@ -406,10 +429,10 @@ class EnhancedAsyncProxyHandler:
             )
         else:
             # Check proxy auth
-            hostname = request.headers.get("host", "").split(":")[0]
+            proxy_hostname = request.headers.get("host", "").split(":")[0]
             result = await self.auth_service.check_proxy_auth(
                 request=request,
-                hostname=hostname,
+                hostname=proxy_hostname,
                 path=str(request.url.path),
                 credentials=credentials
             )
@@ -521,16 +544,16 @@ class EnhancedAsyncProxyHandler:
             headers=response_headers
         )
     
-    async def handle_websocket(self, websocket: WebSocket, hostname: str) -> None:
+    async def handle_websocket(self, websocket: WebSocket, proxy_hostname: str) -> None:
         """Handle WebSocket proxy connection.
         
         Args:
             websocket: FastAPI WebSocket connection
-            hostname: Target hostname
+            proxy_hostname: Target proxy hostname
         """
         trace_id = self.logger.start_trace(
             "websocket_proxy",
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             client_ip=websocket.client.host if websocket.client else "unknown"
         )
         
@@ -539,11 +562,11 @@ class EnhancedAsyncProxyHandler:
             await websocket.accept()
             
             # Get proxy target
-            target = await self.storage.get_proxy_target(hostname)
+            target = await self.storage.get_proxy_target(proxy_hostname)
             if not target or not target.enabled:
                 await websocket.close(code=1008, reason="No proxy target")
                 await self.logger.warning(
-                    f"No proxy target for WebSocket: {hostname}",
+                    f"No proxy target for WebSocket: {proxy_hostname}",
                     trace_id=trace_id
                 )
                 await self.logger.end_trace(trace_id, "no_target")
@@ -619,23 +642,46 @@ class EnhancedAsyncProxyHandler:
                 pass
     
     async def _log_response_error(self, trace_id: str, status_code: int,
-                                 start_time: float, error_message: str):
-        """Log error response.
+                                 start_time: float, error_message: str,
+                                 request: Request = None, client_ip: str = None, 
+                                 proxy_hostname: str = None):
+        """Log error response with request context.
         
         Args:
             trace_id: Request trace ID
             status_code: HTTP status code
             start_time: Request start time
             error_message: Error message
+            request: Original request object (optional)
+            client_ip: Client IP address (optional)
+            proxy_hostname: Proxy hostname (optional)
         """
         duration_ms = (time.time() - start_time) * 1000
         
-        await self.logger.log_response(
-            status=status_code,
-            duration_ms=duration_ms,
-            trace_id=trace_id,
-            error=error_message
-        )
+        log_data = {
+            "status": status_code,
+            "duration_ms": duration_ms,
+            "trace_id": trace_id,
+            "error": error_message
+        }
+        
+        # Add request context if available
+        if request:
+            log_data.update({
+                "method": request.method,
+                "path": str(request.url.path),
+                "query": str(request.url.query) if request.url.query else None,
+                "user_agent": request.headers.get("user-agent"),
+                "referer": request.headers.get("referer")
+            })
+        
+        if client_ip:
+            log_data["client_ip"] = client_ip
+        
+        if proxy_hostname:
+            log_data["proxy_hostname"] = proxy_hostname
+        
+        await self.logger.log_response(**log_data)
     
     async def close(self):
         """Clean up resources."""

@@ -243,10 +243,22 @@ class UnifiedAsyncLogger:
     
     # Specialized logging methods
     
-    async def log_request(self, method: str, path: str, client_ip: str,
-                         proxy_hostname: str, trace_id: Optional[str] = None,
+    async def log_request(self, 
+                         method: str, 
+                         path: str, 
+                         client_ip: str,
+                         proxy_hostname: str, 
+                         trace_id: Optional[str] = None,
+                         headers: Optional[Dict[str, str]] = None,
+                         body: Optional[bytes] = None,
+                         query: Optional[str] = None,
+                         user_agent: Optional[str] = None,
+                         referer: Optional[str] = None,
+                         client_hostname: Optional[str] = None,
+                         auth_type: Optional[str] = None,
+                         auth_user: Optional[str] = None,
                          **extra) -> Optional[str]:
-        """Log an HTTP request.
+        """Log an HTTP request with all available details.
         
         Args:
             method: HTTP method
@@ -254,74 +266,15 @@ class UnifiedAsyncLogger:
             client_ip: Client IP address
             proxy_hostname: The proxy hostname being accessed
             trace_id: Request trace ID
+            headers: Request headers (optional, will be masked if configured)
+            body: Request body (optional, will be truncated if configured)
+            query: Query string (optional)
+            user_agent: User-Agent header (optional)
+            referer: Referer header (optional)
+            client_hostname: Reverse DNS of client IP (optional, will be resolved if not provided)
+            auth_type: Authentication type used (optional)
+            auth_user: Authenticated user (optional)
             **extra: Additional request fields
-            
-        Returns:
-            Log ID
-        """
-        # Resolve client hostname
-        dns_resolver = get_dns_resolver()
-        client_hostname = await dns_resolver.resolve_ptr(client_ip)
-        
-        request_data = {
-            "method": method,
-            "path": path,
-            "client_ip": client_ip,
-            "proxy_hostname": proxy_hostname,      # The proxy being accessed
-            "client_hostname": client_hostname,     # Reverse DNS of client
-            **extra
-        }
-        
-        return await self.publisher.publish_http_request(request_data, trace_id)
-    
-    async def log_response(self, status: int, duration_ms: float,
-                          trace_id: Optional[str] = None,
-                          **extra) -> Optional[str]:
-        """Log an HTTP response.
-        
-        Args:
-            status: HTTP status code
-            duration_ms: Request duration in milliseconds
-            trace_id: Request trace ID
-            **extra: Additional response fields
-            
-        Returns:
-            Log ID
-        """
-        response_data = {
-            "status": status,
-            "duration_ms": duration_ms,
-            **extra
-        }
-        
-        return await self.publisher.publish_http_response(response_data, trace_id)
-    
-    async def log_http_request_detailed(
-        self,
-        trace_id: str,
-        method: str,
-        path: str,
-        headers: Dict[str, str],
-        body: Optional[bytes],
-        query_params: Optional[str],
-        client_ip: str,
-        proxy_hostname: str,                       # The proxy hostname being accessed
-        client_hostname: Optional[str] = None,     # Reverse DNS of client IP
-        **extra
-    ) -> Optional[str]:
-        """Log detailed HTTP request with headers and body.
-        
-        Args:
-            trace_id: Request trace ID
-            method: HTTP method
-            path: Request path
-            headers: Request headers
-            body: Request body (will be truncated)
-            query_params: Query string
-            client_ip: Client IP address
-            proxy_hostname: The proxy hostname being accessed
-            client_hostname: Reverse DNS of client IP (optional)
-            **extra: Additional fields
             
         Returns:
             Log ID
@@ -331,82 +284,140 @@ class UnifiedAsyncLogger:
             dns_resolver = get_dns_resolver()
             client_hostname = await dns_resolver.resolve_ptr(client_ip)
         
-        # Mask sensitive headers if configured
-        masked_headers = mask_sensitive_headers(headers) if headers and LOG_REQUEST_HEADERS else {}
+        # Mask sensitive headers if configured and headers provided
+        masked_headers = None
+        if headers and LOG_REQUEST_HEADERS:
+            masked_headers = mask_sensitive_headers(headers)
         
-        # Truncate body if needed
+        # Truncate body if needed and body provided
         truncated_body = None
         if body and LOG_REQUEST_BODY:
             truncated_body = body[:LOG_BODY_MAX_SIZE]
         
-        # Use single timestamp
-        timestamp_ms = int(time.time() * 1000)
-        
-        log_data = {
-            "timestamp": timestamp_ms,
-            "trace_id": trace_id,
+        request_data = {
             "method": method,
             "path": path,
-            "headers": json.dumps(masked_headers) if masked_headers else None,
-            "body": truncated_body.decode('utf-8', errors='ignore') if truncated_body else None,
-            "query_params": query_params,
             "client_ip": client_ip,
-            "proxy_hostname": proxy_hostname,
-            "client_hostname": client_hostname,
-            "event_type": "http_request",
+            "proxy_hostname": proxy_hostname,      # The proxy being accessed
+            "client_hostname": client_hostname,     # Reverse DNS of client
+            "query": query or "",
+            "user_agent": user_agent or "",
+            "referer": referer or "",
+            "auth_type": auth_type or "",
+            "auth_user": auth_user or "anonymous",
             **extra
         }
         
-        return await self.publisher.publish("logs:all:stream", log_data, trace_id)
+        # Add optional fields only if they have values
+        if masked_headers:
+            request_data["headers"] = json.dumps(masked_headers)
+        if truncated_body:
+            request_data["body"] = truncated_body.decode('utf-8', errors='ignore')
+        
+        return await self.publisher.publish_http_request(request_data, trace_id)
     
-    async def log_http_response_detailed(
-        self,
-        trace_id: str,
-        status_code: int,
-        headers: Dict[str, str],
-        body: Optional[bytes],
-        duration_ms: float,
-        proxy_hostname: str,                       # The proxy hostname
-        **extra
-    ) -> Optional[str]:
-        """Log detailed HTTP response with headers and body.
+    async def log_response(self, 
+                          status: int, 
+                          duration_ms: float,
+                          trace_id: Optional[str] = None,
+                          headers: Optional[Dict[str, str]] = None,
+                          body: Optional[bytes] = None,
+                          proxy_hostname: Optional[str] = None,
+                          backend_url: Optional[str] = None,
+                          response_size: Optional[int] = None,
+                          # Request context fields for complete logging
+                          client_ip: Optional[str] = None,
+                          method: Optional[str] = None,
+                          path: Optional[str] = None,
+                          query: Optional[str] = None,
+                          user_agent: Optional[str] = None,
+                          referer: Optional[str] = None,
+                          client_hostname: Optional[str] = None,
+                          auth_type: Optional[str] = None,
+                          auth_user: Optional[str] = None,
+                          **extra) -> Optional[str]:
+        """Log an HTTP response with all available details.
         
         Args:
-            trace_id: Request trace ID
-            status_code: HTTP status code
-            headers: Response headers
-            body: Response body (will be truncated)
+            status: HTTP status code
             duration_ms: Request duration in milliseconds
-            proxy_hostname: The proxy hostname
-            **extra: Additional fields
+            trace_id: Request trace ID
+            headers: Response headers (optional, will be masked if configured)
+            body: Response body (optional, will be truncated if configured)
+            proxy_hostname: The proxy hostname (optional)
+            backend_url: The backend URL that was proxied to (optional)
+            response_size: Size of response in bytes (optional)
+            client_ip: Client IP address (optional, for context)
+            method: HTTP method (optional, for context)
+            path: Request path (optional, for context)
+            query: Query string (optional, for context)
+            user_agent: User-Agent header (optional, for context)
+            referer: Referer header (optional, for context)
+            client_hostname: Reverse DNS of client IP (optional)
+            auth_type: Authentication type used (optional)
+            auth_user: Authenticated user (optional)
+            **extra: Additional response fields
             
         Returns:
             Log ID
         """
-        # Mask sensitive headers if configured
-        masked_headers = mask_sensitive_headers(headers) if headers and LOG_RESPONSE_HEADERS else {}
+        # Resolve client hostname if client_ip provided but not hostname
+        if client_ip and not client_hostname:
+            dns_resolver = get_dns_resolver()
+            client_hostname = await dns_resolver.resolve_ptr(client_ip)
         
-        # Truncate body if needed
+        # Mask sensitive headers if configured and headers provided
+        masked_headers = None
+        if headers and LOG_RESPONSE_HEADERS:
+            masked_headers = mask_sensitive_headers(headers)
+        
+        # Truncate body if needed and body provided
         truncated_body = None
         if body and LOG_RESPONSE_BODY:
             truncated_body = body[:LOG_BODY_MAX_SIZE]
         
-        # Use single timestamp
-        timestamp_ms = int(time.time() * 1000)
-        
-        log_data = {
-            "timestamp": timestamp_ms,
-            "trace_id": trace_id,
-            "status_code": status_code,
-            "headers": json.dumps(masked_headers) if masked_headers else None,
-            "body": truncated_body.decode('utf-8', errors='ignore') if truncated_body else None,
+        response_data = {
+            "status": status,
+            "status_code": status,  # Include both for compatibility
             "duration_ms": duration_ms,
-            "proxy_hostname": proxy_hostname,
-            "event_type": "http_response",
+            "response_time_ms": duration_ms,  # Include both for compatibility
             **extra
         }
         
-        return await self.publisher.publish("logs:all:stream", log_data, trace_id)
+        # Add request context fields if provided
+        if client_ip:
+            response_data["client_ip"] = client_ip
+        if client_hostname:
+            response_data["client_hostname"] = client_hostname
+        if method:
+            response_data["method"] = method
+        if path:
+            response_data["path"] = path
+        if query:
+            response_data["query"] = query
+        if user_agent:
+            response_data["user_agent"] = user_agent
+        if referer:
+            response_data["referer"] = referer
+        if auth_type:
+            response_data["auth_type"] = auth_type
+        if auth_user:
+            response_data["auth_user"] = auth_user
+        
+        # Add optional response fields
+        if proxy_hostname:
+            response_data["proxy_hostname"] = proxy_hostname
+        if backend_url:
+            response_data["backend_url"] = backend_url
+        if response_size is not None:
+            response_data["bytes_sent"] = response_size
+        if masked_headers:
+            response_data["headers"] = json.dumps(masked_headers)
+        if truncated_body:
+            response_data["body"] = truncated_body.decode('utf-8', errors='ignore')
+        
+        return await self.publisher.publish_http_response(response_data, trace_id)
+    
     
     async def log_audit(self, actor: str, action: str,
                        resource: str, result: str,

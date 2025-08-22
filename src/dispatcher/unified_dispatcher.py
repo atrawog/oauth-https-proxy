@@ -586,10 +586,12 @@ class UnifiedDispatcher:
     
     async def handle_http_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTP connection and forward to appropriate instance."""
+        print(f"[DEBUG] handle_http_connection called", flush=True)
         client_addr = writer.get_extra_info('peername')
         client_ip = client_addr[0] if client_addr else 'unknown'
         client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
+        print(f"[DEBUG] HTTP connection from {client_ip}:{client_port}", flush=True)
         # No need to store IP mappings - PROXY protocol handles this
         
         logger.debug(
@@ -599,13 +601,18 @@ class UnifiedDispatcher:
         
         try:
             # Peek at the data to get hostname
+            print(f"[DEBUG] Reading data from HTTP connection", flush=True)
             data = await reader.read(4096)
+            print(f"[DEBUG] Data received: {len(data) if data else 0} bytes", flush=True)
             if not data:
+                print(f"[DEBUG] No data received, returning", flush=True)
                 return
             
             # Extract hostname from HTTP Host header FIRST
             hostname = self.get_hostname_from_http_request(data)
+            print(f"[DEBUG] Extracted hostname: {hostname}", flush=True)
             if not hostname:
+                print(f"[DEBUG] No hostname found in request", flush=True)
                 logger.warning(
                     "No hostname found in HTTP request",
                     ip=client_ip
@@ -666,15 +673,15 @@ class UnifiedDispatcher:
                 body_sample = data[:1024] if data else None  # First 1KB for logging
                 
                 # Log detailed request
-                await self.unified_logger.log_http_request_detailed(
-                    trace_id=trace_id,
+                await self.unified_logger.log_request(
                     method=method or "",
                     path=request_path or "",
+                    client_ip=client_ip,
+                    proxy_hostname=hostname,  # The proxy being accessed
+                    trace_id=trace_id,
                     headers=headers,
                     body=body_sample,
                     query_params=query_params,
-                    client_ip=client_ip,
-                    proxy_hostname=hostname,  # The proxy being accessed
                     client_hostname=client_hostname,  # Reverse DNS of client
                     log_source="dispatcher",
                     event_type="http_request" if method else "connection_lifecycle"
@@ -746,8 +753,12 @@ class UnifiedDispatcher:
             )
             
         except Exception as e:
+            print(f"[DEBUG] Error handling HTTP connection: {e}", flush=True)
             logger.error(f"Error handling HTTP connection: {e}")
+            import traceback
+            traceback.print_exc()
         finally:
+            print(f"[DEBUG] Closing HTTP connection", flush=True)
             writer.close()
             await writer.wait_closed()
     
@@ -962,36 +973,60 @@ class UnifiedDispatcher:
     
     async def start(self):
         """Start both HTTP and HTTPS dispatchers without blocking."""
+        print("[DEBUG] UnifiedDispatcher.start() called", flush=True)
+        logger.info("UnifiedDispatcher.start() called - starting HTTP and HTTPS servers")
+        
         # Start HTTP dispatcher on port 80
         http_port_str = os.getenv('HTTP_PORT')
+        print(f"[DEBUG] HTTP_PORT environment variable: {http_port_str}", flush=True)
+        logger.info(f"HTTP_PORT environment variable: {http_port_str}")
         if not http_port_str:
             raise ValueError("HTTP_PORT not set in environment - required for server configuration")
         http_port = int(http_port_str)
-        self.http_server = await asyncio.start_server(
-            self.handle_http_connection,
-            self.host,
-            http_port
-        )
-        logger.info(f"HTTP Dispatcher listening on {self.host}:{http_port}")
+        print(f"[DEBUG] Creating HTTP server on {self.host}:{http_port}", flush=True)
+        logger.info(f"Creating HTTP server on {self.host}:{http_port}")
+        try:
+            self.http_server = await asyncio.start_server(
+                self.handle_http_connection,
+                self.host,
+                http_port
+            )
+            print(f"[DEBUG] HTTP Dispatcher listening on {self.host}:{http_port}", flush=True)
+            logger.info(f"HTTP Dispatcher listening on {self.host}:{http_port}")
+        except Exception as e:
+            print(f"[DEBUG] Failed to create HTTP server: {e}", flush=True)
+            logger.error(f"Failed to create HTTP server: {e}")
+            raise
         
         # Start HTTPS dispatcher on port 443
         https_port_str = os.getenv('HTTPS_PORT')
+        logger.info(f"HTTPS_PORT environment variable: {https_port_str}")
         if not https_port_str:
             raise ValueError("HTTPS_PORT not set in environment - required for server configuration")
         https_port = int(https_port_str)
-        self.https_server = await asyncio.start_server(
-            self.handle_https_connection,
-            self.host,
-            https_port
-        )
-        logger.info(f"HTTPS Dispatcher listening on {self.host}:{https_port}")
+        print(f"[DEBUG] Creating HTTPS server on {self.host}:{https_port}", flush=True)
+        logger.info(f"Creating HTTPS server on {self.host}:{https_port}")
+        try:
+            self.https_server = await asyncio.start_server(
+                self.handle_https_connection,
+                self.host,
+                https_port
+            )
+            print(f"[DEBUG] HTTPS Dispatcher listening on {self.host}:{https_port}", flush=True)
+            logger.info(f"HTTPS Dispatcher listening on {self.host}:{https_port}")
+        except Exception as e:
+            print(f"[DEBUG] Failed to create HTTPS server: {e}", flush=True)
+            logger.error(f"Failed to create HTTPS server: {e}")
+            raise
         
         # Create tasks for the servers but don't await them
         # This allows the dispatcher to start without blocking
+        print("[DEBUG] Creating server tasks", flush=True)
         self.server_tasks = [
             asyncio.create_task(self.http_server.serve_forever()),
             asyncio.create_task(self.https_server.serve_forever())
         ]
+        print("[DEBUG] Dispatcher servers started in background", flush=True)
         logger.info("Dispatcher servers started in background")
     
     async def wait_forever(self):
@@ -1014,6 +1049,8 @@ class UnifiedMultiInstanceServer:
     """Main server that manages domain instances with unified dispatching."""
     
     def __init__(self, https_server_instance, app=None, host='0.0.0.0', async_components=None):
+        print(f"[DEBUG] UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", flush=True)
+        logger.info(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}")
         self.https_server = https_server_instance
         self.app = app  # Not used anymore - each instance creates its own proxy app
         self.host = host
@@ -1380,14 +1417,27 @@ class UnifiedMultiInstanceServer:
     
     async def run(self):
         """Run the unified multi-instance server architecture - WORKFLOW MODE ONLY."""
-        logger.info("UnifiedMultiInstanceServer.run() started in WORKFLOW MODE")
-        logger.info("NO INSTANCES WILL BE CREATED AT STARTUP - ALL DYNAMIC VIA WORKFLOW")
+        print("[DEBUG] UnifiedMultiInstanceServer.run() CALLED", flush=True)
+        try:
+            print("[DEBUG] About to log info messages", flush=True)
+            logger.info("=" * 60)
+            logger.info("UnifiedMultiInstanceServer.run() STARTING")
+            logger.info("=" * 60)
+            logger.info("UnifiedMultiInstanceServer.run() started in WORKFLOW MODE")
+            logger.info("NO INSTANCES WILL BE CREATED AT STARTUP - ALL DYNAMIC VIA WORKFLOW")
+            print("[DEBUG] Log messages completed", flush=True)
+        except Exception as e:
+            print(f"[DEBUG] ERROR logging: {e}", flush=True)
+            import traceback
+            traceback.print_exc()
         
         # Set global instance for dynamic management
         global unified_server_instance
         unified_server_instance = self
         
+        logger.info(f"HTTPS server instance available: {self.https_server is not None}")
         if not self.https_server:
+            logger.error("NO HTTPS SERVER INSTANCE AVAILABLE - CANNOT START DISPATCHER")
             logger.warning("No HTTPS server instance available")
             return
         
@@ -1412,7 +1462,11 @@ class UnifiedMultiInstanceServer:
         # The workflow orchestrator will handle ALL instance creation dynamically
         
         # Start the dispatcher (non-blocking now!)
+        print("[DEBUG] About to call dispatcher.start()", flush=True)
+        logger.info("About to call dispatcher.start()")
         await self.dispatcher.start()
+        print("[DEBUG] dispatcher.start() completed", flush=True)
+        logger.info("dispatcher.start() completed")
         
         # The dispatcher is now running in background
         # unified_server_instance is available for dynamic management

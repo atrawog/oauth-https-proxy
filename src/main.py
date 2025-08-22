@@ -302,12 +302,20 @@ async def run_server(config: Config) -> None:
         proxy_task = asyncio.create_task(proxy_server.serve_forever())
         
         # Run unified multi-instance server for proxy domains
-        unified_server = UnifiedMultiInstanceServer(
-            https_server_instance=https_server,
-            app=None,  # No app needed - just proxy instances
-            host=config.SERVER_HOST,
-            async_components=async_components
-        )
+        logger.info(f"Creating UnifiedMultiInstanceServer with https_server={https_server is not None}")
+        try:
+            unified_server = UnifiedMultiInstanceServer(
+                https_server_instance=https_server,
+                app=None,  # No app needed - just proxy instances
+                host=config.SERVER_HOST,
+                async_components=async_components
+            )
+            logger.info("UnifiedMultiInstanceServer created successfully")
+        except Exception as e:
+            logger.error(f"Failed to create UnifiedMultiInstanceServer: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Set server reference in workflow orchestrator
         workflow_orchestrator.dispatcher = unified_server
@@ -322,7 +330,15 @@ async def run_server(config: Config) -> None:
         logger.info("Each domain will have its own dedicated Hypercorn instance")
         
         # Create unified server task
-        unified_task = asyncio.create_task(unified_server.run())
+        logger.info("Creating unified_server.run() task")
+        try:
+            unified_task = asyncio.create_task(unified_server.run())
+            logger.info("unified_server.run() task created")
+        except Exception as e:
+            logger.error(f"Failed to create unified_server.run() task: {e}")
+            import traceback
+            traceback.print_exc()
+            raise
         
         # Wait for all tasks
         await asyncio.gather(
