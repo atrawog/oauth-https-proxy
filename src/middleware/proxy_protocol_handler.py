@@ -12,7 +12,8 @@ import logging
 import json
 import ipaddress
 from typing import Optional, Tuple
-import redis
+import redis.asyncio as redis
+from ..shared.dns_resolver import get_dns_resolver
 
 logger = logging.getLogger(__name__)
 
@@ -27,6 +28,7 @@ class ProxyProtocolHandler:
         self.backend_host = backend_host
         self.backend_port = backend_port
         self.redis_client = redis_client
+        self.dns_resolver = get_dns_resolver()
         
     async def handle_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming connection with PROXY protocol."""
@@ -99,7 +101,11 @@ class ProxyProtocolHandler:
                     
                     real_client_ip = parts[2]
                     real_client_port = src_port
-                    logger.info(f"PROXY protocol: {real_client_ip}:{real_client_port}")
+                    
+                    # Resolve client hostname
+                    client_hostname = await self.dns_resolver.resolve_ptr(real_client_ip)
+                    
+                    logger.info(f"PROXY protocol: {real_client_ip}:{real_client_port} ({client_hostname})")
                     
                     # Use remaining data after PROXY header
                     first_data = remaining_data
@@ -229,7 +235,8 @@ class ProxyProtocolHandler:
                 "client_port": client_port
             })
             # Set with 60 second TTL - connections shouldn't last longer
-            self.redis_client.setex(key, 60, value)
+            # The redis client should be async (redis.asyncio.Redis)
+            await self.redis_client.setex(key, 60, value)
             logger.debug(f"Stored client info in Redis: {key} -> {client_ip}:{client_port}")
         except Exception as e:
             logger.error(f"Failed to store client info in Redis: {e}")

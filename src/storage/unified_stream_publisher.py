@@ -85,9 +85,9 @@ class UnifiedStreamPublisher:
                 logger.error("No Redis connection available")
                 return None
             
-            # Add common fields
+            # Add common fields - use epoch milliseconds as integer
             enriched_data = {
-                "timestamp": time.time(),
+                "timestamp": int(time.time() * 1000),
                 "trace_id": trace_id or "",
                 **data
             }

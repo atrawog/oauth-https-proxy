@@ -1,5 +1,6 @@
-"""Enhanced HTTP/S Proxy handler with WebSocket and streaming support using unified async logger."""
+"""Enhanced HTTP/S Proxy handler with WebSocket and streaming support."""
 
+import logging
 import os
 import json
 import secrets
@@ -15,29 +16,19 @@ from starlette.background import BackgroundTask
 import asyncio
 from .models import ProxyTarget
 from .auth_exclusions import merge_exclusions
+from ..shared.logging import get_logger, log_request, log_response
 from ..shared.config import Config
 from ..shared.client_ip import get_real_client_ip
 
-# Import unified logger functions
-from ..shared.logger import get_logger_compat
-from ..shared.logging import log_request, log_response
-
-# Get compatibility logger that uses unified logger underneath
-logger = get_logger_compat(__name__)
+logger = get_logger(__name__)
 
 
 class EnhancedProxyHandler:
     """Handles HTTP/S proxy requests with WebSocket and streaming support."""
     
-    # Cache for proxy configurations with TTL
-    _proxy_cache = {}
-    _proxy_cache_time = {}
-    PROXY_CACHE_TTL = 1  # 1 second cache for immediate updates
-    
-    def __init__(self, storage, async_storage=None):
+    def __init__(self, storage):
         """Initialize proxy handler with storage backend."""
         self.storage = storage
-        self.async_storage = async_storage  # Use async storage if available for better performance
         # Get timeout from environment with proper hierarchy
         from ..shared.config import Config
         request_timeout = float(Config.PROXY_REQUEST_TIMEOUT)
@@ -63,24 +54,12 @@ class EnhancedProxyHandler:
         # Log at debug level to reduce overhead
         logger.debug(f"EnhancedProxyHandler initialized with timeouts: read={request_timeout}s, connect={connect_timeout}s")
     
-    async def _get_proxy_target_cached(self, hostname: str):
-        """Get proxy target - always fetch fresh for auth changes."""
-        # Always fetch fresh from storage to ensure auth changes are immediate
-        if self.async_storage:
-            proxy_json = await self.async_storage.redis_client.get(f"proxy:{hostname}")
-            if proxy_json:
-                from .models import ProxyTarget
-                target = ProxyTarget(**json.loads(proxy_json))
-            else:
-                target = None
-        else:
-            target = self.storage.get_proxy_target(hostname)
-        
-        return target
-    
     async def handle_request(self, request: Request) -> Response:
         """Handle incoming proxy request."""
         start_time = time.perf_counter()  # More accurate timing
+        
+        # Debug logging - removed from hot path for performance
+        # logger.debug(f"Proxy handler received request: {request.method} {request.url} from {request.client}")
         
         # Extract client IP using centralized function
         client_ip = get_real_client_ip(request)
@@ -114,8 +93,8 @@ class EnhancedProxyHandler:
         if request_key:
             request.state.request_key = request_key
         
-        # Lookup proxy target with caching
-        target = await self._get_proxy_target_cached(hostname)
+        # Lookup proxy target
+        target = self.storage.get_proxy_target(hostname)
         if not target:
             # Get list of available proxies for debugging
             available_proxies = []
@@ -145,17 +124,12 @@ class EnhancedProxyHandler:
             raise HTTPException(503, f"Proxy target {hostname} is disabled")
         
         # Check routes FIRST - routes bypass proxy auth!
-        from ..proxy.routes import get_applicable_routes, get_applicable_routes_async, RouteTargetType
-        # Use async version if async_storage is available
-        if self.async_storage:
-            applicable_routes = await get_applicable_routes_async(self.async_storage, target)
-        else:
-            applicable_routes = get_applicable_routes(self.storage, target)
+        from ..proxy.routes import get_applicable_routes, RouteTargetType
+        applicable_routes = get_applicable_routes(self.storage, target)
         
         # Check if request matches any route
         request_path = request.url.path
         request_method = request.method
-        matched_route = None  # Track the matched route
         
         logger.debug(
             "Checking routes for request",
@@ -194,7 +168,7 @@ class EnhancedProxyHandler:
                 )
             if match_result:
                 logger.info(
-                    "Route matched",
+                    "Route matched - bypassing proxy auth",
                     ip=client_ip,
                     hostname=hostname,
                     method=request_method,
@@ -206,9 +180,22 @@ class EnhancedProxyHandler:
                     target_value=route.target_value
                 )
                 
-                # Store the matched route for later processing after auth check
-                matched_route = route
-                break
+                # Routes bypass proxy authentication entirely!
+                # Handle different route types
+                if route.target_type == RouteTargetType.URL:
+                    return await self._handle_url_route(request, route, request_key)
+                elif route.target_type == RouteTargetType.SERVICE:
+                    # Handle SERVICE target type
+                    return await self._handle_service_route(request, route, request_key)
+                else:
+                    # For other route types, we can't handle them here
+                    logger.warning(
+                        "Proxy cannot handle route type",
+                        route_type=route.target_type.value,
+                        route_id=route.route_id,
+                        hostname=hostname
+                    )
+                    break
         
         # Check protocol-specific enable flags
         is_https = request.url.scheme == "https"
@@ -218,7 +205,7 @@ class EnhancedProxyHandler:
             raise HTTPException(404, f"HTTP not enabled for {hostname}")
         
         # Check if auth is required
-        if target.auth_enabled:
+        if target.auth_enabled and target.auth_proxy:
             # Check if this path is excluded from authentication
             path_excluded = False
             request_path = request.url.path
@@ -235,7 +222,7 @@ class EnhancedProxyHandler:
             # Only perform auth check if path is not excluded
             if not path_excluded:
                 # DEBUG: Print auth check details
-                logger.debug(f"Auth check for {hostname}: client_ip={client_ip}, path={request_path}, auth_enabled={target.auth_enabled}")
+                print(f"[DEBUG] Auth check for {hostname}: client_ip={client_ip}, path={request_path}, auth_enabled={target.auth_enabled}")
                 
                 # Extract and log Authorization header details
                 auth_header = request.headers.get("authorization", "")
@@ -300,8 +287,7 @@ class EnhancedProxyHandler:
                         response_headers=dict(auth_result.headers) if hasattr(auth_result, 'headers') else {},
                         response_body=getattr(auth_result, 'body', b'').decode('utf-8', errors='ignore')[:500] if hasattr(auth_result, 'body') else "No body"
                     )
-                    # Fire-and-forget logging for better performance
-                    asyncio.create_task(log_response(logger, auth_result, duration_ms, ip=client_ip, hostname=hostname, auth_failure=True, request_key=request_key))
+                    await log_response(logger, auth_result, duration_ms, ip=client_ip, hostname=hostname, auth_failure=True, request_key=request_key)
                     return auth_result
                 # auth_result contains user info to add as headers
                 request.state.auth_user = auth_result
@@ -340,23 +326,7 @@ class EnhancedProxyHandler:
             # WebSocket requests need special handling in FastAPI
             raise HTTPException(501, "WebSocket proxying requires WebSocket endpoint")
         
-        # Handle matched route if any
-        if matched_route:
-            # Route matched - handle different route types
-            if matched_route.target_type == RouteTargetType.URL:
-                return await self._handle_url_route(request, matched_route, request_key)
-            elif matched_route.target_type == RouteTargetType.SERVICE:
-                return await self._handle_service_route(request, matched_route, request_key)
-            else:
-                logger.warning(
-                    "Proxy cannot handle route type",
-                    route_type=matched_route.target_type.value,
-                    route_id=matched_route.route_id,
-                    hostname=hostname
-                )
-                # Fall back to normal proxy behavior
-        
-        # Build target URL for normal proxy forwarding
+        # Build target URL
         path = request.url.path
         query = request.url.query
         target_url = f"{target.target_url}{path}"
@@ -398,7 +368,7 @@ class EnhancedProxyHandler:
             )
             
             # DEBUG: Print backend connection attempt
-            logger.debug(f"Attempting backend connection: {hostname} -> {target_url}")
+            print(f"[DEBUG] Attempting backend connection: {hostname} -> {target_url}")
             
             logger.info(
                 "ATTEMPTING BACKEND CONNECTION - DETAILED DEBUG INFO",
@@ -464,9 +434,8 @@ class EnhancedProxyHandler:
             )
             
             # Log response
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, response, duration_ms, 
-                             ip=client_ip, hostname=hostname, target_url=target_url, request_key=request_key))
+            await log_response(logger, response, duration_ms, 
+                             ip=client_ip, hostname=hostname, target_url=target_url, request_key=request_key)
             
             return response
             
@@ -504,8 +473,7 @@ class EnhancedProxyHandler:
                 }
             )
             response = Response(content="Bad Gateway - Unable to connect to upstream server", status_code=502)
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname, request_key=request_key))
+            await log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname, request_key=request_key)
             raise HTTPException(502, "Bad Gateway - Unable to connect to upstream server")
         except httpx.TimeoutException as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -520,8 +488,7 @@ class EnhancedProxyHandler:
                 error={"type": "timeout", "message": str(e), "details": repr(e)}
             )
             response = Response(content="Gateway Timeout - Upstream server timeout", status_code=504)
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname, request_key=request_key))
+            await log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname, request_key=request_key)
             raise HTTPException(504, "Gateway Timeout - Upstream server timeout")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
@@ -537,8 +504,7 @@ class EnhancedProxyHandler:
                 traceback=traceback.format_exc()
             )
             response = Response(content=f"Proxy error: {str(e)}", status_code=500)
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname, request_key=request_key))
+            await log_response(logger, response, duration_ms, ip=client_ip, hostname=hostname, request_key=request_key)
             raise HTTPException(500, f"Proxy error: {str(e)}")
     
     async def handle_websocket(self, websocket: WebSocket, path: str):
@@ -550,8 +516,8 @@ class EnhancedProxyHandler:
             await websocket.close(code=1008, reason="No host header")
             return
         
-        # Lookup proxy target with caching
-        target = await self._get_proxy_target_cached(hostname)
+        # Lookup proxy target
+        target = self.storage.get_proxy_target(hostname)
         if not target:
             await websocket.close(code=1008, reason=f"No proxy target for {hostname}")
             return
@@ -752,17 +718,8 @@ class EnhancedProxyHandler:
         # Look up service target from Redis
         service_target = None
         try:
-            # Check service URL using async storage if available
-            if self.async_storage:
-                service_url = await self.async_storage.redis_client.get(f"service:url:{service_name}")
-                # Decode bytes to string if needed
-                if service_url and isinstance(service_url, bytes):
-                    service_url = service_url.decode('utf-8')
-            else:
-                service_url = self.storage.redis_client.get(f"service:url:{service_name}")
-                # Decode bytes to string if needed
-                if service_url and isinstance(service_url, bytes):
-                    service_url = service_url.decode('utf-8')
+            # Check service URL
+            service_url = self.storage.redis_client.get(f"service:url:{service_name}")
             if service_url:
                 service_target = service_url
                 logger.debug(f"Found service {service_name} with URL: {service_url}")
@@ -773,18 +730,9 @@ class EnhancedProxyHandler:
             # Get available services for debugging
             available_services = []
             try:
-                # Get all service keys from Redis using async if available
-                if self.async_storage:
-                    # Use async scan for better performance
-                    service_keys = []
-                    async for key in self.async_storage.redis_client.scan_iter("service:url:*", count=10):
-                        service_keys.append(key)
-                        if len(service_keys) >= 10:
-                            break
-                    available_services = [key.split(":", 2)[2] for key in service_keys]
-                else:
-                    service_keys = self.storage.redis_client.keys("service:url:*")
-                    available_services = [key.decode().split(":", 2)[2] for key in service_keys[:10]]
+                # Get all service keys from Redis
+                service_keys = self.storage.redis_client.keys("service:url:*")
+                available_services = [key.decode().split(":", 2)[2] for key in service_keys[:10]]
             except Exception:
                 pass
                 
@@ -886,9 +834,8 @@ class EnhancedProxyHandler:
                 )
             
             # Log the response
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, response, duration_ms,
-                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key))
+            await log_response(logger, response, duration_ms,
+                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key)
             
             # Return the response
             return response
@@ -897,25 +844,22 @@ class EnhancedProxyHandler:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"Failed to connect to URL route {full_url}")
             error_response = Response(content="Bad Gateway - Unable to connect to route target", status_code=502)
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, error_response, duration_ms,
-                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key))
+            await log_response(logger, error_response, duration_ms,
+                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key)
             raise HTTPException(502, "Bad Gateway - Unable to connect to route target")
         except httpx.TimeoutException:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"Timeout connecting to URL route {full_url}")
             error_response = Response(content="Gateway Timeout - Route target timeout", status_code=504)
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, error_response, duration_ms,
-                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key))
+            await log_response(logger, error_response, duration_ms,
+                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key)
             raise HTTPException(504, "Gateway Timeout - Route target timeout")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             logger.error(f"URL route error: {e}")
             error_response = Response(content=f"Route error: {str(e)}", status_code=500)
-            # Fire-and-forget logging for better performance
-            asyncio.create_task(log_response(logger, error_response, duration_ms,
-                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key))
+            await log_response(logger, error_response, duration_ms,
+                             ip=client_ip, hostname=hostname, target_url=full_url, request_key=request_key)
             raise HTTPException(500, f"Route error: {str(e)}")
     
     async def close(self):

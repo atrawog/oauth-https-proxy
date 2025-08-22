@@ -1,13 +1,11 @@
 """Certificate management API endpoints."""
 
-import logging
 import os
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
 
 from src.auth import AuthDep, AuthResult
-
-logger = logging.getLogger(__name__)
+from src.shared.logger import log_info, log_debug, log_error, log_warning
 
 
 def create_router(storage, cert_manager):
@@ -70,8 +68,8 @@ def create_router(storage, cert_manager):
             
             # Start async generation
             from src.certmanager.async_acme import generate_certificate_async
-            logger.info(f"[API] Queuing background task for certificate {cert_request.cert_name}")
-            logger.info(f"[API] AsyncCertManager type: {type(async_cert_manager).__name__ if async_cert_manager else 'None'}")
+            log_info(f"[API] Queuing background task for certificate {cert_request.cert_name}", component="api.certificates")
+            log_info(f"[API] AsyncCertManager type: {type(async_cert_manager).__name__ if async_cert_manager else 'None'}", component="api.certificates")
             background_tasks.add_task(
                 generate_certificate_async,
                 async_cert_manager,
@@ -79,7 +77,7 @@ def create_router(storage, cert_manager):
                 auth.auth.token_hash,
                 auth.principal
             )
-            logger.info(f"[API] Background task queued successfully for {cert_request.cert_name}")
+            log_info(f"[API] Background task queued successfully for {cert_request.cert_name}", component="api.certificates")
             
             return {
                 "message": f"Certificate generation started for {cert_request.domain}",
@@ -90,7 +88,7 @@ def create_router(storage, cert_manager):
             # Re-raise HTTPException without modification
             raise
         except Exception as e:
-            logger.error(f"Failed to create certificate: {e}")
+            log_error(f"Failed to create certificate: {e}", component="api.certificates", error=e)
             raise HTTPException(status_code=400, detail=str(e))
     
     @router.post("/multi-domain")
@@ -149,8 +147,8 @@ def create_router(storage, cert_manager):
             
             # Start async generation
             from src.certmanager.async_acme import generate_certificate_async
-            logger.info(f"[API] Queuing background task for multi-domain certificate {cert_request.cert_name}")
-            logger.info(f"[API] AsyncCertManager type: {type(async_cert_manager).__name__ if async_cert_manager else 'None'}")
+            log_info(f"[API] Queuing background task for multi-domain certificate {cert_request.cert_name}", component="api.certificates")
+            log_info(f"[API] AsyncCertManager type: {type(async_cert_manager).__name__ if async_cert_manager else 'None'}", component="api.certificates")
             background_tasks.add_task(
                 generate_certificate_async,
                 async_cert_manager,
@@ -158,7 +156,7 @@ def create_router(storage, cert_manager):
                 auth.auth.token_hash,
                 auth.principal
             )
-            logger.info(f"[API] Background task queued successfully for multi-domain {cert_request.cert_name}")
+            log_info(f"[API] Background task queued successfully for multi-domain {cert_request.cert_name}", component="api.certificates")
             
             return {
                 "message": f"Multi-domain certificate generation started",
@@ -170,7 +168,7 @@ def create_router(storage, cert_manager):
             # Re-raise HTTPException without modification
             raise
         except Exception as e:
-            logger.error(f"Failed to create multi-domain certificate: {e}")
+            log_error(f"Failed to create multi-domain certificate: {e}", component="api.certificates", error=e)
             raise HTTPException(status_code=400, detail=str(e))
     
     @router.get("/")
@@ -211,7 +209,7 @@ def create_router(storage, cert_manager):
             
             return filtered_certs
         except Exception as e:
-            logger.error(f"Failed to list certificates: {e}")
+            log_error(f"Failed to list certificates: {e}", component="api.certificates", error=e)
             raise HTTPException(status_code=500, detail=str(e))
     
     @router.get("/{cert_name}")
@@ -394,7 +392,7 @@ def create_router(storage, cert_manager):
                     }
                 )
             except Exception as e:
-                logger.error(f"Failed to publish certificate_updated event: {e}")
+                log_error(f"Failed to publish certificate_updated event: {e}", component="api.certificates", error=e)
         
         # Schedule the update event
         asyncio.create_task(publish_cert_update_after_generation())

@@ -46,7 +46,10 @@ class AsyncLogStorage:
             logger.debug(f"Consumer group {self.consumer_group} already exists")
     
     async def log_request(self, log_entry: Dict[str, Any]) -> str:
-        """Log a request to Redis Streams with proper indexing.
+        """Log a request to the unified Redis stream.
+        
+        This is now just a compatibility wrapper that writes directly to the unified stream.
+        No more indexes, no more req: keys, just the stream.
         
         Args:
             log_entry: Dictionary containing request/response data
@@ -55,118 +58,56 @@ class AsyncLogStorage:
             Stream entry ID
         """
         try:
-            # Get timestamp - convert to Unix if ISO format provided
+            # Get timestamp in milliseconds for streams
             timestamp_str = log_entry.get('timestamp', '')
             if timestamp_str:
                 try:
                     # Try to parse ISO format
                     dt = datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
-                    unix_timestamp = dt.timestamp()
+                    timestamp_ms = int(dt.timestamp() * 1000)
                 except:
                     # Assume it's already Unix timestamp
-                    unix_timestamp = float(timestamp_str) if timestamp_str else time.time()
+                    timestamp_ms = int(float(timestamp_str) * 1000) if timestamp_str else int(time.time() * 1000)
             else:
-                unix_timestamp = time.time()
+                timestamp_ms = int(time.time() * 1000)
+                timestamp_str = datetime.fromtimestamp(timestamp_ms / 1000, tz=timezone.utc).isoformat()
             
-            # Also keep ISO format for display
-            if not timestamp_str:
-                timestamp_str = datetime.fromtimestamp(unix_timestamp, tz=timezone.utc).isoformat()
-            
-            client_ip = log_entry.get('ip', log_entry.get('client_ip', '127.0.0.1'))
-            hostname = log_entry.get('hostname', '')
-            method = log_entry.get('method', 'GET')
-            path = log_entry.get('path', '/')
-            status_code = log_entry.get('status', log_entry.get('status_code', 0))
-            response_time_ms = log_entry.get('response_time', log_entry.get('response_time_ms', 0))
-            user_id = log_entry.get('user', log_entry.get('user_id', ''))
-            
-            # Create request key using Unix timestamp for proper ordering
-            req_key = f"req:{unix_timestamp}:{client_ip}"
-            
-            # Store request data as hash
-            await self.redis.hset(req_key, mapping={
-                'timestamp': timestamp_str,
-                'ip': client_ip,
-                'hostname': hostname,
-                'method': method,
-                'path': path,
-                'query': log_entry.get('query', ''),  # Store query parameters
-                'status': str(status_code),
-                'response_time': str(response_time_ms),
-                'user': user_id,
+            # Build the log entry for the unified stream
+            stream_data = {
+                'timestamp': str(timestamp_ms),  # Store as milliseconds for stream queries
+                'timestamp_iso': timestamp_str,   # Also keep ISO format for display
+                'client_ip': log_entry.get('client_ip', '127.0.0.1'),
+                'client_hostname': log_entry.get('client_hostname', ''),
+                'proxy_hostname': log_entry.get('proxy_hostname', ''),
+                'method': log_entry.get('method', 'GET'),
+                'path': log_entry.get('path', '/'),
+                'query': log_entry.get('query', ''),
+                'status_code': str(log_entry.get('status_code', 0)),
+                'response_time_ms': str(log_entry.get('response_time_ms', 0)),
+                'user_id': log_entry.get('user_id', 'anonymous'),
                 'user_agent': log_entry.get('user_agent', ''),
                 'referrer': log_entry.get('referrer', ''),
                 'bytes_sent': str(log_entry.get('bytes_sent', 0)),
+                'auth_type': log_entry.get('auth_type', ''),
+                'oauth_client_id': log_entry.get('oauth_client_id', ''),
+                'oauth_username': log_entry.get('oauth_username', ''),
                 'error': log_entry.get('error', ''),
-                'message': log_entry.get('message', '')
-            })
-            
-            # Set TTL for request data (7 days by default)
-            await self.redis.expire(req_key, 7 * 24 * 3600)
-            
-            # Add to indexes with Unix timestamp score for proper sorting
-            timestamp_score = unix_timestamp
-            
-            # Add to global "all logs" index
-            await self.redis.zadd("idx:req:all", {req_key: timestamp_score})
-            await self.redis.expire("idx:req:all", 7 * 24 * 3600)
-            
-            # Index by IP
-            await self.redis.zadd(f"idx:req:ip:{client_ip}", {req_key: timestamp_score})
-            await self.redis.expire(f"idx:req:ip:{client_ip}", 7 * 24 * 3600)
-            
-            # Index by hostname
-            if hostname:
-                await self.redis.zadd(f"idx:req:host:{hostname}", {req_key: timestamp_score})
-                await self.redis.expire(f"idx:req:host:{hostname}", 7 * 24 * 3600)
-            
-            # Index by user
-            if user_id:
-                await self.redis.zadd(f"idx:req:user:{user_id}", {req_key: timestamp_score})
-                await self.redis.expire(f"idx:req:user:{user_id}", 7 * 24 * 3600)
-            
-            # Index by status code
-            await self.redis.zadd(f"idx:req:status:{status_code}", {req_key: timestamp_score})
-            await self.redis.expire(f"idx:req:status:{status_code}", 7 * 24 * 3600)
-            
-            # Add to error index if error response
-            if status_code >= 400:
-                await self.redis.zadd("idx:req:errors", {req_key: timestamp_score})
-                await self.redis.expire("idx:req:errors", 7 * 24 * 3600)
-            
-            # Add to slow request index if slow
-            if response_time_ms > 1000:
-                await self.redis.zadd("idx:req:slow", {req_key: timestamp_score})
-                await self.redis.expire("idx:req:slow", 7 * 24 * 3600)
-            
-            # Publish to stream for real-time processing
-            stream_data = {
-                'data': json.dumps(log_entry),
-                'timestamp': timestamp_str,
-                'ip': client_ip,
-                'hostname': hostname,
-                'status': str(status_code)
+                'error_type': log_entry.get('error_type', ''),
+                'message': log_entry.get('message', ''),
+                'level': log_entry.get('level', 'INFO'),
+                'component': log_entry.get('component', 'request_logger'),
+                'log_type': 'http_request'
             }
-            stream_id = await self.redis.xadd(self.stream_key, stream_data)
             
-            # Update hourly statistics
-            hour_key = f"stats:requests:{datetime.now(timezone.utc).strftime('%Y%m%d:%H')}"
-            await self.redis.hincrby(hour_key, 'total', 1)
-            await self.redis.hincrby(hour_key, f'status_{status_code}', 1)
-            await self.redis.expire(hour_key, 30 * 24 * 3600)  # 30 days
+            # Write to the unified log stream
+            stream_id = await self.redis.xadd(
+                "logs:all:stream",
+                stream_data,
+                maxlen=1000000,  # Keep last 1M entries
+                approximate=True
+            )
             
-            if status_code >= 400:
-                error_hour_key = f"stats:errors:{datetime.now(timezone.utc).strftime('%Y%m%d:%H')}"
-                await self.redis.hincrby(error_hour_key, str(status_code), 1)
-                await self.redis.expire(error_hour_key, 30 * 24 * 3600)
-            
-            # Track unique IPs with HyperLogLog
-            if hostname:
-                unique_key = f"stats:unique_ips:{hostname}:{datetime.now(timezone.utc).strftime('%Y%m%d:%H')}"
-                await self.redis.pfadd(unique_key, client_ip)
-                await self.redis.expire(unique_key, 7 * 24 * 3600)
-            
-            logger.debug(f"Logged request: {req_key} with stream ID: {stream_id}")
+            logger.debug(f"Logged to unified stream with ID: {stream_id}")
             return stream_id
             
         except Exception as e:
@@ -174,97 +115,168 @@ class AsyncLogStorage:
             return ""
     
     async def search_logs(self, **kwargs) -> Dict[str, Any]:
-        """Search logs with flexible filters.
+        """Search logs from Redis Streams.
         
-        Supports filtering by query, hostname, status, method, path, ip, user.
+        Queries the unified log stream for all log entries.
         """
         try:
             hours = kwargs.get('hours', 24)
             limit = kwargs.get('limit', 100)
             offset = kwargs.get('offset', 0)
             
-            # Calculate time window
+            # Calculate time window (Redis streams use millisecond timestamps)
             now = datetime.now(timezone.utc)
             cutoff = now - timedelta(hours=hours)
-            cutoff_timestamp = cutoff.timestamp()
+            cutoff_ms = int(cutoff.timestamp() * 1000)
+            now_ms = int(now.timestamp() * 1000)
             
-            logger.info(f"Search logs: now={now.timestamp()}, cutoff={cutoff_timestamp}, hours={hours}")
+            logger.info(f"Search logs from stream: cutoff={cutoff_ms}, now={now_ms}, hours={hours}")
             
-            # Determine which index to use based on filters
-            index_key = None
-            if kwargs.get('ip'):
-                index_key = f"idx:req:ip:{kwargs['ip']}"
-            elif kwargs.get('hostname'):
-                index_key = f"idx:req:host:{kwargs['hostname']}"
-            elif kwargs.get('user'):
-                index_key = f"idx:req:user:{kwargs['user']}"
-            elif kwargs.get('status'):
-                index_key = f"idx:req:status:{kwargs['status']}"
-            else:
-                # Use the global "all logs" index when no specific filter
-                index_key = "idx:req:all"
+            # Query the unified log stream
+            # XREVRANGE returns entries in reverse chronological order
+            stream_key = "logs:all:stream"
             
-            # Get request keys from index
-            request_keys = await self.redis.zrevrangebyscore(
-                index_key,
-                '+inf',
-                cutoff_timestamp,
-                start=offset,
-                num=limit
+            # Build the count parameter (limit + offset to handle pagination)
+            count = limit + offset if offset > 0 else limit
+            
+            # Query the stream
+            entries = await self.redis.xrevrange(
+                stream_key,
+                max=now_ms,
+                min=cutoff_ms,
+                count=count
             )
             
-            logger.info(f"Found {len(request_keys)} keys in index {index_key} with cutoff {cutoff_timestamp}")
+            logger.info(f"Found {len(entries)} entries in stream {stream_key}")
             
-            # Fetch request data
+            # Process entries and apply filters
             logs = []
-            for req_key in request_keys:
-                req_data = await self.redis.hgetall(req_key)
-                if req_data:
-                    # Apply additional filters
-                    if kwargs.get('method') and req_data.get('method') != kwargs['method']:
-                        continue
-                    if kwargs.get('path') and kwargs['path'] not in req_data.get('path', ''):
-                        continue
-                    if kwargs.get('query') and kwargs['query'] not in json.dumps(req_data):
-                        continue
-                    
-                    logs.append({
-                        'timestamp': req_data.get('timestamp', ''),
-                        'client_ip': req_data.get('ip', ''),
-                        'hostname': req_data.get('hostname', ''),
-                        'method': req_data.get('method', ''),
-                        'path': req_data.get('path', ''),
-                        'query': req_data.get('query', ''),  # Include query parameters
-                        'status_code': int(req_data.get('status', 0)),
-                        'response_time_ms': float(req_data.get('response_time', 0)),
-                        'user_id': req_data.get('user', ''),
-                        'error': req_data.get('error', ''),
-                        'message': req_data.get('message', '')
-                    })
+            for entry_id, data in entries:
+                # Skip entries before offset
+                if offset > 0:
+                    offset -= 1
+                    continue
+                
+                # Stop if we have enough entries
+                if len(logs) >= limit:
+                    break
+                
+                # Apply filters
+                if kwargs.get('client_ip') and data.get('client_ip') != kwargs['client_ip']:
+                    continue
+                if kwargs.get('proxy_hostname') and data.get('proxy_hostname') != kwargs['proxy_hostname']:
+                    continue
+                if kwargs.get('user') and data.get('user_id') != kwargs['user']:
+                    continue
+                if kwargs.get('status') and str(data.get('status_code', '')) != str(kwargs['status']):
+                    continue
+                if kwargs.get('method') and data.get('method') != kwargs['method']:
+                    continue
+                if kwargs.get('path') and kwargs['path'] not in data.get('path', ''):
+                    continue
+                
+                # Apply query search across multiple fields
+                if kwargs.get('query'):
+                    query = kwargs['query']
+                    # Parse structured queries like "method:GET" or "status:200"
+                    if ':' in query:
+                        field, value = query.split(':', 1)
+                        field_lower = field.lower()
+                        value_lower = value.lower()
+                        
+                        # Map field names to data keys
+                        field_map = {
+                            'method': 'method',
+                            'status': 'status_code', 
+                            'path': 'path',
+                            'user': 'user_id',
+                            'ip': 'client_ip',
+                            'hostname': 'proxy_hostname',
+                            'component': 'component',
+                            'level': 'level',
+                            'error': 'error'
+                        }
+                        
+                        if field_lower in field_map:
+                            data_field = field_map[field_lower]
+                            data_value = str(data.get(data_field, '')).lower()
+                            # For method comparison, need exact match
+                            if field_lower == 'method':
+                                if data_value != value_lower:
+                                    continue
+                            # For other fields, allow partial matching
+                            elif value_lower not in data_value:
+                                continue
+                            # If we get here, the structured query matched, so keep this entry
+                        else:
+                            # Unknown field in structured query, skip this entry
+                            continue
+                    else:
+                        # General text search across all fields
+                        query_lower = query.lower()
+                        searchable = [
+                            data.get('path', ''),
+                            data.get('method', ''),
+                            data.get('message', ''),
+                            data.get('user_id', ''),
+                            data.get('client_ip', ''),
+                            data.get('proxy_hostname', ''),
+                            data.get('error', ''),
+                            data.get('component', '')
+                        ]
+                        if not any(query_lower in str(field).lower() for field in searchable if field):
+                            continue
+                
+                # Convert stream entry to log format
+                log_entry = {
+                    'timestamp': data.get('timestamp_iso') or data.get('timestamp', ''),
+                    'client_ip': data.get('client_ip', ''),
+                    'client_hostname': data.get('client_hostname', ''),
+                    'proxy_hostname': data.get('proxy_hostname', ''),
+                    'method': data.get('method', ''),
+                    'path': data.get('path', ''),
+                    'query': data.get('query', ''),
+                    'status_code': int(data.get('status_code', 0)) if data.get('status_code') else int(data.get('status', 0)) if data.get('status') else 0,
+                    'response_time_ms': float(data.get('response_time_ms', 0)) if data.get('response_time_ms') else float(data.get('duration_ms', 0)) if data.get('duration_ms') else 0.0,
+                    'user_id': data.get('user_id', 'anonymous'),
+                    'user_agent': data.get('user_agent', ''),
+                    'referrer': data.get('referrer', ''),
+                    'bytes_sent': int(data.get('bytes_sent', 0)) if data.get('bytes_sent') else 0,
+                    'auth_type': data.get('auth_type', ''),
+                    'oauth_client_id': data.get('oauth_client_id', ''),
+                    'oauth_username': data.get('oauth_username', ''),
+                    'message': data.get('message', ''),
+                    'level': data.get('level', 'INFO'),
+                    'component': data.get('component', ''),
+                    'log_type': data.get('log_type', 'http_request'),
+                    'error': data.get('error', ''),
+                    'error_type': data.get('error_type', '')
+                }
+                
+                logs.append(log_entry)
             
             return {
                 'total': len(logs),
                 'logs': logs,
                 'query_params': kwargs
             }
-            
         except Exception as e:
             logger.error(f"Error searching logs: {e}")
             return {'total': 0, 'logs': [], 'error': str(e)}
     
-    async def get_logs_by_ip(self, ip: str, hours: int = 24, limit: int = 100) -> List[Dict]:
+    async def get_logs_by_ip(self, client_ip: str, hours: int = 24, limit: int = 100) -> List[Dict]:
         """Get logs by client IP address."""
-        result = await self.search_logs(ip=ip, hours=hours, limit=limit)
+        result = await self.search_logs(client_ip=client_ip, hours=hours, limit=limit)
         return result.get('logs', [])
     
-    async def get_logs_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> List[Dict]:
-        """Get logs by hostname."""
-        result = await self.search_logs(hostname=hostname, hours=hours, limit=limit)
+    async def get_logs_by_hostname(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> List[Dict]:
+        """Get logs by proxy hostname."""
+        result = await self.search_logs(proxy_hostname=proxy_hostname, hours=hours, limit=limit)
         return result.get('logs', [])
     
-    async def get_logs_by_proxy(self, hostname: str, hours: int = 24, limit: int = 100) -> List[Dict]:
-        """Get logs by proxy hostname (same as hostname)."""
-        return await self.get_logs_by_hostname(hostname, hours, limit)
+    async def get_logs_by_proxy(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> List[Dict]:
+        """Get logs by proxy hostname."""
+        return await self.get_logs_by_hostname(proxy_hostname, hours, limit)
     
     async def get_logs_by_client(self, client_id: str, hours: int = 24, limit: int = 100) -> List[Dict]:
         """Get logs by OAuth client ID."""
@@ -292,14 +304,15 @@ class AsyncLogStorage:
             for req_key in request_keys:
                 req_data = await self.redis.hgetall(req_key)
                 if req_data:
-                    status = int(req_data.get('status', 0))
+                    status = int(req_data.get('status_code', 0))
                     if not include_4xx and status < 500:
                         continue
                     
                     errors.append({
                         'timestamp': req_data.get('timestamp', ''),
-                        'client_ip': req_data.get('ip', ''),
-                        'hostname': req_data.get('hostname', ''),
+                        'client_ip': req_data.get('client_ip', ''),
+                        'proxy_hostname': req_data.get('proxy_hostname', ''),
+                        'client_hostname': req_data.get('client_hostname', ''),
                         'method': req_data.get('method', ''),
                         'path': req_data.get('path', ''),
                         'query': req_data.get('query', ''),  # Include query parameters

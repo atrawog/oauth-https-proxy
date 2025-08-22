@@ -49,9 +49,9 @@ class RequestLogger:
         # Create request data with proper serialization for Redis
         request_data = {
             "timestamp": str(timestamp),
-            "ip": str(ip),
-            "client_fqdn": str(client_fqdn),  # Add client FQDN
-            "hostname": str(hostname),
+            "client_ip": str(ip),
+            "client_hostname": str(client_fqdn),  # Client reverse DNS
+            "proxy_hostname": str(hostname),
             "method": str(method),
             "path": str(path),
             "query": str(query or ""),
@@ -121,8 +121,8 @@ class RequestLogger:
         await self.redis.xadd(
             "stream:requests",
             {
-                "ip": ip,
-                "hostname": hostname,
+                "client_ip": ip,
+                "proxy_hostname": hostname,
                 "method": method,
                 "path": path,
                 "timestamp": str(timestamp)
@@ -211,11 +211,11 @@ class RequestLogger:
             await self.redis.zadd(f"idx:req:errors", {entry_key: timestamp})
             
             # Track error statistics
-            if hostname := extra_fields.get("hostname", "unknown"):
+            if proxy_hostname := extra_fields.get("proxy_hostname", "unknown"):
                 
                 # Track error rates
                 date_hour = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d:%H")
-                await self.redis.hincrby(f"stats:errors:{date_hour}", hostname, 1)
+                await self.redis.hincrby(f"stats:errors:{date_hour}", proxy_hostname, 1)
                 await self.redis.expire(f"stats:errors:{date_hour}", 3600 * 48)
                 
                 # Track error types
@@ -229,9 +229,9 @@ class RequestLogger:
             await self.redis.zadd(f"idx:req:slow", {entry_key: duration_ms})
         
         # Update response time statistics
-        if hostname := extra_fields.get("hostname", "unknown"):
+        if proxy_hostname := extra_fields.get("proxy_hostname", "unknown"):
             # Track p50, p95, p99 in time windows
-            await self._update_response_time_stats(hostname, duration_ms)
+            await self._update_response_time_stats(proxy_hostname, duration_ms)
     
     async def _update_response_time_stats(self, hostname: str, duration_ms: float):
         """Update response time statistics for monitoring."""

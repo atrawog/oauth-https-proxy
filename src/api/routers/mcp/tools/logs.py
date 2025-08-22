@@ -29,7 +29,7 @@ class LogTools(BaseMCPTools):
             }
         )
         async def logs_ip(
-            ip: str,
+            client_ip: str,
             hours: int = 24,
             limit: int = 100,
             token: Optional[str] = None
@@ -37,7 +37,7 @@ class LogTools(BaseMCPTools):
             """Query logs by client IP address.
             
             Args:
-                ip: Client IP address
+                client_ip: Client IP address
                 hours: Number of hours to search back
                 limit: Maximum number of results
                 token: Optional API token
@@ -50,7 +50,7 @@ class LogTools(BaseMCPTools):
             async with self.logger.trace_context(
                 "mcp_tool_logs_ip",
                 session_id=session_id,
-                client_ip=ip
+                client_ip=client_ip
             ):
                 user = "anonymous"
                 if token:
@@ -67,7 +67,7 @@ class LogTools(BaseMCPTools):
                 logs = []
                 try:
                     # Get log keys from IP index
-                    index_key = f"idx:req:ip:{ip}"
+                    index_key = f"idx:req:ip:{client_ip}"
                     log_keys = await self.storage.redis_client.zrevrange(index_key, 0, limit - 1)
                     
                     # Fetch log entries
@@ -98,7 +98,7 @@ class LogTools(BaseMCPTools):
                         "method": log.get("method"),
                         "path": log.get("path"),
                         "status_code": log.get("status_code"),
-                        "hostname": log.get("hostname"),
+                        "proxy_hostname": log.get("proxy_hostname"),
                         "response_time": log.get("response_time_ms")
                     })
                 
@@ -107,12 +107,12 @@ class LogTools(BaseMCPTools):
                     action="logs_ip",
                     session_id=session_id,
                     user=user,
-                    details={"ip": ip, "hours": hours, "count": len(formatted_logs)}
+                    details={"client_ip": client_ip, "hours": hours, "count": len(formatted_logs)}
                 )
                 
                 # Match proxy-client API format
                 return {
-                    "ip": ip,
+                    "client_ip": client_ip,
                     "hours": hours,
                     "total": len(formatted_logs),
                     "logs": formatted_logs
@@ -312,13 +312,13 @@ class LogTools(BaseMCPTools):
                 for log in logs:
                     formatted_logs.append({
                         "timestamp": log.get("timestamp"),
-                        "client_ip": log.get("ip", log.get("client_ip")),
-                        "hostname": log.get("hostname"),
+                        "client_ip": log.get("client_ip"),
+                        "proxy_hostname": log.get("proxy_hostname"),
                         "method": log.get("method"),
                         "path": log.get("path"),
-                        "status_code": log.get("status", log.get("status_code")),
-                        "response_time": log.get("response_time", log.get("response_time_ms")),
-                        "error": log.get("error", log.get("message"))
+                        "status_code": log.get("status_code"),
+                        "response_time": log.get("response_time_ms"),
+                        "error": log.get("error")
                     })
                 
                 # Log audit event

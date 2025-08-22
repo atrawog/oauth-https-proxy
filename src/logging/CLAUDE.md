@@ -28,10 +28,10 @@ The RequestLogger provides efficient HTTP request/response logging with multiple
 ### Redis Storage Schema
 
 ```
-req:{timestamp}:{ip}         # Request/response data as hash
-idx:req:ip:{ip}              # Index by client IP
+req:{timestamp}:{client_ip}  # Request/response data as hash
+idx:req:ip:{client_ip}       # Index by client IP
 idx:req:fqdn:{fqdn}          # Index by client FQDN (reverse DNS)
-idx:req:host:{hostname}      # Index by proxy hostname
+idx:req:host:{proxy_hostname} # Index by proxy hostname
 idx:req:user:{username}      # Index by authenticated user
 idx:req:status:{code}        # Index by HTTP status code
 idx:req:errors               # All error responses (4xx/5xx)
@@ -49,8 +49,8 @@ stats:unique_ips:{hostname}:{YYYYMMDD:HH} # Unique visitors
 {
   "timestamp": "2024-01-15T10:30:45.123Z",
   "client_ip": "192.168.1.100",
-  "client_fqdn": "client.example.com",
-  "hostname": "api.example.com",
+  "client_hostname": "client.example.com",
+  "proxy_hostname": "api.example.com",
   "method": "GET",
   "path": "/users",
   "status_code": 200,
@@ -113,7 +113,7 @@ Logs are batched with 100ms windows:
 async def batch_logs(entries: List[LogEntry]):
     async with redis.pipeline() as pipe:
         for entry in entries:
-            pipe.hset(f"req:{entry.timestamp}:{entry.ip}", mapping=entry.dict())
+            pipe.hset(f"req:{entry.timestamp}:{entry.client_ip}", mapping=entry.dict())
         await pipe.execute()
 ```
 
@@ -208,7 +208,7 @@ async def track_error(entry: LogEntry):
     if entry.status_code >= 400:
         # Add to error index
         await redis.zadd("idx:req:errors", {
-            f"req:{entry.timestamp}:{entry.ip}": time.time()
+            f"req:{entry.timestamp}:{entry.client_ip}": time.time()
         })
         
         # Update error stats

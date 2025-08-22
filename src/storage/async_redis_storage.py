@@ -530,24 +530,45 @@ class AsyncRedisStorage:
             key = f"proxy:{hostname}"
             value = await self.redis_client.get(key)
             if value:
-                return ProxyTarget.parse_raw(value)
+                # Decode bytes to string if needed
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8')
+                logger.debug(f"Parsing proxy data for {hostname}: {value[:100]}")
+                parsed = ProxyTarget.parse_raw(value)
+                logger.debug(f"Successfully parsed proxy target for {hostname}")
+                return parsed
+            else:
+                logger.warning(f"No data found for key {key}")
             return None
         except (RedisError, json.JSONDecodeError) as e:
-            logger.error(f"Failed to get proxy target: {e}")
+            logger.error(f"Failed to get proxy target for {hostname}: {e}", exc_info=True)
             return None
     
     async def list_proxy_targets(self) -> List[ProxyTarget]:
         """List all proxy targets."""
+        import sys
+        print(f"DEBUG async_redis_storage.list_proxy_targets() called", file=sys.stderr)
         try:
             targets = []
+            key_count = 0
             async for key in self.redis_client.scan_iter(match="proxy:*"):
-                # Skip client info keys (proxy:client:*) and event streams
+                key_count += 1
+                # Decode bytes to string if needed
+                if isinstance(key, bytes):
+                    key = key.decode('utf-8')
+                # Skip client info keys (proxy:client:*) and event streams  
                 if ":client:" in key or key == "proxy:events:stream":
+                    logger.debug(f"Skipping non-proxy key: {key}")
                     continue
                 hostname = key.split(":", 1)[1]
+                logger.debug(f"Getting proxy target for hostname: {hostname}")
                 target = await self.get_proxy_target(hostname)
                 if target:
                     targets.append(target)
+                    logger.debug(f"Added proxy target: {hostname}")
+                else:
+                    logger.error(f"Could not get proxy target for {hostname} - get_proxy_target returned None")
+            logger.info(f"list_proxy_targets: scanned {key_count} keys, found {len(targets)} proxy targets")
             return targets
         except RedisError as e:
             logger.error(f"Failed to list proxy targets: {e}")

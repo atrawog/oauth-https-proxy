@@ -80,7 +80,7 @@ Stores client info keyed by `proxy:client:{server_port}:{client_port}`:
 async def store_client_info(server_port: int, client_port: int, client_ip: str):
     key = f"proxy:client:{server_port}:{client_port}"
     await redis.set(key, json.dumps({
-        "ip": client_ip,
+        "client_ip": client_ip,
         "timestamp": time.time()
     }), ex=60)  # 60 second TTL
 ```

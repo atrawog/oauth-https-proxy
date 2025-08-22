@@ -62,9 +62,10 @@ class UnifiedHTTPSServer:
             app_config = get_config()
             config.loglevel = app_config.LOG_LEVEL.upper()
             
-            # Additional Hypercorn settings
-            config.h11_max_incomplete_size = 16384
-            config.h2_max_inbound_frame_size = 16384
+            # OPTIMIZED: Larger frame sizes for better throughput
+            config.h11_max_incomplete_size = 65536  # 64KB for HTTP/1.1
+            config.h2_max_inbound_frame_size = 65536  # 64KB for HTTP/2
+            config.h2_max_concurrent_streams = 200  # More concurrent streams
             
             logger.info(f"Starting UnifiedHTTPSServer on {self.host}:{self.port}")
             

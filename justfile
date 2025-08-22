@@ -45,7 +45,7 @@ rebuild service="api":
 
 # Open shell in container
 shell:
-    docker exec -it {{container_name}} /bin/bash
+    docker exec -i {{container_name}} /bin/bash
 
 # Access Redis CLI
 redis-cli:
@@ -106,23 +106,23 @@ token-admin:
     echo "Add this to your .env file"
 
 # Generate a new token
-token-generate name email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":
+token-generate name email=env_var_or_default("ADMIN_EMAIL", "") token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client token create {{name}} --cert-email {{email}}
 
 # List all tokens
-token-list token="${ADMIN_TOKEN}":
+token-list token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client token list
 
 # Show token details
-token-show name token="${ADMIN_TOKEN}":
+token-show name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client token show {{name}}
 
 # Delete a token
-token-delete name token="${ADMIN_TOKEN}":
+token-delete name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client token delete {{name}} --force
 
 # Update token's certificate email (for current token only)
-token-email email token="${ADMIN_TOKEN}":
+token-email email token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client token update-email {{email}}
 
 # ============================================================================
@@ -130,33 +130,33 @@ token-email email token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Create a new certificate
-cert-create name domain staging="false" email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":
+cert-create name domain staging="false" email=env_var_or_default("ADMIN_EMAIL", "") token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client cert create {{name}} {{domain}} \
         {{ if staging == "true" { "--staging" } else { "" } }} \
         --email {{email}}
 
 # List all certificates
-cert-list token="${ADMIN_TOKEN}":
+cert-list token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client cert list
 
 # Show certificate details
-cert-show name pem="false" token="${ADMIN_TOKEN}":
+cert-show name pem="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client cert show {{name}} \
         {{ if pem == "true" { "--pem" } else { "" } }}
 
 # Delete a certificate
-cert-delete name force="false" token="${ADMIN_TOKEN}":
+cert-delete name force="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client cert delete {{name}} \
         {{ if force == "true" { "--force" } else { "" } }}
 
 # Renew a certificate
-cert-renew name force="false" wait="true" token="${ADMIN_TOKEN}":
+cert-renew name force="false" wait="true" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client cert renew {{name}} \
         {{ if force == "true" { "--force" } else { "" } }} \
         {{ if wait == "false" { "--no-wait" } else { "" } }}
 
 # Convert staging certificate to production
-cert-convert-to-production name wait="true" force="false" token="${ADMIN_TOKEN}":
+cert-convert-to-production name wait="true" force="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client cert convert-to-production {{name}} \
         {{ if wait == "false" { "--no-wait" } else { "" } }} \
         {{ if force == "true" { "--force" } else { "" } }}
@@ -167,7 +167,7 @@ cert-convert-to-production name wait="true" force="false" token="${ADMIN_TOKEN}"
 
 # Create a new proxy with automatic certificate handling
 # Will check for existing certificates and create new ones if needed
-proxy-create hostname target-url staging="false" preserve-host="true" enable-http="true" enable-https="true" email="${ADMIN_EMAIL}" token="${ADMIN_TOKEN}":
+proxy-create hostname target-url staging="false" preserve-host="true" enable-http="true" enable-https="true" email=env_var_or_default("ADMIN_EMAIL", "") token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy create {{hostname}} {{target-url}} \
         {{ if staging == "true" { "--staging" } else { "" } }} \
         {{ if preserve-host == "false" { "--no-preserve-host" } else { "" } }} \
@@ -176,21 +176,21 @@ proxy-create hostname target-url staging="false" preserve-host="true" enable-htt
         --email {{email}}
 
 # List all proxies
-proxy-list token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client proxy list
+proxy-list token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client --format table proxy list
 
 # Show proxy details
-proxy-show hostname token="${ADMIN_TOKEN}":
+proxy-show hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy show {{hostname}}
 
 # Delete a proxy
-proxy-delete hostname delete-cert="false" force="false" token="${ADMIN_TOKEN}":
+proxy-delete hostname delete-cert="false" force="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy delete {{hostname}} --force \
         {{ if delete-cert == "true" { "--delete-cert" } else { "" } }} \
         {{ if force == "true" { "--force" } else { "" } }}
 
 # Enable authentication for a proxy
-proxy-auth-enable hostname auth-proxy="auth.localhost" mode="forward" allowed-scopes="" allowed-audiences="" token="${ADMIN_TOKEN}":
+proxy-auth-enable hostname auth-proxy="auth.localhost" mode="forward" allowed-scopes="" allowed-audiences="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy auth enable {{hostname}} \
         {{auth-proxy}} \
         {{mode}} \
@@ -198,11 +198,11 @@ proxy-auth-enable hostname auth-proxy="auth.localhost" mode="forward" allowed-sc
         {{ if allowed-audiences != "" { "--allowed-audiences " + allowed-audiences } else { "" } }}
 
 # Disable authentication for a proxy
-proxy-auth-disable hostname token="${ADMIN_TOKEN}":
+proxy-auth-disable hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy auth disable {{hostname}}
 
 # Configure authentication for a proxy
-proxy-auth-config hostname users="" emails="" groups="" allowed-scopes="" allowed-audiences="" token="${ADMIN_TOKEN}":
+proxy-auth-config hostname users="" emails="" groups="" allowed-scopes="" allowed-audiences="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy auth config {{hostname}} \
         {{ if users != "" { "--users " + users } else { "" } }} \
         {{ if emails != "" { "--emails " + emails } else { "" } }} \
@@ -211,11 +211,11 @@ proxy-auth-config hostname users="" emails="" groups="" allowed-scopes="" allowe
         {{ if allowed-audiences != "" { "--audiences " + allowed-audiences } else { "" } }}
 
 # Show authentication configuration
-proxy-auth-show hostname token="${ADMIN_TOKEN}":
+proxy-auth-show hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy auth show {{hostname}}
 
 # Set protected resource metadata
-proxy-resource-set hostname endpoint="/api" scopes="read,write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="" token="${ADMIN_TOKEN}":
+proxy-resource-set hostname endpoint="/api" scopes="read,write" stateful="false" override-backend="false" bearer-methods="header" doc-suffix="/docs" server-info="{}" custom-metadata="{}" hacker-one-research="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy resource set {{hostname}} \
         --endpoint {{endpoint}} \
         --scopes "{{scopes}}" \
@@ -227,22 +227,22 @@ proxy-resource-set hostname endpoint="/api" scopes="read,write" stateful="false"
         --custom-metadata '{{custom-metadata}}'
 
 # Show protected resource metadata
-proxy-resource-show hostname token="${ADMIN_TOKEN}":
+proxy-resource-show hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy resource show {{hostname}}
 
 # Clear protected resource metadata
-proxy-resource-clear hostname token="${ADMIN_TOKEN}":
+proxy-resource-clear hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy resource clear {{hostname}} --force
 
 # List all protected resources
-proxy-resource-list token="${ADMIN_TOKEN}":
+proxy-resource-list token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy resource list
 
 # OAuth Authorization Server Management
 # ============================================
 
 # Set OAuth authorization server metadata for a proxy
-proxy-oauth-server-set hostname issuer="" scopes="" grant-types="" response-types="" token-auth-methods="" claims="" pkce-required="false" custom-metadata="{}" override-defaults="false" token="${ADMIN_TOKEN}":
+proxy-oauth-server-set hostname issuer="" scopes="" grant-types="" response-types="" token-auth-methods="" claims="" pkce-required="false" custom-metadata="{}" override-defaults="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy oauth-server set {{hostname}} \
         {{ if issuer != "" { "--issuer " + issuer } else { "" } }} \
         {{ if scopes != "" { "--scopes '" + scopes + "'" } else { "" } }} \
@@ -255,15 +255,15 @@ proxy-oauth-server-set hostname issuer="" scopes="" grant-types="" response-type
         {{ if override-defaults == "true" { "--override-defaults" } else { "--no-override-defaults" } }}
 
 # Show OAuth server configuration for a proxy
-proxy-oauth-server-show hostname token="${ADMIN_TOKEN}":
+proxy-oauth-server-show hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy oauth-server show {{hostname}}
 
 # Clear OAuth server configuration for a proxy
-proxy-oauth-server-clear hostname token="${ADMIN_TOKEN}":
+proxy-oauth-server-clear hostname token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy oauth-server clear {{hostname}} --force
 
 # List proxies with custom OAuth server configurations
-proxy-oauth-server-list token="${ADMIN_TOKEN}":
+proxy-oauth-server-list token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client proxy oauth-server list
 
 # ============================================================================
@@ -271,14 +271,14 @@ proxy-oauth-server-list token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Create a new route
-route-create path target-type target-value priority="50" methods="ALL" is-regex="false" description="" token="${ADMIN_TOKEN}":
+route-create path target-type target-value priority="50" methods="ALL" is-regex="false" description="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route create {{path}} {{target-type}} {{target-value}} \
         --priority {{priority}} \
         {{ if methods != "ALL" { "--methods " + methods } else { "" } }} \
         {{ if is-regex == "true" { "--regex" } else { "" } }}
 
 # Create a global route
-route-create-global path target-type target-value priority="50" methods="*" is-regex="false" description="" token="${ADMIN_TOKEN}":
+route-create-global path target-type target-value priority="50" methods="*" is-regex="false" description="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route create-global {{path}} {{target-type}} {{target-value}} \
         --priority {{priority}} \
         {{ if methods != "*" { "--methods " + methods } else { "" } }} \
@@ -286,7 +286,7 @@ route-create-global path target-type target-value priority="50" methods="*" is-r
         {{ if description != "" { "--description '" + description + "'" } else { "" } }}
 
 # Create a proxy-specific route
-route-create-proxy path target-type target-value proxies priority="500" methods="*" is-regex="false" description="" token="${ADMIN_TOKEN}":
+route-create-proxy path target-type target-value proxies priority="500" methods="*" is-regex="false" description="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route create-proxy {{path}} {{target-type}} {{target-value}} {{proxies}} \
         --priority {{priority}} \
         {{ if methods != "*" { "--methods " + methods } else { "" } }} \
@@ -294,19 +294,19 @@ route-create-proxy path target-type target-value proxies priority="500" methods=
         {{ if description != "" { "--description '" + description + "'" } else { "" } }}
 
 # List all routes
-route-list token="${ADMIN_TOKEN}":
+route-list token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route list
 
 # Show route details
-route-show route-id token="${ADMIN_TOKEN}":
+route-show route-id token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route show {{route-id}}
 
 # Delete a route
-route-delete route-id token="${ADMIN_TOKEN}":
+route-delete route-id token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route delete {{route-id}} --force
 
 # List routes by scope
-route-list-by-scope scope="all" token="${ADMIN_TOKEN}":
+route-list-by-scope scope="all" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client route list-by-scope {{scope}}
 
 # ============================================================================
@@ -314,116 +314,116 @@ route-list-by-scope scope="all" token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Create a Docker service
-service-create name image="" dockerfile="" port="" memory="512m" cpu="1.0" auto-proxy="false" token="${ADMIN_TOKEN}":
+service-create name image="" dockerfile="" port="" memory="512m" cpu="1.0" auto-proxy="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service create {{name}} {{image}} \
         {{ if port != "" { "--port " + port } else { "" } }} \
         --memory {{memory}} --cpu {{cpu}}
 
 # Create a Docker service with exposed port
-service-create-exposed name image port bind-address="127.0.0.1" memory="512m" cpu="1.0" token="${ADMIN_TOKEN}":
+service-create-exposed name image port bind-address="127.0.0.1" memory="512m" cpu="1.0" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service create-exposed {{name}} {{image}} {{port}} \
         --bind-address {{bind-address}} \
         --memory {{memory}} --cpu {{cpu}}
 
 # List Docker services
-service-list owned-only="false" token="${ADMIN_TOKEN}":
+service-list owned-only="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service list --type docker
 
 # List all services (Docker + external)
-service-list-all type="" token="${ADMIN_TOKEN}":
+service-list-all type="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service list \
         {{ if type != "" { "--type " + type } else { "--type all" } }}
 
 # Show service details
-service-show name token="${ADMIN_TOKEN}":
+service-show name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service show {{name}}
 
 # Delete a service
-service-delete name force="false" delete-proxy="true" token="${ADMIN_TOKEN}":
+service-delete name force="false" delete-proxy="true" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service delete {{name}} \
         {{ if force == "true" { "--force" } else { "" } }}
 
 # Start a service
-service-start name token="${ADMIN_TOKEN}":
+service-start name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service start {{name}}
 
 # Stop a service
-service-stop name token="${ADMIN_TOKEN}":
+service-stop name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service stop {{name}}
 
 # Restart a service
-service-restart name token="${ADMIN_TOKEN}":
+service-restart name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service restart {{name}}
 
 # View service logs
-service-logs name lines="100" timestamps="false" token="${ADMIN_TOKEN}":
+service-logs name lines="100" timestamps="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service logs {{name}} --lines {{lines}}
 
 # Show service statistics
-service-stats name token="${ADMIN_TOKEN}":
+service-stats name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service stats {{name}}
 
 # Create proxy for service
-service-proxy-create name hostname="" enable-https="false" token="${ADMIN_TOKEN}":
+service-proxy-create name hostname="" enable-https="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service proxy-create {{name}} \
         {{ if hostname != "" { "--hostname " + hostname } else { "" } }} \
         {{ if enable-https == "true" { "--enable-https" } else { "--no-enable-https" } }}
 
 # Clean up services
-service-cleanup token="${ADMIN_TOKEN}":
+service-cleanup token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service cleanup --force
 
 # Clean up orphaned services
-service-cleanup-orphaned token="${ADMIN_TOKEN}":
+service-cleanup-orphaned token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client workflow cleanup --orphaned-only --force
 
 # Add port to service
-service-port-add name port bind-address="127.0.0.1" source-token="" token="${ADMIN_TOKEN}":
+service-port-add name port bind-address="127.0.0.1" source-token="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service port add {{name}} {{port}} \
         --bind-address {{bind-address}} \
         {{ if source-token != "" { "--source-token " + source-token } else { "" } }}
 
 # Remove port from service
-service-port-remove name port-name token="${ADMIN_TOKEN}":
+service-port-remove name port-name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service port remove {{name}} {{port-name}} --force
 
 # List service ports
-service-port-list name token="${ADMIN_TOKEN}":
+service-port-list name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service port list {{name}}
 
 # Check port availability
-service-port-check port bind-address="127.0.0.1" token="${ADMIN_TOKEN}":
+service-port-check port bind-address="127.0.0.1" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service port check {{port}} --bind-address {{bind-address}}
 
 # List global port allocation
-service-ports-global available-only="false" token="${ADMIN_TOKEN}":
+service-ports-global available-only="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service ports \
         {{ if available-only == "true" { "--available-only" } else { "" } }}
 
 # Register external service
-service-register name target-url description="" token="${ADMIN_TOKEN}":
+service-register name target-url description="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service external register {{name}} {{target-url}} \
         {{ if description != "" { "--description '" + description + "'" } else { "" } }}
 
 # Unregister external service
-service-unregister name token="${ADMIN_TOKEN}":
+service-unregister name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service external unregister {{name}} --force
 
 # List external services
-service-list-external token="${ADMIN_TOKEN}":
+service-list-external token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service external list
 
 # Show external service details
-service-show-external name token="${ADMIN_TOKEN}":
+service-show-external name token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service external show {{name}}
 
 # Update external service
-service-update-external name target-url description="" token="${ADMIN_TOKEN}":
+service-update-external name target-url description="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service external update {{name}} {{target-url}} \
         {{ if description != "" { "--description '" + description + "'" } else { "" } }}
 
 # Register OAuth as external service
-service-register-oauth token="${ADMIN_TOKEN}":
+service-register-oauth token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client service external register oauth https://auth.${BASE_DOMAIN} \
         --description "OAuth 2.1 Authorization Server"
 
@@ -432,18 +432,18 @@ service-register-oauth token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Register OAuth client
-oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="read write" token="${ADMIN_TOKEN}":
+oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="read write" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client oauth register {{name}} \
         --redirect-uri {{redirect-uri}} --scope "{{scope}}"
 
 # List OAuth clients (default: 50 per page, use page parameter for pagination)
-oauth-clients-list active-only="" page="1" per-page="50" token="${ADMIN_TOKEN}":
+oauth-clients-list active-only="" page="1" per-page="50" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client --format table oauth client list \
         --page {{page}} --per-page {{per-page}} \
         {{ if active-only == "true" { "--active-only" } else { "" } }}
 
 # List OAuth tokens (access and refresh tokens)
-oauth-token-list token_type="" client_id="" username="" page="1" per_page="50" include_expired="false" token="${ADMIN_TOKEN}":
+oauth-token-list token_type="" client_id="" username="" page="1" per_page="50" include_expired="false" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client --format table oauth token list \
         --page {{page}} --per-page {{per_page}} \
         {{ if token_type != "" { "--token-type " + token_type } else { "" } }} \
@@ -452,11 +452,11 @@ oauth-token-list token_type="" client_id="" username="" page="1" per_page="50" i
         {{ if include_expired == "true" { "--include-expired" } else { "" } }}
 
 # List OAuth sessions
-oauth-sessions-list token="${ADMIN_TOKEN}":
+oauth-sessions-list token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client oauth session list
 
 # Generate OAuth JWT key (special case - uses openssl)
-oauth-key-generate token="${ADMIN_TOKEN}":
+oauth-key-generate token=env_var_or_default("ADMIN_TOKEN", ""):
     #!/usr/bin/env bash
     set -euo pipefail
     echo "Generating RSA key pair for JWT signing..."
@@ -467,11 +467,11 @@ oauth-key-generate token="${ADMIN_TOKEN}":
     rm /tmp/jwt_private.pem
 
 # Setup OAuth routes for a domain
-oauth-routes-setup domain token="${ADMIN_TOKEN}":
+oauth-routes-setup domain token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client workflow oauth-setup {{domain}}
 
 # Test OAuth tokens
-oauth-test-tokens server-url token="${ADMIN_TOKEN}":
+oauth-test-tokens server-url token=env_var_or_default("ADMIN_TOKEN", ""):
     @echo "Testing OAuth configuration..."
     TOKEN={{token}} pixi run proxy-client oauth health
 
@@ -480,78 +480,106 @@ oauth-test-tokens server-url token="${ADMIN_TOKEN}":
 # ============================================================================
 
 # Search logs
-logs hours="1" event="" level="" hostname="" limit="50" token="${ADMIN_TOKEN}":
+logs hours="1" event="" level="" hostname="" limit="50" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log search \
         --hours {{hours}} --limit {{limit}} \
         {{ if hostname != "" { "--hostname " + hostname } else { "" } }}
 
-# Query logs by IP
-logs-ip ip hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log by-ip {{ip}} --hours {{hours}} --limit {{limit}}
+# Query logs by client IP
+logs-ip ip hours="1" event="" level="" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log ip {{ip}} --hours {{hours}} --limit {{limit}}
 
 # Query logs by proxy hostname
-logs-proxy hostname hours="24" limit="100" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log by-proxy {{hostname}} --hours {{hours}} --limit {{limit}}
+logs-proxy hostname hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log proxy {{hostname}} --hours {{hours}} --limit {{limit}}
 
-# Query logs by client FQDN (reverse DNS of client IP)
-logs-host fqdn hours="24" limit="100" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log by-host {{fqdn}} --hours {{hours}} --limit {{limit}}
+# Query logs by client hostname (reverse DNS of client IP)
+logs-hostname hostname hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log hostname {{hostname}} --hours {{hours}} --limit {{limit}}
 
-# Query logs by client
-logs-client client-id hours="24" event="" level="" limit="100" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log by-client {{client-id}} --hours {{hours}} --limit {{limit}}
+# Query logs by OAuth client ID
+logs-oauth-client client-id hours="1" event="" level="" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log oauth-client {{client-id}} --hours {{hours}} --limit {{limit}}
 
 # Show errors
-logs-errors hours="1" limit="20" token="${ADMIN_TOKEN}":
+logs-errors hours="1" limit="20" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log errors --hours {{hours}} --limit {{limit}}
 
 # Debug errors
-logs-errors-debug hours="1" include-warnings="false" limit="50" token="${ADMIN_TOKEN}":
+logs-errors-debug hours="1" include-warnings="false" limit="50" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log errors --hours {{hours}} \
         {{ if include-warnings == "true" { "--include-warnings" } else { "" } }} \
         --limit {{limit}}
 
 # Follow logs
-logs-follow interval="2" event="" level="" hostname="" token="${ADMIN_TOKEN}":
+logs-follow interval="2" event="" level="" hostname="" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log follow --interval {{interval}} \
         {{ if hostname != "" { "--hostname " + hostname } else { "" } }}
 
-# OAuth activity
-logs-oauth ip hours="24" limit="100" token="${ADMIN_TOKEN}":
+# OAuth activity for an IP
+logs-oauth ip hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log oauth {{ip}} --hours {{hours}} --limit {{limit}}
 
-# OAuth debugging
-logs-oauth-debug ip hours="24" limit="100" token="${ADMIN_TOKEN}":
+# OAuth debugging for an IP
+logs-oauth-debug ip hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log oauth-debug {{ip}} --hours {{hours}} --limit {{limit}}
 
 # OAuth flow tracking
-logs-oauth-flow client-id="" username="" hours="1" token="${ADMIN_TOKEN}":
+logs-oauth-flow client-id="" username="" hours="1" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log oauth-flow \
         {{ if client-id != "" { "--client-id " + client-id } else { "" } }} \
         {{ if username != "" { "--username " + username } else { "" } }} \
         --hours {{hours}}
 
 # Search logs with query
-logs-search query="" hours="24" event="" level="" hostname="" limit="100" token="${ADMIN_TOKEN}":
+logs-search query="" hours="1" event="" level="" hostname="" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log search \
         {{ if query != "" { "--query '" + query + "'" } else { "" } }} \
         --hours {{hours}} --limit {{limit}} \
         {{ if hostname != "" { "--hostname " + hostname } else { "" } }}
 
 # Log statistics
-logs-stats hours="24" token="${ADMIN_TOKEN}":
-    TOKEN={{token}} pixi run proxy-client log events --hours {{hours}}
+logs-stats hours="1" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log stats --hours {{hours}}
 
 # Clear logs
-logs-clear token="${ADMIN_TOKEN}":
+logs-clear token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log clear --force
 
 # Test logging system
-logs-test token="${ADMIN_TOKEN}":
+logs-test token=env_var_or_default("ADMIN_TOKEN", ""):
     TOKEN={{token}} pixi run proxy-client log test
 
+# Query logs by authenticated user ID
+logs-user user-id hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log user {{user-id}} --hours {{hours}} --limit {{limit}}
+
+# Query logs by session ID
+logs-session session-id hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log session {{session-id}} --hours {{hours}} --limit {{limit}}
+
+# Query logs by HTTP method
+logs-method method hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log method {{method}} --hours {{hours}} --limit {{limit}}
+
+# Query logs by status code
+logs-status code hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log status {{code}} --hours {{hours}} --limit {{limit}}
+
+# Query slow requests
+logs-slow threshold-ms="1000" hours="1" limit="50" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log slow --threshold {{threshold-ms}} --hours {{hours}} --limit {{limit}}
+
+# Query logs by path pattern
+logs-path pattern hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log path "{{pattern}}" --hours {{hours}} --limit {{limit}}
+
+# Query logs by OAuth username
+logs-oauth-user username hours="1" limit="100" token=env_var_or_default("ADMIN_TOKEN", ""):
+    TOKEN={{token}} pixi run proxy-client log oauth-user {{username}} --hours {{hours}} --limit {{limit}}
+
 # Combined logs (Docker + API)
-logs-all lines="50" hours="1" token="${ADMIN_TOKEN}":
+logs-all lines="50" hours="1" token=env_var_or_default("ADMIN_TOKEN", ""):
     @echo "=== Docker Logs ===" 
     @docker-compose logs --tail={{lines}}
     @echo ""

@@ -7,8 +7,7 @@ from typing import Optional
 
 from .shared.config import Config, get_config
 from .shared.utils import setup_logging
-from .shared.logging import configure_logging, set_request_logger
-from .shared.request_logger import RequestLogger
+# Legacy logging imports removed - using UnifiedAsyncLogger now
 from .storage import RedisStorage
 from .certmanager import CertificateManager, HTTPSServer, CertificateScheduler
 from .proxy import ProxyHandler
@@ -27,8 +26,6 @@ manager: Optional[CertificateManager] = None
 https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
-logging_components: Optional[dict] = None
-request_logger: Optional[RequestLogger] = None
 workflow_orchestrator: Optional[InstanceWorkflowOrchestrator] = None
 
 
@@ -46,16 +43,8 @@ async def initialize_components(config: Config) -> tuple:
     async_components = await init_async_components(redis_url)
     logger.info("Async components initialized")
     
-    # Initialize request logger with async Redis first
-    request_logger = RequestLogger(redis_url)
-    
-    # Configure structured logging with Redis and RequestLogger
-    logging_components = configure_logging(storage.redis_client, request_logger)
-    logger.info("Structured logging configured with Redis storage and IP capture")
-    
-    # Set the global request logger
-    set_request_logger(request_logger)
-    logger.info("Request logger initialized with Redis indexing")
+    # Logging is now handled by UnifiedAsyncLogger initialized in async_components
+    logger.info("Using UnifiedAsyncLogger for all logging")
     
     # Initialize certificate manager (sync for now, will be replaced by async)
     manager = CertificateManager(storage)

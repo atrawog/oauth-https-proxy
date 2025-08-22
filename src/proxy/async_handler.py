@@ -107,7 +107,7 @@ class EnhancedAsyncProxyHandler:
                 method=request.method,
                 path=str(request.url.path),
                 ip=client_ip,
-                hostname=hostname,
+                proxy_hostname=hostname,
                 trace_id=trace_id,
                 query=str(request.url.query) if request.url.query else None,
                 user_agent=request.headers.get("user-agent"),

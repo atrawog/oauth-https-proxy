@@ -1,7 +1,6 @@
 """Core token CRUD operations with async support."""
 
 import secrets
-import logging
 from datetime import datetime, timezone
 from typing import List, Dict
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
@@ -12,8 +11,7 @@ from tabulate import tabulate
 
 from .models import TokenCreateRequest, TokenResponse, TokenSummary, TokenDetail
 from src.auth import AuthDep, AuthResult
-
-logger = logging.getLogger(__name__)
+from src.shared.logger import log_info, log_debug, log_error, log_warning
 
 
 def create_core_router(async_storage) -> APIRouter:
@@ -57,15 +55,15 @@ def create_core_router(async_storage) -> APIRouter:
             token_value, 
             cert_email=token_request.cert_email
         )
-        logger.info(f"Token async_storage result for '{token_request.name}': {result}")
+        log_info(f"Token async_storage result for '{token_request.name}': {result}", component="api.tokens")
         
         if not result:
             raise HTTPException(500, "Failed to create token")
         
         # Verify token was stored correctly
         token_data = await async_storage.get_api_token_by_name(token_request.name)
-        logger.info(f"Token verification for '{token_request.name}': {token_data}")
-        logger.info(f"Created token '{token_request.name}' with email {token_request.cert_email}")
+        log_info(f"Token verification for '{token_request.name}': {token_data}", component="api.tokens")
+        log_info(f"Created token '{token_request.name}' with email {token_request.cert_email}", component="api.tokens")
         
         return TokenResponse(
             name=token_request.name,
@@ -225,19 +223,19 @@ def create_core_router(async_storage) -> APIRouter:
             certificates = await async_storage.list_certificates_by_owner(token_data['hash'])
             for cert in certificates:
                 await async_storage.delete_certificate(cert.cert_name)
-                logger.info(f"Cascade deleted certificate: {cert.cert_name}")
+                log_info(f"Cascade deleted certificate: {cert.cert_name}", component="api.tokens")
                 
             # Delete owned proxies
             proxies = await async_storage.list_proxies_by_owner(token_data['hash'])
             for proxy in proxies:
                 await async_storage.delete_proxy_target(proxy.hostname)
-                logger.info(f"Cascade deleted proxy: {proxy.hostname}")
+                log_info(f"Cascade deleted proxy: {proxy.hostname}", component="api.tokens")
         # Delete token
         result = await async_storage.delete_api_token_by_name(name)
         if not result:
             raise HTTPException(500, "Failed to delete token")
         
-        logger.info(f"Deleted token '{name}'" + (" with cascade" if cascade else ""))
+        log_info(f"Deleted token '{name}'" + (" with cascade" if cascade else ""), component="api.tokens")
         
         return {
             "message": f"Token '{name}' deleted successfully",

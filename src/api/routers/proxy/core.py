@@ -205,28 +205,41 @@ def create_core_router(storage, cert_manager):
         }
     
     
+    @router.get("/debug")
+    async def debug_endpoint():
+        """Debug endpoint to test router."""
+        return {"message": "Debug endpoint working", "time": str(datetime.now(timezone.utc))}
+    
     @router.get("/")
     async def list_proxy_targets(
         request: Request,
-        auth: AuthResult = Depends(AuthDep())
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
         """List proxy targets - filtered by ownership or all for admin."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         async_storage = request.app.state.async_storage
         all_targets = await async_storage.list_proxy_targets()
         
+        logger.info(f"list_proxy_targets: auth.principal={auth.principal}, token_hash={auth.token_hash}, found {len(all_targets)} total targets")
+        
         # Admin sees all proxy targets
         if auth.principal == "ADMIN":
+            logger.info(f"Returning all {len(all_targets)} targets for ADMIN")
             return all_targets
         
         # Regular users see only their own targets
-        return [target for target in all_targets if target.owner_token_hash == auth.token_hash]
+        filtered = [target for target in all_targets if target.owner_token_hash == auth.token_hash]
+        logger.info(f"Filtered to {len(filtered)} targets for non-admin user")
+        return filtered
     
     
     @router.get("/formatted")
     async def list_proxy_targets_formatted(
         request: Request,
         format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
-        auth: AuthResult = Depends(AuthDep())
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
         """List proxy targets with formatted output."""
         from fastapi.responses import PlainTextResponse

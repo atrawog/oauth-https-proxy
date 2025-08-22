@@ -200,11 +200,8 @@ class FlexibleAuthService:
         Returns:
             AuthResult with authentication status
         """
-        # Check cache
-        cache_key = f"proxy:{hostname}:{path}:{credentials.credentials if credentials else 'none'}"
-        cached_result = self._get_cached_result(cache_key)
-        if cached_result:
-            return cached_result
+        # Don't cache proxy auth results to ensure config changes take effect immediately
+        # Proxy auth checks are fast (just Redis lookup) so caching isn't needed
         
         # Get proxy auth config from storage
         if not self.storage:
@@ -224,7 +221,9 @@ class FlexibleAuthService:
             )
         
         # Check if auth is enabled for this proxy
+        logger.debug(f"Proxy {hostname}: auth_enabled={proxy_data.auth_enabled}")
         if not proxy_data.auth_enabled:
+            logger.debug(f"Auth not enabled for {hostname}, allowing anonymous access")
             return AuthResult(
                 authenticated=True,
                 auth_type="none",
@@ -269,8 +268,8 @@ class FlexibleAuthService:
         if result.authenticated and config.auth_mode == "redirect" and not result.authenticated:
             result.metadata["redirect_url"] = config.redirect_url
         
-        # Cache result
-        self._cache_result(cache_key, result, config.cache_ttl)
+        # Don't cache proxy auth results - they need to reflect config changes immediately
+        # (caching disabled for proxy auth to ensure immediate propagation)
         
         return result
     

@@ -23,10 +23,13 @@ from ..proxy.models import ProxyTarget
 from ..proxy.routes import Route, RouteTargetType, RouteScope
 from ..proxy.app import create_proxy_app
 from .models import DomainService
-from ..shared.logging import get_logger, configure_logging
+from ..shared.logger import get_logger_compat, log_info, log_warning, log_error, log_debug, set_global_logger
 from ..shared.config import Config
+from ..shared.unified_logger import UnifiedAsyncLogger
+from ..shared.dns_resolver import get_dns_resolver
 
-logger = get_logger(__name__)
+# Use compatibility logger that wraps unified async logger
+logger = get_logger_compat(__name__)
 
 # Removed correlation ID generator - using IP as primary identifier
 
@@ -38,13 +41,16 @@ class HypercornInstance:
     """Represents a Hypercorn instance serving a specific set of domains."""
     
     def __init__(self, app, domains: List[str], http_port: int, https_port: int, 
-                 cert=None, proxy_configs: Dict = None, storage=None):
+                 cert=None, proxy_configs: Dict = None, storage=None, async_components=None):
         self.domains = domains
         self.http_port = http_port  # Port with PROXY protocol enabled
         self.https_port = https_port  # Port with PROXY protocol enabled
         self.cert = cert
         self.proxy_configs = proxy_configs or {}
         self.storage = storage
+        self.async_components = async_components
+        # Get async Redis client if available
+        self.async_redis = async_components.redis_clients.async_redis if async_components and hasattr(async_components, 'redis_clients') else None
         self.http_process = None
         self.https_process = None
         self.cert_file = None
@@ -54,7 +60,11 @@ class HypercornInstance:
         
         # Create a proxy app for this instance
         from ..proxy.app import create_proxy_app
-        self.app = create_proxy_app(storage, domains) if storage else app
+        # Pass async_storage if available for better performance
+        if storage and async_components and hasattr(async_components, 'async_storage'):
+            self.app = create_proxy_app(storage, domains, async_storage=async_components.async_storage)
+        else:
+            self.app = create_proxy_app(storage, domains) if storage else app
         
     async def start(self):
         """Start HTTP and/or HTTPS instances based on proxy configuration."""
@@ -111,7 +121,7 @@ class HypercornInstance:
                 backend_port=internal_port,
                 listen_host="127.0.0.1",
                 listen_port=self.http_port,
-                redis_client=self.storage.redis_client if self.storage else None
+                redis_client=self.async_redis if self.async_redis else (self.storage.redis_client if self.storage else None)
             )
             self.proxy_handler = asyncio.create_task(proxy_server.serve_forever())
             
@@ -155,7 +165,7 @@ class HypercornInstance:
                 backend_port=internal_port,
                 listen_host="127.0.0.1",
                 listen_port=self.https_port,
-                redis_client=self.storage.redis_client if self.storage else None
+                redis_client=self.async_redis if self.async_redis else (self.storage.redis_client if self.storage else None)
             )
             self.proxy_handler_https = asyncio.create_task(proxy_server.serve_forever())
             
@@ -205,8 +215,14 @@ class UnifiedDispatcher:
         self.async_components = async_components
         self.async_storage = async_components.async_storage if async_components else None
         
-        # Configure Redis logging if storage is available
-        if storage and storage.redis_client:
+        # Initialize unified logger if async components available
+        self.unified_logger = async_components.unified_logger if async_components else None
+        if self.unified_logger:
+            # Set global logger for fire-and-forget logging
+            set_global_logger(self.unified_logger)
+            log_info("Unified dispatcher initialized with async logger", component="dispatcher")
+        elif storage and storage.redis_client:
+            # Fallback to old logging
             from ..shared.logging import configure_logging
             configure_logging(storage.redis_client)
         self.hostname_to_http_port: Dict[str, int] = {}
@@ -217,6 +233,9 @@ class UnifiedDispatcher:
         self.routes: List[Route] = []
         # Named instances for routing targets
         self.named_services: Dict[str, int] = {}  # name -> port
+        # Initialize DNS resolver for reverse lookups
+        self.dns_resolver = get_dns_resolver()
+        
         # HTTP client for URL route forwarding
         self.http_client = httpx.AsyncClient(
             timeout=httpx.Timeout(connect=30.0, read=120.0, write=30.0, pool=30.0),
@@ -535,6 +554,36 @@ class UnifiedDispatcher:
             logger.debug(f"Error parsing SNI: {e}")
             return None
     
+    def _extract_http_headers(self, data: bytes) -> Dict[str, str]:
+        """Extract headers from HTTP request data."""
+        headers = {}
+        try:
+            request_str = data.decode('utf-8', errors='ignore')
+            lines = request_str.split('\r\n')
+            
+            for line in lines[1:]:  # Skip request line
+                if line == '':  # End of headers
+                    break
+                if ':' in line:
+                    key, value = line.split(':', 1)
+                    headers[key.strip().lower()] = value.strip()
+        except Exception as e:
+            logger.debug(f"Error extracting headers: {e}")
+        
+        return headers
+    
+    def _extract_query_params(self, data: bytes) -> Optional[str]:
+        """Extract query parameters from request."""
+        try:
+            request_str = data.decode('utf-8', errors='ignore')
+            first_line = request_str.split('\r\n')[0]
+            parts = first_line.split(' ')
+            if len(parts) >= 2 and '?' in parts[1]:
+                return parts[1].split('?', 1)[1]
+        except Exception:
+            pass
+        return None
+    
     async def handle_http_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTP connection and forward to appropriate instance."""
         client_addr = writer.get_extra_info('peername')
@@ -571,29 +620,74 @@ class UnifiedDispatcher:
                 hostname=hostname
             )
             
-            # Get proxy configuration to determine route filtering
+            # Get proxy configuration to determine route filtering  
             proxy_config = None
-            if self.storage:
+            if self.async_storage:
+                try:
+                    proxy_json = await self.async_storage.redis_client.get(f"proxy:{hostname}")
+                    if proxy_json:
+                        proxy_data = json.loads(proxy_json)
+                        proxy_config = ProxyTarget(**proxy_data)
+                except Exception as e:
+                    log_debug(f"Could not load proxy config for {hostname}: {e}", component="dispatcher")
+            elif self.storage:
+                # Fallback to sync storage
                 try:
                     proxy_json = self.storage.redis_client.get(f"proxy:{hostname}")
                     if proxy_json:
                         proxy_data = json.loads(proxy_json)
                         proxy_config = ProxyTarget(**proxy_data)
                 except Exception as e:
-                    logger.debug(f"Could not load proxy config for {hostname}: {e}")
+                    log_debug(f"Could not load proxy config for {hostname}: {e}", component="dispatcher")
             
             # Apply route filtering based on proxy configuration
             applicable_routes = self.get_applicable_routes(proxy_config)
             
             # Check generic routes with filtering
             method, request_path = self.get_request_info(data)
-            logger.debug(
-                "HTTP request details",
-                ip=client_ip,
-                hostname=hostname,
-                method=method,
-                path=request_path
-            )
+            
+            # Log detailed request with unified logger if available
+            if self.unified_logger:
+                # Generate trace ID for this request
+                trace_id = self.unified_logger.start_trace(
+                    "http_request",
+                    proxy=hostname,
+                    method=method or "",
+                    path=request_path or "",
+                    client_ip=client_ip
+                )
+                
+                # Resolve client hostname
+                client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
+                
+                # Extract headers and query params
+                headers = self._extract_http_headers(data)
+                query_params = self._extract_query_params(data)
+                body_sample = data[:1024] if data else None  # First 1KB for logging
+                
+                # Log detailed request
+                await self.unified_logger.log_http_request_detailed(
+                    trace_id=trace_id,
+                    method=method or "",
+                    path=request_path or "",
+                    headers=headers,
+                    body=body_sample,
+                    query_params=query_params,
+                    client_ip=client_ip,
+                    proxy_hostname=hostname,  # The proxy being accessed
+                    client_hostname=client_hostname,  # Reverse DNS of client
+                    log_source="dispatcher",
+                    event_type="http_request" if method else "connection_lifecycle"
+                )
+            else:
+                # Fallback to old logging
+                logger.debug(
+                    "HTTP request details",
+                    ip=client_ip,
+                    hostname=hostname,
+                    method=method,
+                    path=request_path
+                )
             if request_path and applicable_routes:
                 for route in applicable_routes:
                     if route.matches(request_path, method):
@@ -697,11 +791,17 @@ class UnifiedDispatcher:
                 await writer.wait_closed()
                 return
             
-            logger.debug(
-                "SNI hostname extracted",
-                ip=client_ip,
-                hostname=hostname
-            )
+            # Log TLS details with unified logger if available
+            if self.unified_logger:
+                # Generate trace ID for this request
+                trace_id = self.unified_logger.start_trace(
+                    "https_request",
+                    proxy=hostname,
+                    client_ip=client_ip
+                )
+                
+                # Resolve client hostname
+                client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
             
             # Get proxy config if this is a proxy domain
             proxy_config = None
@@ -975,7 +1075,8 @@ class UnifiedMultiInstanceServer:
             https_port=self.next_https_port,
             cert=cert,
             proxy_configs={hostname: proxy_target},
-            storage=self.https_server.manager.storage
+            storage=self.https_server.manager.storage,
+            async_components=self.async_components
         )
         
         logger.info(f"[PROXY_CREATE] Starting instance for {hostname}")

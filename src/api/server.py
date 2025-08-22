@@ -129,10 +129,10 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     from .auth_middleware import AuthConfigMiddleware
     app.add_middleware(AuthConfigMiddleware)
     
-    # Add RequestLoggerMiddleware to log all requests/responses
+    # Add UnifiedLoggingMiddleware for fire-and-forget logging
     # This must be added after AuthConfigMiddleware to capture auth info
-    from ..middleware.request_logger import RequestLoggerMiddleware
-    app.add_middleware(RequestLoggerMiddleware)
+    from ..middleware.unified_logging_middleware import UnifiedLoggingMiddleware
+    app.add_middleware(UnifiedLoggingMiddleware)
     
     # Add CORS middleware
     app.add_middleware(

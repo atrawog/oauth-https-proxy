@@ -97,6 +97,9 @@ def create_auth_router(async_storage):
         
         logger.info(f"Auth configured for proxy {hostname}: enabled={config.enabled}")
         
+        # No need to clear cache or recreate instances - proxy reads fresh from Redis on each request
+        # The proxy handler's get_proxy_target() call will get the updated auth config immediately
+        
         return {"status": "Auth configured", "proxy_target": target}
     
     
@@ -132,6 +135,9 @@ def create_auth_router(async_storage):
         if route:
             await async_storage.delete_route(route_id)
         logger.info(f"Auth disabled for proxy {hostname}")
+        
+        # No need to clear cache or recreate instances - proxy reads fresh from Redis on each request
+        # The proxy handler's get_proxy_target() call will get the updated auth config immediately
         
         return {"status": "Auth protection removed", "proxy_target": target}
     

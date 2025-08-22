@@ -11,6 +11,7 @@ from fastapi import FastAPI
 from ..storage.redis_clients import RedisClients, initialize_redis_clients
 from ..storage.async_redis_storage import AsyncRedisStorage
 from ..shared.unified_logger import UnifiedAsyncLogger
+from ..shared.logger import set_global_logger
 from ..consumers.metrics_processor import MetricsProcessor
 from ..consumers.alert_manager import AlertManager
 from ..docker.async_manager import AsyncDockerManager
@@ -59,7 +60,11 @@ class AsyncComponents:
             # Initialize unified logger
             self.unified_logger = UnifiedAsyncLogger(self.redis_clients)
             self.unified_logger.set_component("api_server")
-            logger.info("Unified logger initialized")
+            
+            # Set as global logger for easy access
+            set_global_logger(self.unified_logger)
+            
+            logger.info("Unified logger initialized and set as global")
             
             # Initialize async managers
             self.docker_manager = AsyncDockerManager(self.async_storage, self.redis_clients)

@@ -14,6 +14,7 @@ from starlette.middleware.cors import CORSMiddleware
 
 from ....storage.async_redis_storage import AsyncRedisStorage
 from ....shared.unified_logger import UnifiedAsyncLogger
+from ....shared.dns_resolver import get_dns_resolver
 from .mcp_server import IntegratedMCPServer
 
 logger = logging.getLogger(__name__)
@@ -108,11 +109,16 @@ def mount_mcp_app(
         user_agent = request.headers.get('user-agent', 'unknown')
         session_id = request.headers.get('mcp-session-id', 'no-session')
         
+        # Resolve client hostname
+        dns_resolver = get_dns_resolver()
+        client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        
         # Log to async storage for unified logging
         log_entry = {
             'timestamp': datetime.now(timezone.utc).isoformat(),
-            'ip': client_ip,
-            'hostname': request.headers.get('host', 'localhost'),
+            'client_ip': client_ip,
+            'client_hostname': client_hostname,
+            'proxy_hostname': request.headers.get('host', 'localhost'),
             'method': request.method,
             'path': '/mcp',
             'user': 'anonymous',
@@ -359,17 +365,18 @@ def mount_mcp_app(
             )
         
         # Track timing for tools/list requests
-        import time as timing_module
+        # Use perf_counter for accurate timing
         is_tools_list = b'"method": "tools/list"' in body or b'"method":"tools/list"' in body
         if is_tools_list:
-            app_start = timing_module.time()
-            logger.info(f"[MCP TIMING] Starting FastMCP app processing for tools/list")
+            app_start = time.perf_counter()
+            logger.debug(f"[MCP TIMING] Starting FastMCP app processing for tools/list")  # Changed to debug
         
         task = asyncio.create_task(_mcp_app(scope, receive, send))
         
         if is_tools_list:
-            app_elapsed = (timing_module.time() - app_start) * 1000
-            logger.info(f"[MCP TIMING] FastMCP app task created in {app_elapsed:.2f}ms")
+            app_elapsed = (time.perf_counter() - app_start) * 1000
+            if app_elapsed > 10:  # Only log if slow
+                logger.warning(f"[MCP TIMING] FastMCP app task slow: {app_elapsed:.2f}ms")
         
         # Create streaming response generator with keepalive
         async def generate(is_sse=False):
@@ -404,8 +411,10 @@ def mount_mcp_app(
                             
                             # Log progress for tools/list
                             if is_tools_list and chunk_count == 1:
-                                logger.info(f"[MCP TIMING] First chunk received after {(timing_module.time() - app_start)*1000:.2f}ms, size: {len(chunk)} bytes")
-                                logger.info(f"[MCP TIMING] First chunk content: {chunk[:200]}")
+                                # Skip logging in hot path unless slow
+                                elapsed_ms = (time.perf_counter() - app_start)*1000
+                                if elapsed_ms > 100:  # Only log if slow
+                                    logger.warning(f"[MCP TIMING] Slow first chunk: {elapsed_ms:.2f}ms, size: {len(chunk)} bytes")
                             
                             # Log response chunks for debugging
                             # For large responses, we need to check more than 500 chars
@@ -449,8 +458,9 @@ def mount_mcp_app(
                                             if req_id == 1 and isinstance(result, dict) and 'tools' in result:
                                                 tools_list = result.get('tools', [])
                                                 if is_tools_list:
-                                                    tools_elapsed = (timing_module.time() - app_start) * 1000 if 'app_start' in locals() else 0
-                                                    logger.info(f"[MCP TIMING] Tools/list response ready after {tools_elapsed:.2f}ms - returning {len(tools_list)} tools")
+                                                    tools_elapsed = (time.perf_counter() - app_start) * 1000 if 'app_start' in locals() else 0
+                                                    if tools_elapsed > 100:  # Only log if slow
+                                                        logger.warning(f"[MCP TIMING] Slow tools/list: {tools_elapsed:.2f}ms - returning {len(tools_list)} tools")
                                                 logger.info(f"[MCP RESPONSE] Tools/list response - returning {len(tools_list)} tools")
                                                 if tools_list:
                                                     logger.info(f"[MCP RESPONSE] Tool names: {[t.get('name', 'unknown') for t in tools_list[:5]]}")
@@ -513,9 +523,9 @@ def mount_mcp_app(
                         # Log if we're stuck waiting for tools/list
                         if is_tools_list:
                             if chunk_count == 0 and (current_time - last_activity) > 2:
-                                logger.warning(f"[MCP TIMING] No chunks received after {(timing_module.time() - app_start)*1000:.2f}ms - FastMCP may be hanging!")
+                                logger.warning(f"[MCP TIMING] No chunks received after {(time.perf_counter() - app_start)*1000:.2f}ms - FastMCP may be hanging!")
                             elif chunk_count > 0 and (current_time - last_activity) > 2:
-                                logger.warning(f"[MCP TIMING] Stuck after {chunk_count} chunks ({total_bytes} bytes) - waiting {(timing_module.time() - app_start)*1000:.2f}ms total")
+                                logger.warning(f"[MCP TIMING] Stuck after {chunk_count} chunks ({total_bytes} bytes) - waiting {(time.perf_counter() - app_start)*1000:.2f}ms total")
                         
                         if current_time - last_activity > keepalive_interval:
                             # Send SSE comment as keepalive - more frequent to prevent timeouts

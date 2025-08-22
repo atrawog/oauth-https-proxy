@@ -6,15 +6,46 @@ schemas and trace correlation.
 """
 
 import asyncio
+import json
 import logging
+import os
 import time
 from typing import Any, Dict, Optional
 from contextlib import asynccontextmanager
 
 from ..storage.redis_clients import RedisClients
 from ..storage.unified_stream_publisher import UnifiedStreamPublisher
+from ..shared.dns_resolver import get_dns_resolver
 
 logger = logging.getLogger(__name__)
+
+# Configuration from environment
+LOG_REQUEST_HEADERS = os.getenv('LOG_REQUEST_HEADERS', 'true').lower() == 'true'
+LOG_RESPONSE_HEADERS = os.getenv('LOG_RESPONSE_HEADERS', 'true').lower() == 'true'
+LOG_REQUEST_BODY = os.getenv('LOG_REQUEST_BODY', 'true').lower() == 'true'
+LOG_RESPONSE_BODY = os.getenv('LOG_RESPONSE_BODY', 'false').lower() == 'true'
+LOG_BODY_MAX_SIZE = int(os.getenv('LOG_BODY_MAX_SIZE', '10240'))
+LOG_MASK_SENSITIVE = os.getenv('LOG_MASK_SENSITIVE', 'true').lower() == 'true'
+
+# Sensitive headers to mask
+SENSITIVE_HEADERS = ['authorization', 'cookie', 'x-api-key', 'x-auth-token', 'x-csrf-token']
+
+def mask_sensitive_headers(headers: Dict[str, str]) -> Dict[str, str]:
+    """Mask sensitive header values for security."""
+    if not LOG_MASK_SENSITIVE:
+        return headers
+    
+    masked = {}
+    for key, value in headers.items():
+        if key.lower() in SENSITIVE_HEADERS:
+            # Keep first 8 chars for debugging, mask rest
+            if len(value) > 8:
+                masked[key] = value[:8] + "***MASKED***"
+            else:
+                masked[key] = "***MASKED***"
+        else:
+            masked[key] = value
+    return masked
 
 
 class UnifiedAsyncLogger:
@@ -59,7 +90,7 @@ class UnifiedAsyncLogger:
         
         self.active_traces[trace_id] = {
             "operation": operation,
-            "start_time": time.time(),
+            "start_time": int(time.time() * 1000),  # Use milliseconds
             "metadata": metadata,
             "spans": []
         }
@@ -86,7 +117,7 @@ class UnifiedAsyncLogger:
             return
         
         trace_data = self.active_traces[trace_id]
-        duration_ms = (time.time() - trace_data["start_time"]) * 1000
+        duration_ms = int(time.time() * 1000) - trace_data["start_time"]
         
         # Log trace completion
         await self.log(
@@ -131,7 +162,7 @@ class UnifiedAsyncLogger:
         if trace_id in self.active_traces:
             self.active_traces[trace_id]["spans"].append({
                 "name": span_name,
-                "timestamp": time.time(),
+                "timestamp": int(time.time() * 1000),  # Use milliseconds
                 "data": data
             })
     
@@ -212,27 +243,32 @@ class UnifiedAsyncLogger:
     
     # Specialized logging methods
     
-    async def log_request(self, method: str, path: str, ip: str,
-                         hostname: str, trace_id: Optional[str] = None,
+    async def log_request(self, method: str, path: str, client_ip: str,
+                         proxy_hostname: str, trace_id: Optional[str] = None,
                          **extra) -> Optional[str]:
         """Log an HTTP request.
         
         Args:
             method: HTTP method
             path: Request path
-            ip: Client IP
-            hostname: Target hostname
+            client_ip: Client IP address
+            proxy_hostname: The proxy hostname being accessed
             trace_id: Request trace ID
             **extra: Additional request fields
             
         Returns:
             Log ID
         """
+        # Resolve client hostname
+        dns_resolver = get_dns_resolver()
+        client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        
         request_data = {
             "method": method,
             "path": path,
-            "ip": ip,
-            "hostname": hostname,
+            "client_ip": client_ip,
+            "proxy_hostname": proxy_hostname,      # The proxy being accessed
+            "client_hostname": client_hostname,     # Reverse DNS of client
             **extra
         }
         
@@ -259,6 +295,118 @@ class UnifiedAsyncLogger:
         }
         
         return await self.publisher.publish_http_response(response_data, trace_id)
+    
+    async def log_http_request_detailed(
+        self,
+        trace_id: str,
+        method: str,
+        path: str,
+        headers: Dict[str, str],
+        body: Optional[bytes],
+        query_params: Optional[str],
+        client_ip: str,
+        proxy_hostname: str,                       # The proxy hostname being accessed
+        client_hostname: Optional[str] = None,     # Reverse DNS of client IP
+        **extra
+    ) -> Optional[str]:
+        """Log detailed HTTP request with headers and body.
+        
+        Args:
+            trace_id: Request trace ID
+            method: HTTP method
+            path: Request path
+            headers: Request headers
+            body: Request body (will be truncated)
+            query_params: Query string
+            client_ip: Client IP address
+            proxy_hostname: The proxy hostname being accessed
+            client_hostname: Reverse DNS of client IP (optional)
+            **extra: Additional fields
+            
+        Returns:
+            Log ID
+        """
+        # Resolve client hostname if not provided
+        if not client_hostname:
+            dns_resolver = get_dns_resolver()
+            client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        
+        # Mask sensitive headers if configured
+        masked_headers = mask_sensitive_headers(headers) if headers and LOG_REQUEST_HEADERS else {}
+        
+        # Truncate body if needed
+        truncated_body = None
+        if body and LOG_REQUEST_BODY:
+            truncated_body = body[:LOG_BODY_MAX_SIZE]
+        
+        # Use single timestamp
+        timestamp_ms = int(time.time() * 1000)
+        
+        log_data = {
+            "timestamp": timestamp_ms,
+            "trace_id": trace_id,
+            "method": method,
+            "path": path,
+            "headers": json.dumps(masked_headers) if masked_headers else None,
+            "body": truncated_body.decode('utf-8', errors='ignore') if truncated_body else None,
+            "query_params": query_params,
+            "client_ip": client_ip,
+            "proxy_hostname": proxy_hostname,
+            "client_hostname": client_hostname,
+            "event_type": "http_request",
+            **extra
+        }
+        
+        return await self.publisher.publish("logs:all:stream", log_data, trace_id)
+    
+    async def log_http_response_detailed(
+        self,
+        trace_id: str,
+        status_code: int,
+        headers: Dict[str, str],
+        body: Optional[bytes],
+        duration_ms: float,
+        proxy_hostname: str,                       # The proxy hostname
+        **extra
+    ) -> Optional[str]:
+        """Log detailed HTTP response with headers and body.
+        
+        Args:
+            trace_id: Request trace ID
+            status_code: HTTP status code
+            headers: Response headers
+            body: Response body (will be truncated)
+            duration_ms: Request duration in milliseconds
+            proxy_hostname: The proxy hostname
+            **extra: Additional fields
+            
+        Returns:
+            Log ID
+        """
+        # Mask sensitive headers if configured
+        masked_headers = mask_sensitive_headers(headers) if headers and LOG_RESPONSE_HEADERS else {}
+        
+        # Truncate body if needed
+        truncated_body = None
+        if body and LOG_RESPONSE_BODY:
+            truncated_body = body[:LOG_BODY_MAX_SIZE]
+        
+        # Use single timestamp
+        timestamp_ms = int(time.time() * 1000)
+        
+        log_data = {
+            "timestamp": timestamp_ms,
+            "trace_id": trace_id,
+            "status_code": status_code,
+            "headers": json.dumps(masked_headers) if masked_headers else None,
+            "body": truncated_body.decode('utf-8', errors='ignore') if truncated_body else None,
+            "duration_ms": duration_ms,
+            "proxy_hostname": proxy_hostname,
+            "event_type": "http_response",
+            **extra
+        }
+        
+        return await self.publisher.publish("logs:all:stream", log_data, trace_id)
     
     async def log_audit(self, actor: str, action: str,
                        resource: str, result: str,
@@ -363,14 +511,14 @@ class UnifiedAsyncLogger:
     
     # Proxy events
     
-    async def log_proxy_event(self, hostname: str,
+    async def log_proxy_event(self, proxy_hostname: str,
                              event_type: str,
                              trace_id: Optional[str] = None,
                              **data) -> Optional[str]:
         """Log a proxy lifecycle event.
         
         Args:
-            hostname: Proxy hostname
+            proxy_hostname: Proxy hostname
             event_type: Type of event (created, updated, deleted, failed)
             trace_id: Optional trace ID
             **data: Additional event data
@@ -381,7 +529,7 @@ class UnifiedAsyncLogger:
         return await self.event(
             f"proxy_{event_type}",
             {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 **data
             },
             trace_id=trace_id

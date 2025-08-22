@@ -98,15 +98,15 @@ class MetricsProcessor(UnifiedStreamConsumer):
             current_hour = datetime.now(timezone.utc).strftime("%Y%m%d:%H")
             
             # Aggregate per-hostname metrics
-            for hostname in set(list(self.response_times.keys()) + 
+            for proxy_hostname in set(list(self.response_times.keys()) + 
                               list(self.status_counts.keys()) + 
                               list(self.unique_ips.keys())):
                 
                 metrics = {}
                 
                 # Response time statistics
-                if hostname in self.response_times:
-                    times = self.response_times[hostname]
+                if proxy_hostname in self.response_times:
+                    times = self.response_times[proxy_hostname]
                     if times:
                         metrics["response_time_avg"] = sum(times) / len(times)
                         metrics["response_time_min"] = min(times)
@@ -117,36 +117,36 @@ class MetricsProcessor(UnifiedStreamConsumer):
                         metrics["request_count"] = len(times)
                     
                     # Clear after aggregation
-                    self.response_times[hostname] = self.response_times[hostname][-1000:]  # Keep last 1000
+                    self.response_times[proxy_hostname] = self.response_times[proxy_hostname][-1000:]  # Keep last 1000
                 
                 # Status code distribution
-                if hostname in self.status_counts:
-                    metrics["status_codes"] = dict(self.status_counts[hostname])
+                if proxy_hostname in self.status_counts:
+                    metrics["status_codes"] = dict(self.status_counts[proxy_hostname])
                     
                     # Calculate error rate
-                    total = sum(self.status_counts[hostname].values())
-                    errors = sum(count for status, count in self.status_counts[hostname].items() 
+                    total = sum(self.status_counts[proxy_hostname].values())
+                    errors = sum(count for status, count in self.status_counts[proxy_hostname].items() 
                                if status >= 400)
                     metrics["error_rate"] = (errors / total * 100) if total > 0 else 0
                 
                 # Unique visitors
-                if hostname in self.unique_ips:
-                    metrics["unique_visitors"] = len(self.unique_ips[hostname])
+                if proxy_hostname in self.unique_ips:
+                    metrics["unique_visitors"] = len(self.unique_ips[proxy_hostname])
                     # Use HyperLogLog for memory efficiency
                     await self.redis.pfadd(
-                        f"stats:unique_ips:{hostname}:{current_hour}",
-                        *self.unique_ips[hostname]
+                        f"stats:unique_ips:{proxy_hostname}:{current_hour}",
+                        *self.unique_ips[proxy_hostname]
                     )
-                    self.unique_ips[hostname].clear()
+                    self.unique_ips[proxy_hostname].clear()
                 
                 # Store aggregated metrics
                 if metrics:
                     await self.redis.hset(
-                        f"metrics:{hostname}:{current_hour}",
+                        f"metrics:{proxy_hostname}:{current_hour}",
                         mapping={k: json.dumps(v) if isinstance(v, dict) else str(v) 
                                 for k, v in metrics.items()}
                     )
-                    await self.redis.expire(f"metrics:{hostname}:{current_hour}", 86400 * 7)  # 7 days
+                    await self.redis.expire(f"metrics:{proxy_hostname}:{current_hour}", 86400 * 7)  # 7 days
             
             # Store global error metrics
             if self.error_counts:
@@ -189,30 +189,30 @@ class MetricsProcessor(UnifiedStreamConsumer):
             data: Parsed message data
         """
         try:
-            hostname = data.get("hostname", "unknown")
+            proxy_hostname = data.get("proxy_hostname", "unknown")
             
             # Process response metrics
             if data.get("log_type") == "http_response" or "duration_ms" in data:
                 duration = data.get("duration_ms")
                 if duration is not None:
-                    self.response_times[hostname].append(float(duration))
+                    self.response_times[proxy_hostname].append(float(duration))
                 
                 status = data.get("status")
                 if status is not None:
-                    self.status_counts[hostname][int(status)] += 1
+                    self.status_counts[proxy_hostname][int(status)] += 1
             
             # Track unique IPs
-            ip = data.get("ip")
-            if ip:
-                self.unique_ips[hostname].add(ip)
+            client_ip = data.get("client_ip")
+            if client_ip:
+                self.unique_ips[proxy_hostname].add(client_ip)
             
             # Update real-time counters
             await self.redis.hincrby(
-                f"stats:realtime:{hostname}",
+                f"stats:realtime:{proxy_hostname}",
                 "requests",
                 1
             )
-            await self.redis.expire(f"stats:realtime:{hostname}", 300)  # 5 min TTL
+            await self.redis.expire(f"stats:realtime:{proxy_hostname}", 300)  # 5 min TTL
             
         except Exception as e:
             logger.error(f"Failed to process HTTP metrics: {e}")
@@ -303,7 +303,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
         """
         try:
             event_type = data.get("event_type", "")
-            hostname = data.get("hostname", "unknown")
+            proxy_hostname = data.get("proxy_hostname", data.get("hostname", "unknown"))
             
             # Track proxy events
             await self.redis.hincrby(
@@ -314,9 +314,9 @@ class MetricsProcessor(UnifiedStreamConsumer):
             
             # Update proxy count
             if "created" in event_type:
-                await self.redis.sadd("proxies:active", hostname)
+                await self.redis.sadd("proxies:active", proxy_hostname)
             elif "deleted" in event_type:
-                await self.redis.srem("proxies:active", hostname)
+                await self.redis.srem("proxies:active", proxy_hostname)
             
         except Exception as e:
             logger.error(f"Failed to process proxy metrics: {e}")

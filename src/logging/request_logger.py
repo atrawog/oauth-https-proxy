@@ -24,11 +24,11 @@ class RequestLogger:
         try:
             import time
             timestamp = float(request_data.get('timestamp', time.time()))
-            ip = request_data.get('ip', 'unknown')
+            client_ip = request_data.get('client_ip', 'unknown')
             
             # Generate unique key
             sequence = int((timestamp * 1000) % 1000000)
-            request_key = f"req:{ip}:{int(timestamp)}:{sequence}"
+            request_key = f"req:{client_ip}:{int(timestamp)}:{sequence}"
             
             # Store in Redis
             await self.redis_client.hset(request_key, mapping={
@@ -37,13 +37,13 @@ class RequestLogger:
             await self.redis_client.expire(request_key, 86400)  # 24 hour TTL
             
             # Add to indexes
-            await self.redis_client.zadd(f"idx:req:ip:{ip}", {request_key: timestamp})
-            await self.redis_client.expire(f"idx:req:ip:{ip}", 86400)
+            await self.redis_client.zadd(f"idx:req:ip:{client_ip}", {request_key: timestamp})
+            await self.redis_client.expire(f"idx:req:ip:{client_ip}", 86400)
             
-            hostname = request_data.get('hostname', '')
-            if hostname:
-                await self.redis_client.zadd(f"idx:req:host:{hostname}", {request_key: timestamp})
-                await self.redis_client.expire(f"idx:req:host:{hostname}", 86400)
+            proxy_hostname = request_data.get('proxy_hostname', '')
+            if proxy_hostname:
+                await self.redis_client.zadd(f"idx:req:host:{proxy_hostname}", {request_key: timestamp})
+                await self.redis_client.expire(f"idx:req:host:{proxy_hostname}", 86400)
             
             # Add to global index
             await self.redis_client.zadd("idx:req:all", {request_key: timestamp})
@@ -52,8 +52,8 @@ class RequestLogger:
             await self.redis_client.xadd(
                 "stream:requests",
                 {
-                    "ip": ip,
-                    "hostname": hostname or "unknown",
+                    "client_ip": client_ip,
+                    "proxy_hostname": proxy_hostname or "unknown",
                     "method": request_data.get('method', ''),
                     "path": request_data.get('path', ''),
                     "timestamp": str(timestamp),
@@ -65,8 +65,8 @@ class RequestLogger:
             # Update statistics
             from datetime import datetime, timezone
             date_hour = datetime.fromtimestamp(timestamp, timezone.utc).strftime("%Y%m%d:%H")
-            if hostname:
-                await self.redis_client.hincrby(f"stats:requests:{date_hour}", hostname, 1)
+            if proxy_hostname:
+                await self.redis_client.hincrby(f"stats:requests:{date_hour}", proxy_hostname, 1)
                 await self.redis_client.expire(f"stats:requests:{date_hour}", 3600 * 48)
             
             logger.debug(f"Logged request to Redis: {request_key}")
@@ -99,12 +99,12 @@ class RequestLogger:
             "query_params": kwargs
         }
     
-    async def get_logs_by_ip(self, ip: str, **kwargs) -> Dict[str, Any]:
-        """Get logs by IP address."""
+    async def get_logs_by_ip(self, client_ip: str, **kwargs) -> Dict[str, Any]:
+        """Get logs by client IP address."""
         return {
             "total": 0,
             "logs": [],
-            "query_params": {"ip_address": ip, **kwargs}
+            "query_params": {"client_ip": client_ip, **kwargs}
         }
     
     async def get_errors(self, **kwargs) -> Dict[str, Any]:
@@ -115,7 +115,7 @@ class RequestLogger:
             "query_params": {"type": "errors", **kwargs}
         }
     
-    async def query_by_ip(self, ip: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
+    async def query_by_ip(self, client_ip: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
         """Query logs by client IP address."""
         if not self.redis_client:
             return []
@@ -126,7 +126,7 @@ class RequestLogger:
             min_timestamp = time.time() - (hours * 3600)
             
             # Use index to find requests from this IP within time range
-            index_key = f"idx:req:ip:{ip}"
+            index_key = f"idx:req:ip:{client_ip}"
             request_keys = await self.redis_client.zrangebyscore(
                 index_key,
                 min_timestamp,
@@ -189,12 +189,12 @@ class RequestLogger:
                     if status >= 400:
                         results.append({
                             'timestamp': req_data.get('timestamp', ''),
-                            'ip': req_data.get('ip', ''),
+                            'client_ip': req_data.get('client_ip', ''),
                             'method': req_data.get('method', ''),
                             'path': req_data.get('path', ''),
                             'status': status,
                             'error': req_data.get('error', ''),
-                            'hostname': req_data.get('hostname', ''),
+                            'proxy_hostname': req_data.get('proxy_hostname', ''),
                             'user': req_data.get('user', '')
                         })
         except Exception as e:
@@ -202,15 +202,15 @@ class RequestLogger:
         
         return results
     
-    async def query_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
-        """Query logs by hostname."""
+    async def query_by_hostname(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
+        """Query logs by proxy hostname."""
         if not self.redis_client:
             return []
         
         results = []
         try:
             # Use hostname index
-            index_key = f"idx:req:host:{hostname}"
+            index_key = f"idx:req:host:{proxy_hostname}"
             request_ids = await self.redis_client.zrevrange(
                 index_key, 0, limit - 1
             )
@@ -220,12 +220,12 @@ class RequestLogger:
                 if req_data:
                     results.append({
                         'timestamp': req_data.get('timestamp', ''),
-                        'ip': req_data.get('ip', ''),
+                        'client_ip': req_data.get('client_ip', ''),
                         'method': req_data.get('method', ''),
                         'path': req_data.get('path', ''),
                         'status': int(req_data.get('status', 0)),
                         'response_time': float(req_data.get('response_time', 0)),
-                        'hostname': req_data.get('hostname', ''),
+                        'proxy_hostname': req_data.get('proxy_hostname', ''),
                         'user': req_data.get('user', '')
                     })
         except Exception as e:
@@ -235,7 +235,7 @@ class RequestLogger:
     
     async def search_logs(self, query: str = None, hours: int = 24, 
                          event: str = None, level: str = None, 
-                         hostname: str = None, limit: int = 100) -> List[Dict[str, Any]]:
+                         proxy_hostname: str = None, limit: int = 100) -> List[Dict[str, Any]]:
         """Search logs with multiple filters."""
         if not self.redis_client:
             return []

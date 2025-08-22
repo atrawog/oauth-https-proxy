@@ -14,6 +14,7 @@ from starlette.responses import Response
 from starlette.types import Receive, Scope, Send
 
 from ..shared.client_ip import get_real_client_ip
+from ..shared.dns_resolver import get_dns_resolver
 from ..shared.logging import get_logger
 
 logger = get_logger(__name__)
@@ -114,11 +115,16 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
                             except:
                                 pass
                     
+                    # Resolve client hostname
+                    dns_resolver = get_dns_resolver()
+                    client_hostname = await dns_resolver.resolve_ptr(client_ip)
+                    
                     # Build log entry for Redis Streams with proper field names
                     log_entry = {
                         "timestamp": datetime.fromtimestamp(start_time, timezone.utc).isoformat(),
                         "client_ip": client_ip,
-                        "hostname": hostname or "unknown",
+                        "client_hostname": client_hostname,
+                        "proxy_hostname": hostname or "unknown",
                         "method": method,
                         "path": path,
                         "query": query or "",

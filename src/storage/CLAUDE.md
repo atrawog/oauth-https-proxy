@@ -81,9 +81,9 @@ workflow:consumer:info      # Consumer group metadata
 
 ### Logging Keys
 ```
-req:{timestamp}:{ip}         # Request/response data as hash
-idx:req:ip:{ip}              # Index by client IP
-idx:req:host:{hostname}      # Index by hostname
+req:{timestamp}:{client_ip}  # Request/response data as hash
+idx:req:ip:{client_ip}       # Index by client IP
+idx:req:host:{proxy_hostname} # Index by proxy hostname
 idx:req:user:{username}      # Index by authenticated user
 idx:req:status:{code}        # Index by HTTP status code
 idx:req:errors               # All error responses (4xx/5xx)

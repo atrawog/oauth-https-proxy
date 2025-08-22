@@ -4,7 +4,6 @@ This app is used for domain instances that only need to forward requests,
 without the overhead of FastAPI's lifespan management and API endpoints.
 """
 
-import logging
 import httpx
 from typing import Dict, Optional
 from starlette.requests import Request
@@ -13,26 +12,27 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
 from .handler import EnhancedProxyHandler
-from ..shared.logging import get_logger
+from ..shared.logger import get_logger_compat
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
 from ..api.oauth.config import Settings
 
-logger = get_logger(__name__)
+logger = get_logger_compat(__name__)
 
 
 class ProxyOnlyApp:
     """Minimal proxy application without FastAPI overhead."""
     
-    def __init__(self, storage, domains=None):
+    def __init__(self, storage, domains=None, async_storage=None):
         """Initialize proxy-only app with its own resources."""
         self.storage = storage
+        self.async_storage = async_storage
         self.domains = domains or []
         
         # Always configure Redis logging for proxy instances
         # Each Hypercorn instance needs its own Redis handler
-        import logging as std_logging
-        from ..shared.logging import configure_logging, AsyncRedisLogHandler
+        # Configure Redis logging for this instance
+        from ..shared.logging import configure_logging
         
         if storage and storage.redis_client:
             # Always create new Redis logging configuration
@@ -43,7 +43,8 @@ class ProxyOnlyApp:
             logger.warning("Proxy instance running without Redis logging - no storage/redis_client")
             
         # Each instance gets its own proxy handler with isolated httpx client
-        self.proxy_handler = EnhancedProxyHandler(storage)
+        # Pass async_storage if available for better performance
+        self.proxy_handler = EnhancedProxyHandler(storage, async_storage=async_storage)
         
         # Create OAuth metadata handler
         self.settings = Settings()
@@ -130,7 +131,7 @@ class ProxyOnlyApp:
         return self.app
 
 
-def create_proxy_app(storage, domains=None):
+def create_proxy_app(storage, domains=None, async_storage=None):
     """Factory function to create a proxy-only ASGI app."""
-    proxy_app = ProxyOnlyApp(storage, domains)
+    proxy_app = ProxyOnlyApp(storage, domains, async_storage=async_storage)
     return proxy_app.get_asgi_app()

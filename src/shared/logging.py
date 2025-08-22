@@ -81,7 +81,7 @@ class RedisLogStorage:
     async def store(self, log_entry: Dict[str, Any]) -> str:
         """Store a log entry in Redis with indexing."""
         # Generate log ID
-        log_id = f"{log_entry['timestamp']}-{log_entry.get('ip', 'unknown')}"
+        log_id = f"{log_entry['timestamp']}-{log_entry.get('client_ip', 'unknown')}"
         
         # Store in main stream
         await self.redis.xadd(
@@ -105,9 +105,9 @@ class RedisLogStorage:
     
     async def _create_indexes(self, log_id: str, entry: Dict[str, Any]):
         """Create indexes for efficient querying."""
-        # Index by IP
-        if ip := entry.get("ip"):
-            index_key = f"{self.index_prefix}ip:{ip}"
+        # Index by client IP
+        if client_ip := entry.get("client_ip"):
+            index_key = f"{self.index_prefix}ip:{client_ip}"
             await self.redis.zadd(index_key, {log_id: entry["timestamp"]})
             await self.redis.expire(index_key, self.ttl_seconds)
         
@@ -117,9 +117,9 @@ class RedisLogStorage:
             await self.redis.zadd(index_key, {log_id: entry["timestamp"]})
             await self.redis.expire(index_key, self.ttl_seconds)
         
-        # Index by hostname
-        if hostname := entry.get("hostname"):
-            index_key = f"{self.index_prefix}host:{hostname}"
+        # Index by proxy hostname
+        if proxy_hostname := entry.get("proxy_hostname"):
+            index_key = f"{self.index_prefix}host:{proxy_hostname}"
             await self.redis.zadd(index_key, {log_id: entry["timestamp"]})
             await self.redis.expire(index_key, self.ttl_seconds)
         
@@ -129,9 +129,9 @@ class RedisLogStorage:
             await self.redis.zadd(index_key, {log_id: entry["timestamp"]})
             await self.redis.expire(index_key, self.ttl_seconds)
     
-    async def query_by_ip(self, ip: str, hours: int = 24) -> List[Dict[str, Any]]:
-        """Query logs by IP address."""
-        return await self._query_by_index(f"ip:{ip}", hours)
+    async def query_by_ip(self, client_ip: str, hours: int = 24) -> List[Dict[str, Any]]:
+        """Query logs by client IP address."""
+        return await self._query_by_index(f"ip:{client_ip}", hours)
     
     async def query_by_client(self, client_id: str, hours: int = 24) -> List[Dict[str, Any]]:
         """Query logs by OAuth client ID."""
@@ -176,9 +176,9 @@ class AsyncRedisLogHandler(logging.Handler):
                 "level": record.levelname,
                 "component": record.name,
                 "message": record.getMessage(),
-                "ip": getattr(record, "ip", None),
+                "client_ip": getattr(record, "client_ip", None),
                 "client_id": getattr(record, "client_id", None),
-                "hostname": getattr(record, "hostname", None),
+                "proxy_hostname": getattr(record, "proxy_hostname", None),
                 "user_id": getattr(record, "user_id", None),
                 "method": getattr(record, "method", None),
                 "path": getattr(record, "path", None),
@@ -274,32 +274,32 @@ class IPLogCapture:
         if event_dict.get("logger", "").startswith("src.shared.request_logger"):
             return event_dict
             
-        # Extract IP from various possible fields
-        ip = None
-        for field in ["ip", "client_ip", "x_real_ip", "x_forwarded_for"]:
+        # Extract client IP from various possible fields
+        client_ip = None
+        for field in ["client_ip", "x_real_ip", "x_forwarded_for"]:
             if field in event_dict:
-                ip = event_dict[field]
+                client_ip = event_dict[field]
                 break
         
         # Also check message for IP patterns
-        if not ip and "event" in event_dict:
+        if not client_ip and "event" in event_dict:
             import re
             ip_pattern = r'\b(?:\d{1,3}\.){3}\d{1,3}\b'
             match = re.search(ip_pattern, str(event_dict.get("event", "")))
             if match:
-                ip = match.group()
+                client_ip = match.group()
         
-        # If we found an IP and have a request logger, queue for logging
-        if ip and self.request_logger:
+        # If we found a client IP and have a request logger, queue for logging
+        if client_ip and self.request_logger:
             # Extract relevant fields for RequestLogger
-            hostname = event_dict.get("hostname", "")
+            proxy_hostname = event_dict.get("proxy_hostname", "")
             method = event_dict.get("method", "SYSTEM")
             path = event_dict.get("path", "/system/log")
             
             # Create log entry
             log_data = {
-                "ip": ip,
-                "hostname": hostname,
+                "client_ip": client_ip,
+                "proxy_hostname": proxy_hostname,
                 "method": method,
                 "path": path,
                 "log_level": event_dict.get("level", "INFO"),
@@ -350,8 +350,8 @@ class IPLogCapture:
             try:
                 # Create a dictionary with all log data
                 request_data = {
-                    "ip": log_data["ip"],
-                    "hostname": log_data["hostname"],
+                    "client_ip": log_data["client_ip"],
+                    "proxy_hostname": log_data["proxy_hostname"],
                     "method": log_data["method"],
                     "path": log_data["path"],
                     "query": "",
@@ -537,18 +537,18 @@ def reconfigure_with_request_logger(request_logger):
 async def log_request(
     logger: BoundLogger,
     request: Any,
-    ip: str,
+    client_ip: str,
     **extra_context
 ) -> Dict[str, Any]:
     """Log HTTP request details with enhanced body logging for OAuth/MCP endpoints."""
     config = get_logger_config()
     
     log_data = {
-        "ip": ip,
+        "client_ip": client_ip,
         "method": request.method,
         "path": str(request.url.path),
         "query": str(request.url.query) if request.url.query else None,
-        "hostname": request.headers.get("host"),
+        "proxy_hostname": request.headers.get("host"),  # Domain being accessed
         "user_agent": request.headers.get("user-agent"),
         "referer": request.headers.get("referer"),
         **extra_context
@@ -625,8 +625,8 @@ async def log_request(
         try:
             # Create a dictionary with all request data
             request_data = {
-                "ip": ip,
-                "hostname": log_data.get("hostname", ""),
+                "client_ip": client_ip,
+                "proxy_hostname": log_data.get("proxy_hostname", ""),  # Domain being accessed
                 "method": log_data.get("method", ""),
                 "path": log_data.get("path", ""),
                 "query": log_data.get("query", ""),

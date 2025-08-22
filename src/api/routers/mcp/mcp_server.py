@@ -5,6 +5,7 @@ certificates, and system operations, all integrated with the existing
 async logging and Redis Streams architecture.
 """
 
+import asyncio
 import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
@@ -32,6 +33,42 @@ from .tools import (
 
 
 class IntegratedMCPServer:
+    
+    def _log_info_async(self, message: str, **kwargs):
+        """Fire-and-forget async info logging without creating orphaned tasks."""
+        if self.logger:
+            try:
+                # Create task with proper error handling
+                task = asyncio.create_task(self.logger.info(message, **kwargs))
+                # Add callback to handle exceptions
+                task.add_done_callback(lambda t: t.exception() if t.done() else None)
+            except RuntimeError:
+                # No event loop running, skip logging
+                pass
+    
+    def _log_error_async(self, message: str, **kwargs):
+        """Fire-and-forget async error logging without creating orphaned tasks."""
+        if self.logger:
+            try:
+                # Create task with proper error handling
+                task = asyncio.create_task(self.logger.error(message, **kwargs))
+                # Add callback to handle exceptions
+                task.add_done_callback(lambda t: t.exception() if t.done() else None)
+            except RuntimeError:
+                # No event loop running, skip logging
+                pass
+    
+    def _log_warning_async(self, message: str, **kwargs):
+        """Fire-and-forget async warning logging without creating orphaned tasks."""
+        if self.logger:
+            try:
+                # Create task with proper error handling
+                task = asyncio.create_task(self.logger.warning(message, **kwargs))
+                # Add callback to handle exceptions
+                task.add_done_callback(lambda t: t.exception() if t.done() else None)
+            except RuntimeError:
+                # No event loop running, skip logging
+                pass
     """MCP server with full integration into the OAuth HTTPS Proxy system."""
 
     def __init__(
@@ -82,46 +119,42 @@ class IntegratedMCPServer:
         self._register_modular_tools()  # Register modular tool categories
         
         # Log how many tools were registered
-        import logging
-        logger = logging.getLogger(__name__)
         # Check the tool manager directly since list_tools() is async
         tool_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
-        logger.info(f"[MCP SERVER] Registered {tool_count} tools")
+        # Fire-and-forget info log
+        import asyncio
+        self._log_info_async(f"[MCP SERVER] Registered {tool_count} tools")
 
     def _register_modular_tools(self):
         """Register all modular tool categories."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("[MCP SERVER] Registering modular tools")
+        import asyncio
+        self._log_info_async("[MCP SERVER] Registering modular tools")
         
         # Log initial tool count
         initial_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
-        logger.info(f"[MCP SERVER] Initial tool count before modular registration: {initial_count}")
+        self._log_info_async(f"[MCP SERVER] Initial tool count before modular registration: {initial_count}")
         
         # Initialize and register each tool category
         # PERFORMANCE FIX: FastMCP generates 54KB response for 55 tools which takes >5s to process
         # Claude.ai has 5s timeout. Limiting to essential tools keeps response under 15KB for fast processing
         tool_categories = [
-            # CRITICAL: SSE transmits at ~10KB/s through the HTTP stack
-            # Claude.ai timeout is 5s, and 29KB response takes 2.8s (too close)
-            # We have 10 base tools in mcp_server.py - that's enough
-            # Disabling ALL tool classes to keep response under 10KB
-            # (ProxyTools, "Proxy Management"),  # 9 tools - would add too much
-            # (LogTools, "Log Management"),  # 5 tools - would add too much
-            # (ServiceTools, "Service Management"),  # 7 tools
-            # (TokenTools, "Token Management"),  # 7 tools
-            # (CertificateTools, "Certificate Management"),  # 5 tools
-            # (RouteTools, "Route Management"),  # 5 tools
+            # Re-enabling all tools - proxy speed is now fixed
+            (ProxyTools, "Proxy Management"),  # 9 tools
+            (LogTools, "Log Management"),  # 5 tools  
+            (ServiceTools, "Service Management"),  # 7 tools
+            (TokenTools, "Token Management"),  # 7 tools
+            (CertificateTools, "Certificate Management"),  # 5 tools
+            (RouteTools, "Route Management"),  # 5 tools
             # (OAuthTools, "OAuth Management"),  # 5 tools
             # (WorkflowTools, "Workflow Automation"),  # 5 tools
             # (SystemTools, "System Configuration")  # 5 tools
         ]
-        # Total: 10 base tools only, response size ~10KB, transmits in <1s
+        # With optimized proxy, we can handle more tools
         
         for ToolClass, category_name in tool_categories:
             try:
                 before_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
-                logger.info(f"[MCP SERVER] Registering {category_name} tools (current count: {before_count})")
+                self._log_info_async(f"[MCP SERVER] Registering {category_name} tools (current count: {before_count})")
                 
                 tool_instance = ToolClass(
                     mcp_server=self,
@@ -134,20 +167,18 @@ class IntegratedMCPServer:
                 
                 after_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
                 tools_added = after_count - before_count
-                logger.info(f"[MCP SERVER] {category_name} tools registered successfully - added {tools_added} tools (total: {after_count})")
+                self._log_info_async(f"[MCP SERVER] {category_name} tools registered successfully - added {tools_added} tools (total: {after_count})")
             except Exception as e:
-                logger.error(f"[MCP SERVER] Failed to register {category_name} tools: {e}")
+                self._log_error_async(f"[MCP SERVER] Failed to register {category_name} tools: {e}")
                 import traceback
-                logger.error(f"[MCP SERVER] Traceback: {traceback.format_exc()}")
+                self._log_error_async(f"[MCP SERVER] Traceback: {traceback.format_exc()}")
     
     def _register_core_tools(self):
         """Register core built-in MCP tools."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("[MCP SERVER] Starting core tool registration")
+        self._log_info_async("[MCP SERVER] Starting core tool registration")
 
         # ========== System Tools ==========
-        logger.info("[MCP SERVER] Registering echo tool")
+        self._log_info_async("[MCP SERVER] Registering echo tool")
 
         @self.mcp.tool(
             annotations={
@@ -201,9 +232,9 @@ class IntegratedMCPServer:
                 return result
         
         tool_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
-        logger.info(f"[MCP SERVER] After echo registration: {tool_count} tools")
+        self._log_info_async(f"[MCP SERVER] After echo registration: {tool_count} tools")
 
-        logger.info("[MCP SERVER] Registering health_check tool")
+        self._log_info_async("[MCP SERVER] Registering health_check tool")
         
         @self.mcp.tool(
             annotations={
@@ -789,7 +820,14 @@ class IntegratedMCPServer:
                     result = await self.async_storage.search_logs(**search_params)
                     logs = result.get('logs', [])
                 except Exception as e:
-                    logger.warning(f"Error querying logs: {e}")
+                    # Fire-and-forget warning log
+                    import asyncio
+                    if unified_logger:
+                        try:
+                            task = asyncio.create_task(unified_logger.warning(f"Error querying logs: {e}"))
+                            task.add_done_callback(lambda t: t.exception() if t.done() else None)
+                        except Exception:
+                            pass
                     logs = []
 
                 # Match proxy-client API format for search endpoint

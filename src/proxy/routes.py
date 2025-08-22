@@ -125,8 +125,9 @@ class Route(BaseModel):
             result = path.startswith(self.path_pattern)
         
         # Log for debugging
-        import logging
-        logger = logging.getLogger(__name__)
+        # Use unified async logger for better performance
+        from ..shared.logger import get_logger_compat
+        logger = get_logger_compat(__name__)
         if self.path_pattern == "/.well-known/oauth-authorization-server":
             logger.info(f"Route match check: path='{path}' pattern='{self.path_pattern}' result={result}")
         
@@ -262,8 +263,59 @@ OAUTH_ROUTES = [
 ]
 
 
+# Cache for routes with TTL
+_route_cache = {}
+_route_cache_time = {}
+ROUTE_CACHE_TTL = 300  # 5 minutes
+
+async def get_applicable_routes_async(async_storage, proxy_config: 'ProxyTarget') -> List[Route]:
+    """Get routes applicable to a specific proxy with caching (async version)."""
+    import time
+    
+    # Check cache first
+    cache_key = f"routes:{proxy_config.hostname if proxy_config else 'global'}"
+    now = time.time()
+    
+    if cache_key in _route_cache and cache_key in _route_cache_time:
+        if now - _route_cache_time[cache_key] < ROUTE_CACHE_TTL:
+            return _route_cache[cache_key]
+    
+    # Load all routes from storage
+    all_routes = []
+    async for key in async_storage.redis_client.scan_iter(match="route:*", count=100):
+        # Skip priority and unique index keys
+        if key.startswith("route:priority:") or key.startswith("route:unique:"):
+            continue
+        route_data = await async_storage.redis_client.get(key)
+        if route_data:
+            try:
+                route = Route.from_redis(route_data)
+                if route.enabled:
+                    all_routes.append(route)
+            except Exception as e:
+                # Handle old routes without scope field
+                try:
+                    route_dict = json.loads(route_data)
+                    if 'scope' not in route_dict:
+                        route_dict['scope'] = RouteScope.GLOBAL.value
+                        route_dict['proxy_hostnames'] = []
+                    route = Route(**route_dict)
+                    if route.enabled:
+                        all_routes.append(route)
+                except Exception:
+                    pass
+    
+    # Filter routes by scope (same logic as sync version)
+    applicable_routes = _filter_routes_by_scope(all_routes, proxy_config)
+    
+    # Cache the results
+    _route_cache[cache_key] = applicable_routes
+    _route_cache_time[cache_key] = now
+    
+    return applicable_routes
+
 def get_applicable_routes(storage, proxy_config: 'ProxyTarget') -> List[Route]:
-    """Get routes applicable to a specific proxy based on its configuration and scope."""
+    """Get routes applicable to a specific proxy based on its configuration and scope (sync version)."""
     # Load all routes from storage
     all_routes = []
     for key in storage.redis_client.scan_iter(match="route:*"):
@@ -290,6 +342,11 @@ def get_applicable_routes(storage, proxy_config: 'ProxyTarget') -> List[Route]:
                     pass
     
     # Filter routes by scope
+    return _filter_routes_by_scope(all_routes, proxy_config)
+
+def _filter_routes_by_scope(all_routes: List[Route], proxy_config: 'ProxyTarget') -> List[Route]:
+    """Helper to filter routes by scope."""
+    
     applicable_routes = []
     for route in all_routes:
         if route.scope == RouteScope.GLOBAL:
