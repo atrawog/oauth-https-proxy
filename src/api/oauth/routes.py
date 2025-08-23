@@ -326,11 +326,12 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             request_headers={k: v for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']}
         )
         
-        # Log request with OAuth context and store context
-        request_context = await log_request(
-            logger,
-            request,
-            client_ip, proxy_hostname=request.headers.get("host"),
+        # Log request with OAuth context
+        log_request(
+            request.method,
+            str(request.url.path),
+            client_ip, 
+            proxy_hostname=request.headers.get("host"),
             oauth_action="authorize",
             oauth_client_id=client_id,
             oauth_redirect_uri=redirect_uri,
@@ -342,7 +343,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             oauth_resources=resource if resource else [],
             oauth_resource_count=len(resource) if resource else 0
         )
-        request_key = request_context.get("_request_key") if request_context else None
+        # Generate a request key for tracking
+        request_key = f"oauth:request:{client_id}:{state}"
         # Validate client
         client = await auth_manager.get_client(client_id, redis_client)
         if not client:
@@ -355,12 +357,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 requested_scope=scope
             )
             
-            # Log the rejection in RequestLogger
-            await log_response(
-                logger,
-                Response(status_code=400),
+            # Log the rejection
+            log_response(
+                400,
                 0,
-                ip=client_ip, proxy_hostname=request.headers.get("host"),
+                proxy_hostname=request.headers.get("host"),
                 oauth_action="authorize_rejected",
                 oauth_rejection_reason="invalid_client",
                 oauth_client_id=client_id,
@@ -449,11 +450,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 registered_redirect_uris=getattr(client, 'redirect_uris', [])
             )
             
-            await log_response(
-                logger,
-                Response(status_code=400),
-                0,
-                ip=client_ip, proxy_hostname=request.headers.get("host"),
+            log_response(
+            400,
+            0,
+            proxy_hostname=request.headers.get("host"),
                 oauth_action="authorize_rejected",
                 oauth_rejection_reason="invalid_redirect_uri",
                 oauth_client_id=client_id,
@@ -479,11 +479,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 supported_response_types=getattr(client, 'response_types', ['code'])
             )
             
-            await log_response(
-                logger,
-                Response(status_code=400),
-                0,
-                ip=client_ip, proxy_hostname=request.headers.get("host"),
+            log_response(
+            400,
+            0,
+            proxy_hostname=request.headers.get("host"),
                 oauth_action="authorize_rejected",
                 oauth_rejection_reason="unsupported_response_type",
                 oauth_client_id=client_id,
@@ -505,11 +504,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 supported_pkce_methods=["S256"]
             )
             
-            await log_response(
-                logger,
-                Response(status_code=400),
-                0,
-                ip=client_ip, proxy_hostname=request.headers.get("host"),
+            log_response(
+            400,
+            0,
+            proxy_hostname=request.headers.get("host"),
                 oauth_action="authorize_rejected",
                 oauth_rejection_reason="invalid_pkce_method",
                 oauth_client_id=client_id,
@@ -538,11 +536,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                         all_requested_resources=resource
                     )
                     
-                    await log_response(
-                        logger,
-                        None,
-                        0,
-                        ip=client_ip, proxy_hostname=request.headers.get("host"),
+                    log_response(
+            500,
+            0,
+            proxy_hostname=request.headers.get("host"),
                         oauth_action="authorize_rejected",
                         oauth_rejection_reason="invalid_resource_uri",
                         oauth_client_id=client_id,
@@ -617,11 +614,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         
         # Log response with redirect info
-        await log_response(
-            logger,
-            response,
-            0,  # duration will be calculated by log_response
-            ip=client_ip, proxy_hostname=request.headers.get("host"),
+        log_response(
+            302,
+            0,
+            # duration will be calculated by log_response
+            proxy_hostname=request.headers.get("host"),
             oauth_action="authorize_redirect",
             oauth_redirect_to=github_url,
             oauth_authorization_granted="pending_github_auth"
@@ -716,10 +713,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         
         # Update request log with GitHub user info
-        await log_response(
-            logger,
-            Response(status_code=200),
-            0, proxy_hostname=request.headers.get("host"),
+        log_response(
+            200,
+            0,
+            proxy_hostname=request.headers.get("host"),
             oauth_github_user_id=user_info.get("id"),
             oauth_github_username=user_info.get("login"),
             oauth_github_email=user_info.get("email")
@@ -856,11 +853,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         
         # Log response with detailed OAuth context
-        await log_response(
-            logger,
-            response,
-            0,  # duration will be calculated by log_response
-            ip=client_ip, proxy_hostname=request.headers.get("host"),
+        log_response(
+            302,
+            0,
+            # duration will be calculated by log_response
+            proxy_hostname=request.headers.get("host"),
             oauth_action="callback_redirect",
             oauth_redirect_to=final_redirect_url,
             oauth_authorization_granted="success",
@@ -1140,10 +1137,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
             
             # Log response with full token details
-            await log_response(
-                logger,
-                Response(status_code=200),
-                0, proxy_hostname=request.headers.get("host"),
+            log_response(
+            200,
+            0,
+            proxy_hostname=request.headers.get("host"),
                 oauth_token_issued="true",
                 oauth_token_jti=token_claims.get("jti"),
                 oauth_user_id=code_data["user_id"],
@@ -1547,10 +1544,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         
         # Log response with full introspection result
-        await log_response(
-            logger,
-            Response(status_code=200),
-            0, proxy_hostname=request.headers.get("host"),
+        log_response(
+            200,
+            0,
+            proxy_hostname=request.headers.get("host"),
             oauth_introspection_result=introspection_result,
             oauth_token_active=introspection_result.get("active", False),
             oauth_token_sub=introspection_result.get("sub") if introspection_result.get("active") else None,

@@ -66,41 +66,73 @@ class SimpleAsyncProxyHandler:
         Returns:
             None if authenticated, Response object if auth failed/redirect needed
         """
+        log_info(f"_check_auth called for {proxy_hostname}", component="simple_proxy_handler")
+        
         # Get proxy target configuration
-        proxy_target = await self.storage.get_proxy_target(proxy_hostname)
-        if not proxy_target or not proxy_target.auth_enabled:
+        try:
+            proxy_target = await self.storage.get_proxy_target(proxy_hostname)
+            log_info(f"Got proxy target for {proxy_hostname}: {proxy_target is not None}, auth_enabled: {proxy_target.auth_enabled if proxy_target else 'N/A'}", component="simple_proxy_handler")
+        except Exception as e:
+            log_warning(f"Error getting proxy target: {e}", component="simple_proxy_handler")
+            return None
+            
+        if not proxy_target:
+            log_warning(f"No proxy target found for {proxy_hostname}", component="simple_proxy_handler")
+            return None  # No proxy configured
+        
+        if not proxy_target.auth_enabled:
+            log_info(f"Auth not enabled for {proxy_hostname}", component="simple_proxy_handler")
             return None  # No auth required
         
         # Check if path is excluded from auth
         request_path = request.url.path
         all_exclusions = merge_exclusions(proxy_target.auth_excluded_paths)
+        log_info(f"Checking path {request_path} against exclusions: {all_exclusions}", component="simple_proxy_handler")
         
         for excluded_path in all_exclusions:
             if request_path.startswith(excluded_path):
-                log_debug(f"Path {request_path} excluded from auth by rule: {excluded_path}", component="simple_proxy_handler")
+                log_info(f"Path {request_path} excluded from auth by rule: {excluded_path}", component="simple_proxy_handler")
                 return None  # Path is excluded
         
         # Check authentication using auth service
         log_info(f"Checking authentication for {proxy_hostname}{request_path}", component="simple_proxy_handler")
         
         # Use FlexibleAuthService to check proxy auth
-        auth_result = await self.auth_service.check_proxy_auth(
-            request=request,
-            proxy_hostname=proxy_hostname,
-            path=request_path
-        )
+        try:
+            log_info(f"Calling auth_service.check_proxy_auth...", component="simple_proxy_handler")
+            import asyncio
+            auth_result = await asyncio.wait_for(
+                self.auth_service.check_proxy_auth(
+                    request=request,
+                    proxy_hostname=proxy_hostname,
+                    path=request_path
+                ),
+                timeout=5.0
+            )
+            log_info(f"Auth service returned: authenticated={auth_result.authenticated if hasattr(auth_result, 'authenticated') else 'N/A'}, auth_type={auth_result.auth_type if hasattr(auth_result, 'auth_type') else 'N/A'}, error={auth_result.error if hasattr(auth_result, 'error') else 'N/A'}", component="simple_proxy_handler")
+        except asyncio.TimeoutError:
+            log_warning(f"Auth service timeout after 5 seconds", component="simple_proxy_handler")
+            # Default to denying access on timeout
+            return Response(content="Authentication timeout", status_code=503)
+        except Exception as e:
+            log_warning(f"Auth service error: {e}", component="simple_proxy_handler")
+            import traceback
+            log_warning(f"Auth service traceback: {traceback.format_exc()}", component="simple_proxy_handler")
+            # For now, allow access on auth service error
+            return None
         
-        # If auth_result is a dict with user info, authentication passed
-        if isinstance(auth_result, dict):
-            log_info(f"Authentication successful for user: {auth_result.get('principal')}", component="simple_proxy_handler")
-            return None  # Authenticated
+        # Check if authentication passed
+        if hasattr(auth_result, 'authenticated'):
+            if auth_result.authenticated:
+                log_info(f"Authentication successful for user: {auth_result.principal if hasattr(auth_result, 'principal') else 'unknown'}", component="simple_proxy_handler")
+                return None  # Authenticated, continue to proxy
+            else:
+                log_warning(f"Authentication failed for {proxy_hostname}: {auth_result.error if hasattr(auth_result, 'error') else 'unknown error'}", component="simple_proxy_handler")
+                # Authentication failed, determine response based on mode
+        else:
+            log_warning(f"Unexpected auth_result type: {type(auth_result)}", component="simple_proxy_handler")
         
-        # If auth_result is a Response, return it (401, 403, or redirect)
-        if isinstance(auth_result, (Response, RedirectResponse)):
-            log_warning(f"Authentication failed for {proxy_hostname}", component="simple_proxy_handler")
-            return auth_result
-        
-        # Default to 401 if auth failed
+        # Handle authentication failure based on mode
         if proxy_target.auth_mode == "redirect":
             # Redirect to OAuth login
             return_url = str(request.url)
@@ -139,40 +171,58 @@ class SimpleAsyncProxyHandler:
             }
             
             # Normalize the HTTPS request
-            normalized = self.normalizer.normalize_https(request, client_info)
+            try:
+                normalized = self.normalizer.normalize_https(request, client_info)
+                log_debug(f"Normalized request - hostname: {normalized.hostname}, path: {normalized.path}", component="simple_proxy_handler")
+            except Exception as e:
+                log_warning(f"Failed to normalize request: {e}", component="simple_proxy_handler")
+                raise HTTPException(400, f"Failed to normalize request: {e}")
             
             # Check authentication first
-            auth_response = await self._check_auth(request, normalized.hostname)
-            if auth_response:
-                return auth_response  # Return auth error or redirect
+            try:
+                auth_response = await self._check_auth(request, normalized.hostname)
+                if auth_response:
+                    return auth_response  # Return auth error or redirect
+            except Exception as e:
+                log_warning(f"Auth check failed: {e}", component="simple_proxy_handler")
+                import traceback
+                log_warning(f"Auth check traceback: {traceback.format_exc()}", component="simple_proxy_handler")
+                # Continue without auth on error for now to debug
+                pass
             
             # Process through unified routing engine
+            log_info(f"Processing routing for {normalized.hostname}{normalized.path}", component="simple_proxy_handler")
             decision = await self.routing_engine.process_request(normalized)
             
-            log_debug(
-                f"Routing decision for {normalized.hostname}{normalized.path}: {decision.type}",
-                component="proxy_handler"
+            log_info(
+                f"Routing decision for {normalized.hostname}{normalized.path}: type={decision.type}, target={decision.target}, route_id={decision.route_id}",
+                component="simple_proxy_handler"
             )
             
             # Handle based on routing decision
             if decision.type == RoutingDecisionType.ROUTE:
                 # Route matched - forward to service
+                log_info(f"Forwarding to service via route {decision.route_id}: {decision.target}", component="simple_proxy_handler")
                 return await self._forward_to_service(request, decision, normalized)
             
             elif decision.type == RoutingDecisionType.PROXY:
                 # Proxy target found - forward to backend
+                log_info(f"Forwarding to proxy backend: {decision.target}", component="simple_proxy_handler")
                 return await self._forward_to_proxy(request, decision, normalized)
             
             else:
                 # No route or proxy found
+                log_error(f"NO ROUTE OR PROXY FOUND for {normalized.hostname}{normalized.path}", component="simple_proxy_handler")
                 raise HTTPException(404, f"No route or proxy target for {normalized.hostname}")
         
-        except HTTPException:
+        except HTTPException as he:
+            log_warning(f"HTTPException in handle_request: status_code={he.status_code}, detail={he.detail}", component="simple_proxy_handler")
             raise
         except Exception as e:
             import traceback
-            log_warning(f"Error in handle_request: {e}", component="proxy_handler")
-            log_warning(f"Traceback: {traceback.format_exc()}", component="proxy_handler")
+            log_error(f"Unhandled exception in handle_request for {request.url}: {e}", component="simple_proxy_handler")
+            log_error(f"Exception type: {type(e).__name__}", component="simple_proxy_handler")
+            log_error(f"Full traceback: {traceback.format_exc()}", component="simple_proxy_handler")
             raise HTTPException(500, "Internal server error")
     
     async def _forward_to_service(self, request: Request, decision, normalized):

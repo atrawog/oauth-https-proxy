@@ -286,12 +286,15 @@ class UnifiedRoutingEngine:
         cache_key = f"routes:{proxy_hostname}"
         cached_routes = self.route_cache.get(cache_key)
         if cached_routes is not None:
+            log_debug(f"Using cached routes for {proxy_hostname}: {len(cached_routes)} routes", component="routing_engine")
             return cached_routes
         
         # Load all routes from storage
         all_routes = []
         if hasattr(self.storage, 'list_routes'):
             all_routes = await self.storage.list_routes() if asyncio.iscoroutinefunction(self.storage.list_routes) else self.storage.list_routes()
+        
+        log_info(f"Loaded {len(all_routes)} total routes from storage for {proxy_hostname}", component="routing_engine")
         
         # Get proxy configuration for route filtering
         proxy_config = await self.get_proxy_target(proxy_hostname)  # Fixed: use correct variable name
@@ -300,15 +303,20 @@ class UnifiedRoutingEngine:
         applicable = []
         for route in all_routes:
             if not route.enabled:
+                log_trace(f"Route {route.route_id} is disabled, skipping", component="routing_engine")
                 continue
             
             # Check scope
             if route.scope == RouteScope.GLOBAL:
                 # Global routes apply to all proxies
+                log_debug(f"Route {route.route_id} ({route.path_pattern}) is GLOBAL scope, including", component="routing_engine")
                 applicable.append(route)
             elif route.scope == RouteScope.PROXY and proxy_hostname in route.proxy_hostnames:  # Fixed: use correct variable name
                 # Proxy-specific routes only for listed proxies
+                log_debug(f"Route {route.route_id} ({route.path_pattern}) is PROXY scope and includes {proxy_hostname}, including", component="routing_engine")
                 applicable.append(route)
+            else:
+                log_debug(f"Route {route.route_id} ({route.path_pattern}) scope={route.scope}, proxy_hostnames={route.proxy_hostnames}, NOT applicable to {proxy_hostname}", component="routing_engine")
         
         # Apply proxy-specific route filtering if configured
         if proxy_config:
@@ -343,9 +351,15 @@ class UnifiedRoutingEngine:
         Returns:
             First matching route or None
         """
+        log_info(f"Matching {method} {path} against {len(routes)} routes", component="routing_engine")
         for route in routes:
-            if route.matches(path, method):
+            matches = route.matches(path, method)
+            if matches:
+                log_info(f"MATCHED route {route.route_id} ({route.path_pattern}) for {method} {path}", component="routing_engine")
                 return route
+            else:
+                log_debug(f"Route {route.route_id} ({route.path_pattern}) does not match {method} {path}", component="routing_engine")
+        log_warning(f"NO ROUTE MATCHED for {method} {path}", component="routing_engine")
         return None
     
     async def resolve_route_target(self, route: Route) -> Optional[str]:

@@ -212,7 +212,7 @@ class FlexibleAuthService:
                 metadata={"no_storage": True}
             )
         
-        proxy_data = await self.storage.get_proxy_target(hostname)
+        proxy_data = await self.storage.get_proxy_target(proxy_hostname)
         if not proxy_data:
             return AuthResult(
                 authenticated=False,
@@ -242,7 +242,7 @@ class FlexibleAuthService:
         
         # Create ProxyAuthConfig from proxy data
         config = ProxyAuthConfig(
-            proxy_hostname=proxy_hostname,
+            hostname=proxy_hostname,
             auth_type="oauth" if proxy_data.auth_proxy else "bearer",
             oauth_allowed_users=proxy_data.auth_required_users,
             oauth_allowed_emails=proxy_data.auth_required_emails,
@@ -250,7 +250,7 @@ class FlexibleAuthService:
             oauth_scopes=proxy_data.auth_allowed_scopes,
             oauth_audiences=proxy_data.auth_allowed_audiences,
             excluded_paths=proxy_data.auth_excluded_paths or [],
-            auth_mode=proxy_data.auth_mode or "enforce",
+            auth_mode="enforce" if proxy_data.auth_mode == "forward" else (proxy_data.auth_mode or "enforce"),
             redirect_url=f"https://{proxy_data.auth_proxy}/authorize" if proxy_data.auth_proxy else None,
             auth_cookie_name=proxy_data.auth_cookie_name or "unified_auth_token",
             auth_header_prefix=proxy_data.auth_header_prefix or "X-Auth-",
