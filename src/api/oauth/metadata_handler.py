@@ -34,14 +34,14 @@ class OAuthMetadataHandler:
         """
         # Use provided hostname or get from headers
         if not hostname:
-            proxy_hostname = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{self.settings.base_domain}")
+            hostname = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{self.settings.base_domain}")
             if ":" in hostname:
-                proxy_hostname=proxy_hostname.split(":")[0]
+                hostname = hostname.split(":")[0]
         
         # Get protocol from headers
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
         
-        return f"{proto}://{proxy_hostname}"
+        return f"{proto}://{hostname}"
     
     async def get_authorization_server_metadata(self, request: Request, hostname: Optional[str] = None) -> Dict[str, Any]:
         """Get OAuth authorization server metadata, optionally customized per proxy.
@@ -57,9 +57,9 @@ class OAuthMetadataHandler:
         
         # If no hostname provided, try to extract from headers
         if not hostname:
-            proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+            hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
             if not hostname:
-                proxy_hostname = request.headers.get("host", "").split(":")[0]
+                hostname = request.headers.get("host", "").split(":")[0]
         
         # Default metadata
         api_url = self.get_external_url(request, hostname)
@@ -91,7 +91,7 @@ class OAuthMetadataHandler:
             try:
                 proxy_target = self.storage.get_proxy_target(hostname)
                 if proxy_target and proxy_target.oauth_server_override_defaults:
-                    log_info(f"Using proxy-specific OAuth server config for {proxy_hostname}")
+                    log_info(f"Using proxy-specific OAuth server config for {hostname}")
                     
                     # Override with proxy-specific configuration
                     if proxy_target.oauth_server_issuer:
@@ -128,14 +128,14 @@ class OAuthMetadataHandler:
                     if proxy_target.oauth_server_custom_metadata:
                         metadata.update(proxy_target.oauth_server_custom_metadata)
                     
-                    log_debug(f"OAuth server metadata customized for {proxy_hostname}")
+                    log_debug(f"OAuth server metadata customized for {hostname}")
             except Exception as e:
-                log_error(f"Failed to get proxy-specific OAuth config for {proxy_hostname}: {e}")
+                log_error(f"Failed to get proxy-specific OAuth config for {hostname}: {e}")
                 # Fall back to defaults on error
         
         log_info(
             "OAuth authorization server metadata requested",
-            ip=client_ip, proxy_hostname=proxy_hostname,
+            ip=client_ip, proxy_hostname=hostname,
             issuer=metadata.get("issuer")
         )
         
@@ -162,7 +162,7 @@ class OAuthMetadataHandler:
             raise HTTPException(500, "Storage not available")
         
         # Get proxy target
-        target = self.storage.get_proxy_target(hostname)
+        target = await self.storage.get_proxy_target(proxy_hostname)
         if not target:
             log_error(f"No proxy target configured for {proxy_hostname}")
             raise HTTPException(404, f"No proxy target configured for {proxy_hostname}")
@@ -180,7 +180,7 @@ class OAuthMetadataHandler:
         auth_servers = []
         if target.auth_enabled and target.auth_proxy:
             # Check if this proxy has custom OAuth server configuration
-            auth_proxy_target = self.storage.get_proxy_target(target.auth_proxy)
+            auth_proxy_target = await self.storage.get_proxy_target(target.auth_proxy)
             if auth_proxy_target and auth_proxy_target.oauth_server_issuer:
                 # Use custom issuer
                 auth_servers.append(auth_proxy_target.oauth_server_issuer)

@@ -365,7 +365,7 @@ class UnifiedRoutingEngine:
             # Look up service URL
             service_url = None
             if hasattr(self.storage, 'redis_client'):
-                service_url = self.storage.redis_client.get(f"service:url:{route.target_value}")
+                service_url = await self.storage.redis_client.get(f"service:url:{route.target_value}")
             
             if service_url:
                 return service_url

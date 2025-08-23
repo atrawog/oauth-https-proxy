@@ -258,10 +258,10 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             
             # Get hostname from request - check x-forwarded-host first (set by proxy)
             proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
-            if not hostname:
+            if not proxy_hostname:
                 # Fallback to host header
                 proxy_hostname = request.headers.get("host", "").split(":")[0]
-            if not hostname:
+            if not proxy_hostname:
                 logger.error(f"MCP metadata request failed - no host header, IP: {client_ip}")
                 raise HTTPException(404, "No host header")
             
@@ -269,13 +269,27 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             
             # Get proxy target
             logger.info(f"Looking up proxy target for hostname: {proxy_hostname}")
-            target = request.app.state.storage.get_proxy_target(hostname)
+            # Check if storage has async method
+            if hasattr(request.app.state.storage, 'get_proxy_target'):
+                import asyncio
+                if asyncio.iscoroutinefunction(request.app.state.storage.get_proxy_target):
+                    target = await request.app.state.storage.get_proxy_target(proxy_hostname)
+                else:
+                    target = request.app.state.storage.get_proxy_target(proxy_hostname)
+            else:
+                target = None
             logger.info(f"Got proxy target: {target}")
             if not target:
                 # Get available proxies for debugging
                 available_proxies = []
                 try:
-                    available_proxies = [p.hostname for p in request.app.state.storage.list_proxy_targets()][:10]
+                    if hasattr(request.app.state.storage, 'list_proxy_targets'):
+                        import asyncio
+                        if asyncio.iscoroutinefunction(request.app.state.storage.list_proxy_targets):
+                            proxy_list = await request.app.state.storage.list_proxy_targets()
+                        else:
+                            proxy_list = request.app.state.storage.list_proxy_targets()
+                        available_proxies = [p.proxy_hostname for p in proxy_list][:10]
                 except Exception:
                     pass
                 
