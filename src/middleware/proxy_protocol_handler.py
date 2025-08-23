@@ -235,7 +235,7 @@ class ProxyProtocolHandler:
             # Set with 60 second TTL - connections shouldn't last longer
             # The redis client should be async (redis.asyncio.Redis)
             await self.redis_client.setex(key, 60, value)
-            log_debug(f"Stored client info in Redis: {key} -> {client_ip}:{client_port}", component="proxy_protocol")
+            log_trace(f"Stored client info in Redis: {key} -> {client_ip}:{client_port}", component="proxy_protocol")
         except Exception as e:
             log_error(f"Failed to store client info in Redis: {e}", component="proxy_protocol", error=e)
             

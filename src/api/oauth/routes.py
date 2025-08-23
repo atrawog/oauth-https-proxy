@@ -899,7 +899,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         client_ip = get_real_client_ip(request)
         
         # DEBUG: Add print to verify execution
-        print(f"[DEBUG] Token exchange request from {client_ip}: grant_type={grant_type}, client_id={client_id}, resource={resource}")
+        log_debug(f"Token exchange request from {client_ip}: grant_type={grant_type}, client_id={client_id}, resource={resource}", component="oauth")
         
         log_info(
             "OAuth token exchange request",

@@ -631,12 +631,12 @@ class UnifiedDispatcher:
     
     async def handle_http_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTP connection and forward to appropriate instance."""
-        print(f"[DEBUG] handle_http_connection called", flush=True)
+        log_trace("handle_http_connection called", component="api_server")
         client_addr = writer.get_extra_info('peername')
         client_ip = client_addr[0] if client_addr else 'unknown'
         client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
-        print(f"[DEBUG] HTTP connection from {client_ip}:{client_port}", flush=True)
+        log_trace(f"HTTP connection from {client_ip}:{client_port}", component="api_server")
         # No need to store IP mappings - PROXY protocol handles this
         
         log_debug(
@@ -646,18 +646,18 @@ class UnifiedDispatcher:
         
         try:
             # Peek at the data to get hostname
-            print(f"[DEBUG] Reading data from HTTP connection", flush=True)
+            log_trace("Reading data from HTTP connection", component="api_server")
             data = await reader.read(4096)
-            print(f"[DEBUG] Data received: {len(data) if data else 0} bytes", flush=True)
+            log_trace(f"Data received: {len(data) if data else 0} bytes", component="api_server")
             if not data:
-                print(f"[DEBUG] No data received, returning", flush=True)
+                log_trace("No data received, returning", component="api_server")
                 return
             
             # Extract hostname from HTTP Host header FIRST
             hostname = self.get_hostname_from_http_request(data)
-            print(f"[DEBUG] Extracted hostname: {hostname}", flush=True)
+            log_trace(f"Extracted hostname: {hostname}", component="api_server")
             if not hostname:
-                print(f"[DEBUG] No hostname found in request", flush=True)
+                log_trace("No hostname found in request", component="api_server")
                 log_warning(
                     "No hostname found in HTTP request",
                     ip=client_ip
@@ -666,7 +666,7 @@ class UnifiedDispatcher:
                 await writer.wait_closed()
                 return
             
-            log_debug(
+            log_trace(
                 "HTTP hostname extracted",
                 ip=client_ip,
                 hostname=hostname
@@ -793,7 +793,7 @@ class UnifiedDispatcher:
             if self.unified_logger and 'trace_id' in locals():
                 # Inject the trace_id into the HTTP request
                 data = self._inject_http_header(data, 'X-Trace-Id', trace_id)
-                log_debug(f"Injected X-Trace-Id header: {trace_id}", component="dispatcher")
+                log_trace(f"Injected X-Trace-Id header: {trace_id}", component="dispatcher")
             
             # Determine if this is a named instance or proxy target
             service_name = None
@@ -811,12 +811,12 @@ class UnifiedDispatcher:
             )
             
         except Exception as e:
-            print(f"[DEBUG] Error handling HTTP connection: {e}", flush=True)
+            log_error(f"Error handling HTTP connection: {e}", component="api_server", error=e)
             log_error(f"Error handling HTTP connection: {e}", component="dispatcher")
             import traceback
             traceback.print_exc()
         finally:
-            print(f"[DEBUG] Closing HTTP connection", flush=True)
+            log_trace("Closing HTTP connection", component="api_server")
             writer.close()
             await writer.wait_closed()
     
@@ -1015,7 +1015,7 @@ class UnifiedDispatcher:
                         else:
                             await self.storage.set(key, json.dumps(value), ex=60)
                         
-                        log_debug(f"Stored trace metadata in Redis: {key} -> trace_id={trace_id}", component="dispatcher")
+                        log_trace(f"Stored trace metadata in Redis: {key} -> trace_id={trace_id}", component="dispatcher")
                     except Exception as e:
                         log_error(f"Failed to store trace metadata in Redis: {e}", component="dispatcher")
                 
@@ -1065,17 +1065,17 @@ class UnifiedDispatcher:
     
     async def start(self):
         """Start both HTTP and HTTPS dispatchers without blocking."""
-        print("[DEBUG] UnifiedDispatcher.start() called", flush=True)
+        log_trace("UnifiedDispatcher.start() called", component="dispatcher")
         log_info("UnifiedDispatcher.start() called - starting HTTP and HTTPS servers", component="dispatcher")
         
         # Start HTTP dispatcher on port 80
         http_port_str = os.getenv('HTTP_PORT')
-        print(f"[DEBUG] HTTP_PORT environment variable: {http_port_str}", flush=True)
+        log_trace(f"HTTP_PORT environment variable: {http_port_str}", component="dispatcher")
         log_info(f"HTTP_PORT environment variable: {http_port_str}", component="dispatcher")
         if not http_port_str:
             raise ValueError("HTTP_PORT not set in environment - required for server configuration")
         http_port = int(http_port_str)
-        print(f"[DEBUG] Creating HTTP server on {self.host}:{http_port}", flush=True)
+        log_debug(f"Creating HTTP server on {self.host}:{http_port}", component="dispatcher")
         log_info(f"Creating HTTP server on {self.host}:{http_port}", component="dispatcher")
         try:
             self.http_server = await asyncio.start_server(
@@ -1083,10 +1083,10 @@ class UnifiedDispatcher:
                 self.host,
                 http_port
             )
-            print(f"[DEBUG] HTTP Dispatcher listening on {self.host}:{http_port}", flush=True)
+            log_info(f"HTTP Dispatcher listening on {self.host}:{http_port}", component="dispatcher")
             log_info(f"HTTP Dispatcher listening on {self.host}:{http_port}", component="dispatcher")
         except Exception as e:
-            print(f"[DEBUG] Failed to create HTTP server: {e}", flush=True)
+            log_error(f"Failed to create HTTP server: {e}", component="dispatcher", error=e)
             log_error(f"Failed to create HTTP server: {e}", component="dispatcher")
             raise
         
@@ -1096,7 +1096,7 @@ class UnifiedDispatcher:
         if not https_port_str:
             raise ValueError("HTTPS_PORT not set in environment - required for server configuration")
         https_port = int(https_port_str)
-        print(f"[DEBUG] Creating HTTPS server on {self.host}:{https_port}", flush=True)
+        log_debug(f"Creating HTTPS server on {self.host}:{https_port}", component="dispatcher")
         log_info(f"Creating HTTPS server on {self.host}:{https_port}", component="dispatcher")
         try:
             self.https_server = await asyncio.start_server(
@@ -1104,21 +1104,21 @@ class UnifiedDispatcher:
                 self.host,
                 https_port
             )
-            print(f"[DEBUG] HTTPS Dispatcher listening on {self.host}:{https_port}", flush=True)
+            log_info(f"HTTPS Dispatcher listening on {self.host}:{https_port}", component="dispatcher")
             log_info(f"HTTPS Dispatcher listening on {self.host}:{https_port}", component="dispatcher")
         except Exception as e:
-            print(f"[DEBUG] Failed to create HTTPS server: {e}", flush=True)
+            log_error(f"Failed to create HTTPS server: {e}", component="dispatcher", error=e)
             log_error(f"Failed to create HTTPS server: {e}", component="dispatcher")
             raise
         
         # Create tasks for the servers but don't await them
         # This allows the dispatcher to start without blocking
-        print("[DEBUG] Creating server tasks", flush=True)
+        log_trace("Creating server tasks", component="dispatcher")
         self.server_tasks = [
             asyncio.create_task(self.http_server.serve_forever()),
             asyncio.create_task(self.https_server.serve_forever())
         ]
-        print("[DEBUG] Dispatcher servers started in background", flush=True)
+        log_debug("Dispatcher servers started in background", component="dispatcher")
         log_info("Dispatcher servers started in background", component="dispatcher")
     
     async def wait_forever(self):
@@ -1141,7 +1141,7 @@ class UnifiedMultiInstanceServer:
     """Main server that manages domain instances with unified dispatching."""
     
     def __init__(self, https_server_instance, app=None, host='0.0.0.0', async_components=None):
-        print(f"[DEBUG] UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", flush=True)
+        log_trace(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", component="dispatcher")
         log_info(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", component="dispatcher")
         self.https_server = https_server_instance
         self.app = app  # Not used anymore - each instance creates its own proxy app
@@ -1509,17 +1509,17 @@ class UnifiedMultiInstanceServer:
     
     async def run(self):
         """Run the unified multi-instance server architecture - WORKFLOW MODE ONLY."""
-        print("[DEBUG] UnifiedMultiInstanceServer.run() CALLED", flush=True)
+        log_trace("UnifiedMultiInstanceServer.run() CALLED", component="dispatcher")
         try:
-            print("[DEBUG] About to log info messages", flush=True)
+            log_trace("About to log info messages", component="dispatcher")
             log_info("=" * 60, component="dispatcher")
             log_info("UnifiedMultiInstanceServer.run() STARTING", component="dispatcher")
             log_info("=" * 60, component="dispatcher")
             log_info("UnifiedMultiInstanceServer.run() started in WORKFLOW MODE", component="dispatcher")
             log_info("NO INSTANCES WILL BE CREATED AT STARTUP - ALL DYNAMIC VIA WORKFLOW", component="dispatcher")
-            print("[DEBUG] Log messages completed", flush=True)
+            log_trace("Log messages completed", component="dispatcher")
         except Exception as e:
-            print(f"[DEBUG] ERROR logging: {e}", flush=True)
+            log_error(f"ERROR logging: {e}", component="dispatcher", error=e)
             import traceback
             traceback.print_exc()
         
@@ -1554,10 +1554,10 @@ class UnifiedMultiInstanceServer:
         # The workflow orchestrator will handle ALL instance creation dynamically
         
         # Start the dispatcher (non-blocking now!)
-        print("[DEBUG] About to call dispatcher.start()", flush=True)
+        log_trace("About to call dispatcher.start()", component="dispatcher")
         log_info("About to call dispatcher.start()", component="dispatcher")
         await self.dispatcher.start()
-        print("[DEBUG] dispatcher.start() completed", flush=True)
+        log_trace("dispatcher.start() completed", component="dispatcher")
         log_info("dispatcher.start() completed", component="dispatcher")
         
         # The dispatcher is now running in background

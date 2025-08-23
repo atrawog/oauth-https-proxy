@@ -358,9 +358,9 @@ class AlertManager(UnifiedStreamConsumer):
             msg_id: Message ID
             data: Parsed message data
         """
-        # Log unknown message types for debugging
+        # Log unknown message types at TRACE level (very verbose debugging)
         event_type = data.get("event_type") or data.get("type") or "unknown"
-        log_debug(f"No handler for event type: {event_type}", component="alert_manager")
+        log_trace(f"No handler for event type: {event_type}", component="alert_manager")
     
     async def get_alert_summary(self) -> dict:
         """Get summary of alerts.

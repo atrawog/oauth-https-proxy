@@ -567,7 +567,7 @@ class AsyncRedisStorage:
                     log_trace(f"Added proxy target: {hostname}", component="redis_storage")
                 else:
                     log_error(f"Could not get proxy target for {hostname} - get_proxy_target returned None", component="redis_storage")
-            log_debug(f"list_proxy_targets: scanned {key_count} keys, found {len(targets)} proxy targets", component="redis_storage")
+            log_trace(f"list_proxy_targets: scanned {key_count} keys, found {len(targets)} proxy targets", component="redis_storage")
             return targets
         except RedisError as e:
             log_error(f"Failed to list proxy targets: {e}", component="redis_storage", error=e)
