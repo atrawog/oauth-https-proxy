@@ -149,6 +149,14 @@ def register_all_routers(app: FastAPI) -> None:
         "Flexible authentication endpoints"
     ))
     
+    # Debug router for checking app state
+    routers_config.append((
+        "debug",
+        lambda: _create_debug_router(),
+        "/debug",
+        "Debug endpoints for checking app state"
+    ))
+    
     # ========== REGISTER ALL ROUTERS ==========
     
     successful_routers = []
@@ -291,6 +299,12 @@ def _create_auth_endpoints_router(async_storage) -> APIRouter:
     """Create auth endpoints router."""
     from .auth.auth_endpoints import create_auth_endpoints_router
     return create_auth_endpoints_router(async_storage)
+
+
+def _create_debug_router() -> APIRouter:
+    """Create debug router for checking app state."""
+    from .debug import create_debug_router
+    return create_debug_router()
 
 
 def _mount_mcp_app(app: FastAPI, async_storage, cert_manager, docker_manager, unified_logger) -> None:

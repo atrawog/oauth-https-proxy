@@ -7,7 +7,6 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_proxy_owner
 from src.proxy.models import ProxyOAuthServerConfig
 
 logger = logging.getLogger(__name__)
@@ -26,20 +25,20 @@ def create_oauth_server_router(async_storage):
     """
     router = APIRouter()
     
-    @router.post("/{hostname}/oauth-server")
+    @router.post("/{proxy_hostname}/oauth-server")
     async def configure_oauth_server(
         req: Request,
-        hostname: str,
+        proxy_hostname: str,
         config: ProxyOAuthServerConfig,
-        _=Depends(require_proxy_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Configure OAuth authorization server metadata for a proxy - owner only."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Update OAuth server configuration fields
         target.oauth_server_issuer = config.issuer
@@ -53,19 +52,19 @@ def create_oauth_server_router(async_storage):
         target.oauth_server_override_defaults = config.override_defaults
         
         # Store updated target
-        success = await async_storage.store_proxy_target(hostname, target)
+        success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
         # Track configured OAuth servers
         await async_storage.redis_client.sadd("oauth_server:configured", hostname)
         
-        logger.info(f"OAuth server configuration updated for {hostname}")
+        logger.info(f"OAuth server configuration updated for {proxy_hostname}")
         
         return {
             "status": "success",
-            "message": f"OAuth server configuration updated for {hostname}",
-            "hostname": hostname,
+            "message": f"OAuth server configuration updated for {proxy_hostname}",
+            "proxy_hostname": proxy_hostname,
             "oauth_server_config": {
                 "issuer": target.oauth_server_issuer,
                 "scopes": target.oauth_server_scopes,
@@ -78,30 +77,30 @@ def create_oauth_server_router(async_storage):
             }
         }
     
-    @router.get("/{hostname}/oauth-server")
+    @router.get("/{proxy_hostname}/oauth-server")
     async def get_oauth_server_config(
         req: Request,
-        hostname: str
+        proxy_hostname: str
     ):
         """Get OAuth authorization server configuration for a proxy."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Check if OAuth server is configured
         if not target.oauth_server_override_defaults:
             return {
                 "status": "not_configured",
-                "message": f"No custom OAuth server configuration for {hostname}",
-                "hostname": hostname
+                "message": f"No custom OAuth server configuration for {proxy_hostname}",
+                "proxy_hostname": proxy_hostname
             }
         
         return {
             "status": "configured",
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "oauth_server_config": {
                 "issuer": target.oauth_server_issuer,
                 "scopes": target.oauth_server_scopes,
@@ -115,19 +114,19 @@ def create_oauth_server_router(async_storage):
             }
         }
     
-    @router.delete("/{hostname}/oauth-server")
+    @router.delete("/{proxy_hostname}/oauth-server")
     async def clear_oauth_server_config(
         req: Request,
-        hostname: str,
-        _=Depends(require_proxy_owner)
+        proxy_hostname: str,
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Clear OAuth authorization server configuration for a proxy - owner only."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Clear OAuth server configuration fields
         target.oauth_server_issuer = None
@@ -141,19 +140,19 @@ def create_oauth_server_router(async_storage):
         target.oauth_server_override_defaults = False
         
         # Store updated target
-        success = await async_storage.store_proxy_target(hostname, target)
+        success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
         # Remove from configured set
         await async_storage.redis_client.srem("oauth_server:configured", hostname)
         
-        logger.info(f"OAuth server configuration cleared for {hostname}")
+        logger.info(f"OAuth server configuration cleared for {proxy_hostname}")
         
         return {
             "status": "success",
-            "message": f"OAuth server configuration cleared for {hostname}",
-            "hostname": hostname
+            "message": f"OAuth server configuration cleared for {proxy_hostname}",
+            "proxy_hostname": proxy_hostname
         }
     
     @router.get("/oauth-servers/configured")
@@ -162,16 +161,16 @@ def create_oauth_server_router(async_storage):
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        # Get all configured hostnames
+        # Get all configured proxy_hostnames
         configured = await async_storage.redis_client.smembers("oauth_server:configured")
         
         proxies_with_config = []
         for hostname_bytes in configured:
-            hostname = hostname_bytes.decode('utf-8') if isinstance(hostname_bytes, bytes) else hostname_bytes
-            target = await async_storage.get_proxy_target(hostname)
+            proxy_hostname = hostname_bytes.decode('utf-8') if isinstance(hostname_bytes, bytes) else hostname_bytes
+            target = await async_storage.get_proxy_target(proxy_hostname)
             if target and target.oauth_server_override_defaults:
                 proxies_with_config.append({
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "issuer": target.oauth_server_issuer,
                     "scopes": target.oauth_server_scopes,
                     "override_defaults": target.oauth_server_override_defaults

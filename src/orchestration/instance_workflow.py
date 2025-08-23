@@ -17,7 +17,9 @@ Workflow:
 
 import asyncio
 import json
+import logging
 import os
+import sys
 from typing import Dict, Optional, Any
 from datetime import datetime, timezone
 
@@ -25,6 +27,10 @@ from ..storage.redis_stream_publisher import RedisStreamPublisher
 from ..storage.instance_state import InstanceStateTracker, InstanceState
 from ..dispatcher.redis_stream_consumer import RedisStreamConsumer
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
+
+# Set up Python standard logger for debugging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class InstanceWorkflowOrchestrator:
@@ -59,11 +65,11 @@ class InstanceWorkflowOrchestrator:
         self.next_http_port = 10000
         self.next_https_port = 11000
     
-    async def _get_proxy_target(self, hostname: str):
+    async def _get_proxy_target(self, proxy_hostname: str):
         """Get proxy target using async storage if available."""
         if self.async_storage:
-            return await self.async_storage.get_proxy_target(hostname)
-        return self.storage.get_proxy_target(hostname)
+            return await self.async_storage.get_proxy_target(proxy_hostname)
+        return self.storage.get_proxy_target(proxy_hostname)
     
     async def _get_certificate(self, cert_name: str):
         """Get certificate using async storage if available."""
@@ -71,11 +77,11 @@ class InstanceWorkflowOrchestrator:
             return await self.async_storage.get_certificate(cert_name)
         return self.storage.get_certificate(cert_name)
     
-    async def _store_proxy_target(self, hostname: str, proxy):
+    async def _store_proxy_target(self, proxy_hostname: str, proxy):
         """Store proxy target using async storage if available."""
         if self.async_storage:
-            return await self.async_storage.store_proxy_target(hostname, proxy)
-        return self.storage.store_proxy_target(hostname, proxy)
+            return await self.async_storage.store_proxy_target(proxy_hostname, proxy)
+        return self.storage.store_proxy_target(proxy_hostname, proxy)
     
     async def _store_certificate(self, cert_name: str, cert):
         """Store certificate using async storage if available."""
@@ -85,38 +91,70 @@ class InstanceWorkflowOrchestrator:
     
     async def start(self):
         """Start the workflow orchestrator."""
-        # Force immediate flush to ensure logs appear
-        import sys
+        logger.info("[WORKFLOW] Starting workflow orchestrator initialization")
         log_info("[WORKFLOW] Starting workflow orchestrator initialization", component="workflow")
-        sys.stderr.flush()
-        sys.stdout.flush()
+        
+        # Log dispatcher status
+        logger.info(f"[WORKFLOW] Dispatcher status at start: self.dispatcher={self.dispatcher}, type={type(self.dispatcher) if self.dispatcher else 'None'}")
+        if self.dispatcher:
+            log_info(f"[WORKFLOW] Dispatcher is set: {type(self.dispatcher).__name__}", component="workflow")
+        else:
+            log_warning("[WORKFLOW] WARNING: Dispatcher is NOT set at start time!", component="workflow")
         
         await self.consumer.initialize()
+        logger.info("[WORKFLOW] Consumer initialized")
         log_info("[WORKFLOW] Consumer initialized", component="workflow")
+        
         # Publisher and state tracker don't need initialization - they connect on first use
         
         # Start consuming workflow events
         self.consumer_task = asyncio.create_task(
             self.consumer.consume_events(self.handle_workflow_event)
         )
+        logger.info(f"[WORKFLOW] Consumer task created: {self.consumer_task}")
         log_info("[WORKFLOW] Consumer task created", component="workflow")
         
         # Start handling pending messages
         self.pending_task = asyncio.create_task(
             self.consumer.claim_pending_messages(idle_time_ms=30000)  # 30 seconds
         )
+        logger.info(f"[WORKFLOW] Pending task created: {self.pending_task}")
         log_info("[WORKFLOW] Pending task created", component="workflow")
         
-        # CRITICAL FIX: Publish events for all existing proxies on startup
+        # Start periodic reconciliation task
+        self.reconciliation_task = asyncio.create_task(
+            self._periodic_reconciliation()
+        )
+        logger.info(f"[WORKFLOW] Reconciliation task created: {self.reconciliation_task}")
+        log_info("[WORKFLOW] Reconciliation task created", component="workflow")
+        
+        # Initial reconciliation on startup
+        logger.info("[WORKFLOW] Starting initial reconciliation...")
         await self._publish_events_for_existing_proxies()
+        logger.info("[WORKFLOW] Initial reconciliation completed")
         
         log_info("[WORKFLOW] Instance workflow orchestrator started with event processing", component="workflow")
-        sys.stderr.flush()
-        sys.stdout.flush()
+    
+    async def _periodic_reconciliation(self):
+        """Periodically reconcile proxy states with instances."""
+        while True:
+            try:
+                # Wait 5 minutes between reconciliations
+                await asyncio.sleep(300)
+                
+                log_debug("[WORKFLOW] Running periodic reconciliation", component="workflow")
+                await self._publish_events_for_existing_proxies()
+                
+            except asyncio.CancelledError:
+                log_info("[WORKFLOW] Reconciliation task cancelled", component="workflow")
+                break
+            except Exception as e:
+                log_error(f"[WORKFLOW] Error in periodic reconciliation: {e}", component="workflow", error=e)
+                await asyncio.sleep(60)  # Wait a minute before retrying
     
     async def _publish_events_for_existing_proxies(self):
-        """Publish proxy_creation_requested events for all existing proxies on startup."""
-        log_info("[WORKFLOW] Publishing events for existing proxies...", component="workflow")
+        """Check and reconcile existing proxies with their instance states."""
+        log_info("[WORKFLOW] Starting reconciliation of existing proxies...", component="workflow")
         
         try:
             # Get all existing proxies
@@ -127,59 +165,122 @@ class InstanceWorkflowOrchestrator:
                 all_proxies = self.storage.list_proxy_targets()
             
             # Skip localhost and other special proxies
-            skip_hostnames = ['localhost', '127.0.0.1']
+            skip_proxy_hostnames = ['localhost', '127.0.0.1']
             
-            count = 0
+            reconciled = 0
+            created = 0
+            upgraded = 0
+            
+            log_info(f"[WORKFLOW] Found {len(all_proxies)} proxies to reconcile", component="workflow")
+            
             for proxy in all_proxies:
-                hostname = proxy.hostname if hasattr(proxy, 'hostname') else proxy.get('hostname')
-                
-                if hostname in skip_hostnames:
-                    log_debug(f"[WORKFLOW] Skipping special hostname: {hostname}", component="workflow")
-                    continue
-                
-                log_info(f"[WORKFLOW] Publishing proxy_creation_requested for existing proxy: {hostname}", component="workflow")
-                
-                # Publish event to trigger instance creation
-                event_data = {
-                    "hostname": hostname,
-                    "target_url": proxy.target_url if hasattr(proxy, 'target_url') else proxy.get('target_url'),
-                    "enable_http": proxy.enable_http if hasattr(proxy, 'enable_http') else proxy.get('enable_http', True),
-                    "enable_https": proxy.enable_https if hasattr(proxy, 'enable_https') else proxy.get('enable_https', True),
-                    "cert_name": proxy.cert_name if hasattr(proxy, 'cert_name') else proxy.get('cert_name'),
-                    "owner_token_hash": proxy.owner_token_hash if hasattr(proxy, 'owner_token_hash') else proxy.get('owner_token_hash'),
-                    "created_by": proxy.created_by if hasattr(proxy, 'created_by') else proxy.get('created_by')
-                }
-                
-                await self.publisher.publish_event("proxy_creation_requested", event_data)
-                count += 1
-                
-                # Small delay to avoid overwhelming the system
-                await asyncio.sleep(0.1)
+                try:
+                    proxy_hostname = proxy.get('proxy_hostname') if hasattr(proxy, 'get') else proxy.proxy_hostname
+                    log_info(f"[WORKFLOW] Checking proxy: {proxy_hostname}", component="workflow")
+                    
+                    if proxy_hostname in skip_proxy_hostnames:
+                        continue
+                    
+                    # Check instance state
+                    try:
+                        instance_state = await self.state_tracker.get_instance_state(proxy_hostname)
+                        log_debug(f"[WORKFLOW] Instance state for {proxy_hostname}: {instance_state}", component="workflow")
+                    except Exception as e:
+                        log_error(f"[WORKFLOW] Failed to get instance state for {proxy_hostname}: {e}", 
+                                 component="workflow", error=str(e))
+                        instance_state = None
+                    
+                    if not instance_state or instance_state.get('state') in [InstanceState.FAILED, InstanceState.PENDING]:
+                        # Instance doesn't exist or failed, create it
+                        state_desc = "not found" if not instance_state else f"in state {instance_state.get('state')}"
+                        log_info(f"[WORKFLOW] Instance for {proxy_hostname} {state_desc}, creating it", component="workflow")
+                        
+                        event_data = {
+                            "proxy_hostname": proxy_hostname,
+                            "target_url": proxy.target_url if hasattr(proxy, 'target_url') else proxy.get('target_url'),
+                            "enable_http": proxy.enable_http if hasattr(proxy, 'enable_http') else proxy.get('enable_http', True),
+                            "enable_https": proxy.enable_https if hasattr(proxy, 'enable_https') else proxy.get('enable_https', True),
+                            "cert_name": proxy.cert_name if hasattr(proxy, 'cert_name') else proxy.get('cert_name'),
+                            "owner_token_hash": proxy.owner_token_hash if hasattr(proxy, 'owner_token_hash') else proxy.get('owner_token_hash'),
+                            "created_by": proxy.created_by if hasattr(proxy, 'created_by') else proxy.get('created_by')
+                        }
+                        
+                        try:
+                            event_id = await self.publisher.publish_event("proxy_creation_requested", event_data)
+                            if event_id:
+                                log_info(f"[WORKFLOW] Published proxy_creation_requested for {proxy_hostname}, event_id: {event_id}", 
+                                        component="workflow")
+                                created += 1
+                            else:
+                                log_error(f"[WORKFLOW] Failed to publish proxy_creation_requested for {proxy_hostname} - no event ID returned", 
+                                         component="workflow")
+                        except Exception as e:
+                            log_error(f"[WORKFLOW] Exception publishing proxy_creation_requested for {proxy_hostname}: {e}", 
+                                     component="workflow", error=str(e))
+                        
+                        await asyncio.sleep(0.1)  # Avoid overwhelming
+                    
+                    elif instance_state.get('state') == InstanceState.HTTP_ONLY:
+                        # Check if HTTPS upgrade is needed
+                        enable_https = proxy.enable_https if hasattr(proxy, 'enable_https') else proxy.get('enable_https', True)
+                        cert_name = proxy.cert_name if hasattr(proxy, 'cert_name') else proxy.get('cert_name')
+                        
+                        if enable_https and cert_name:
+                            # Check if certificate exists
+                            cert = await self._get_certificate(cert_name)
+                            if cert:
+                                log_info(f"[WORKFLOW] Upgrading {proxy_hostname} to HTTPS", component="workflow")
+                                await self.publisher.publish_event("certificate_ready", {
+                                    "cert_name": cert_name,
+                                    "proxy_hostname": proxy_hostname,
+                                    "domains": [proxy_hostname],
+                                    "is_renewal": False
+                                })
+                                upgraded += 1
+                    else:
+                        # Instance is running correctly
+                        reconciled += 1
+                    
+                except Exception as e:
+                    log_error(f"[WORKFLOW] Error processing proxy {proxy_hostname}: {e}", component="workflow", error=str(e))
+                    import traceback
+                    log_debug(f"[WORKFLOW] Stack trace: {traceback.format_exc()}", component="workflow")
             
-            log_info(f"[WORKFLOW] Published events for {count} existing proxies", component="workflow")
+            if created > 0 or upgraded > 0:
+                log_info(f"[WORKFLOW] Reconciliation: {created} created, {upgraded} upgraded, {reconciled} OK", component="workflow")
+            else:
+                log_trace(f"[WORKFLOW] All {reconciled} proxies running correctly", component="workflow")
             
         except Exception as e:
-            log_error(f"[WORKFLOW] Error publishing events for existing proxies: {e}", component="workflow")
+            log_error(f"[WORKFLOW] Error publishing events for existing proxies: {e}", component="workflow", error=e)
+            import traceback
+            log_debug(f"[WORKFLOW] Stack trace: {traceback.format_exc()}", component="workflow")
     
     async def handle_workflow_event(self, event: Dict[str, Any]):
         """
-        Handle workflow events and trigger appropriate actions.
+        Handle workflow events with idempotency and comprehensive error logging.
         
         Args:
-            event: Event data from Redis Stream
+            event: Event data from Redis Stream with optional _id field
         """
-        import sys
+        event_id = event.get('_id', 'unknown')
         event_type = event.get('event_type', event.get('type'))
-        hostname = event.get('hostname')
+        # Use proxy_hostname for clarity and consistency
+        proxy_hostname = event.get('proxy_hostname')
         
-        log_info(f"[WORKFLOW] Processing {event_type} for {hostname}", component="workflow")
-        print(f"[WORKFLOW] Processing {event_type} for {hostname}", file=sys.stderr)
-        sys.stderr.flush()
+        logger.info(f"[WORKFLOW] Processing event: type={event_type}, proxy_hostname={proxy_hostname}, id={event_id}")
+        log_info(f"[WORKFLOW] Processing {event_type}", 
+                component="workflow", 
+                event_type=event_type,
+                proxy_hostname=proxy_hostname,
+                event_id=event_id)
         
         try:
             # Critical fix: Actually handle the events!
             if event_type == 'proxy_creation_requested':
+                logger.info(f"[WORKFLOW] Handling proxy_creation_requested for {proxy_hostname}")
                 await self.handle_proxy_creation_requested(event)
+                logger.info(f"[WORKFLOW] Completed handling proxy_creation_requested for {proxy_hostname}")
                 
             elif event_type == 'proxy_stored':
                 await self.handle_proxy_stored(event)
@@ -231,16 +332,29 @@ class InstanceWorkflowOrchestrator:
                 log_debug(f"[WORKFLOW] Unhandled event type: {event_type}", component="workflow")
                 
         except Exception as e:
-            log_error(f"[WORKFLOW] Error handling {event_type} for {hostname}: {e}", component="workflow")
+            log_error(f"[WORKFLOW] Error handling event", 
+                     component="workflow",
+                     event_type=event_type,
+                     proxy_hostname=proxy_hostname,
+                     error=str(e))
+            import traceback
+            log_debug(f"[WORKFLOW] Stack trace: {traceback.format_exc()}", component="workflow")
             
             # Publish failure event
             await self.publisher.publish_instance_failed(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,  # Use the extracted proxy_hostname
                 instance_type="workflow",
                 error=str(e)
             )
     
-    async def handle_proxy_creation_requested(self, event: Dict):
+    async def handle_proxy_creation_requested(self, event: Dict, retry_count: int = 0):
+        """
+        Handle proxy creation request with retry logic and idempotency.
+        
+        Args:
+            event: Event data
+            retry_count: Number of retries attempted
+        """
         """
         Handle proxy creation request.
         
@@ -249,7 +363,8 @@ class InstanceWorkflowOrchestrator:
         2. Determine what needs to be created
         3. Orchestrate creation in correct order
         """
-        hostname = event.get('hostname')
+        # Use proxy_hostname for clarity (support both for transition)
+        proxy_hostname = event.get('proxy_hostname')
         target_url = event.get('target_url')
         enable_http = event.get('enable_http', True)
         enable_https = event.get('enable_https', True)
@@ -258,11 +373,32 @@ class InstanceWorkflowOrchestrator:
         owner_token_hash = event.get('owner_token_hash')
         created_by = event.get('created_by')
         
-        log_info(f"[WORKFLOW] Analyzing resources for proxy creation: {hostname}", component="workflow")
+        # Check if instance already exists (idempotency)
+        logger.info(f"[WORKFLOW] Checking instance state for {proxy_hostname}")
+        instance_state = await self.state_tracker.get_instance_state(proxy_hostname)
+        logger.info(f"[WORKFLOW] Instance state for {proxy_hostname}: {instance_state}")
+        if instance_state and instance_state.get('state') in [InstanceState.FULLY_RUNNING, InstanceState.HTTP_ONLY]:
+            logger.info(f"[WORKFLOW] {proxy_hostname} already exists in state {instance_state.get('state')}, returning early")
+            log_info(f"[WORKFLOW] {proxy_hostname} already exists in state {instance_state.get('state')}, checking if upgrade needed", component="workflow")
+            
+            # Check if HTTPS upgrade is needed
+            details = instance_state.get('details', {})
+            if enable_https and 'https_port' not in details:
+                # Check if certificate is ready
+                if cert_name and await self._get_certificate(cert_name):
+                    log_info(f"[WORKFLOW] {proxy_hostname} to HTTPS", component="workflow")
+                    await self.publisher.publish_event("certificate_ready", {
+                        "cert_name": cert_name,
+                        "domains": [proxy_hostname],
+                        "is_renewal": False
+                    })
+            return
+        
+        log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
         
         # Set initial state
         await self.state_tracker.set_instance_state(
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             state=InstanceState.PENDING,
             details={
                 "target_url": target_url,
@@ -272,9 +408,9 @@ class InstanceWorkflowOrchestrator:
         )
         
         # CRITICAL: Check if proxy already exists in storage
-        existing_proxy = await self._get_proxy_target(hostname)
+        existing_proxy = await self._get_proxy_target(proxy_hostname)
         if existing_proxy:
-            log_info(f"[WORKFLOW] Proxy {hostname} already exists in storage", component="workflow")
+            log_info(f"[WORKFLOW] {proxy_hostname} already exists in storage", component="workflow")
             
             # Check if certificate exists and is ready
             cert_ready = False
@@ -282,16 +418,16 @@ class InstanceWorkflowOrchestrator:
                 cert = await self._get_certificate(existing_proxy.cert_name)
                 if cert and cert.status == 'active':
                     cert_ready = True
-                    log_info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is ready for {hostname}", component="workflow")
+                    log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
                 elif cert and cert.status == 'pending':
-                    log_info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} is still pending for {hostname}", component="workflow")
+                    log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
                 else:
-                    log_info(f"[WORKFLOW] Certificate {existing_proxy.cert_name} not found or failed for {hostname}", component="workflow")
+                    log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
             
             # Check what instances exist
             # For now, just proceed with port allocation
             await self.publisher.publish_event("allocate_ports_requested", {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "enable_http": existing_proxy.enable_http,
                 "enable_https": existing_proxy.enable_https,
                 "cert_ready": cert_ready,
@@ -301,12 +437,12 @@ class InstanceWorkflowOrchestrator:
         
         # Proxy doesn't exist - this shouldn't happen as API creates it first
         # But handle it anyway for completeness
-        log_warning(f"[WORKFLOW] Proxy {hostname} not found in storage, creating it", component="workflow")
+        log_warning(f"[WORKFLOW] Proxy {proxy_hostname} not found in storage, creating it", component="workflow")
         
         # Store proxy configuration
         from ..proxy.models import ProxyTarget
         proxy = ProxyTarget(
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             target_url=target_url,
             enable_http=enable_http,
             enable_https=enable_https,
@@ -316,12 +452,12 @@ class InstanceWorkflowOrchestrator:
             created_at=datetime.now(timezone.utc)
         )
         
-        if await self._store_proxy_target(hostname, proxy):
-            log_info(f"[WORKFLOW] Proxy {hostname} stored successfully", component="workflow")
+        if await self._store_proxy_target(proxy_hostname, proxy):
+            log_info(f"[WORKFLOW] {proxy_hostname} stored successfully", component="workflow")
             
             # Publish proxy_stored event
             await self.publisher.publish_event("proxy_stored", {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "target_url": target_url,
                 "enable_http": enable_http,
                 "enable_https": enable_https,
@@ -329,9 +465,9 @@ class InstanceWorkflowOrchestrator:
                 "cert_name": cert_name
             })
         else:
-            log_error(f"[WORKFLOW] Failed to store proxy {hostname}", component="workflow")
+            log_error(f"[WORKFLOW] Failed to store proxy {proxy_hostname}", component="workflow")
             await self.state_tracker.set_instance_state(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 state=InstanceState.FAILED,
                 details={"error": "Failed to store proxy configuration"}
             )
@@ -344,33 +480,33 @@ class InstanceWorkflowOrchestrator:
         1. If HTTPS enabled, request certificate
         2. Request port allocation
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         enable_https = event.get('enable_https')
         cert_email = event.get('cert_email')
         cert_name = event.get('cert_name')
         
-        log_info(f"[WORKFLOW] Proxy {hostname} stored, proceeding with setup", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname} stored, proceeding with setup", component="workflow")
         
         # Request certificate if HTTPS is enabled
         if enable_https and cert_name:
-            log_info(f"[WORKFLOW] Requesting certificate for {hostname}", component="workflow")
+            log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
             
             await self.state_tracker.set_pending_operation(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 operation="waiting_for_certificate",
                 details={"cert_name": cert_name}
             )
             
             await self.publisher.publish_event("certificate_requested", {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "cert_name": cert_name,
                 "cert_email": cert_email,
-                "domains": [hostname]
+                "domains": [proxy_hostname]
             })
         
         # Always request port allocation (for HTTP at minimum)
         await self.publisher.publish_event("allocate_ports_requested", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "enable_http": event.get('enable_http', True),
             "enable_https": enable_https
         })
@@ -383,18 +519,18 @@ class InstanceWorkflowOrchestrator:
         1. Start async certificate generation
         2. Certificate ready event will be published when done
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         cert_name = event.get('cert_name')
         cert_email = event.get('cert_email')
-        domains = event.get('domains', [hostname])
+        domains = event.get('domains', [proxy_hostname])
         
-        log_info(f"[WORKFLOW] Starting certificate generation for {hostname}", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
         
         if self.cert_manager:
             # Trigger certificate generation
             from ..certmanager.models import CertificateRequest
             cert_request = CertificateRequest(
-                domain=hostname,
+                domain=proxy_hostname,
                 email=cert_email,
                 cert_name=cert_name,
                 acme_directory_url=os.getenv('ACME_DIRECTORY_URL')
@@ -421,13 +557,15 @@ class InstanceWorkflowOrchestrator:
         2. Allocate HTTPS port if enabled
         3. Publish ports_allocated event with cert status
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         enable_http = event.get('enable_http', True)
         enable_https = event.get('enable_https', True)
         cert_ready = event.get('cert_ready', False)
         cert_name = event.get('cert_name')
         
-        log_info(f"[WORKFLOW] Allocating ports for {hostname} (cert_ready={cert_ready})", component="workflow")
+        log_info(f"[PORT_ALLOCATION] Starting port allocation for {proxy_hostname}: HTTP={enable_http}, HTTPS={enable_https}, cert_ready={cert_ready}", component="workflow")
+        
+        log_info(f"[WORKFLOW] {proxy_hostname} (cert_ready={cert_ready})", component="workflow")
         
         allocated = {
             'cert_ready': cert_ready,
@@ -444,9 +582,11 @@ class InstanceWorkflowOrchestrator:
             allocated['http_internal_port'] = self.next_http_port + 2000
             self.allocated_ports.add(self.next_http_port)
             self.allocated_ports.add(allocated['http_internal_port'])
-            self.next_http_port += 1
             
-            log_info(f"[WORKFLOW] Allocated HTTP port {allocated['http_port']} for {hostname}", component="workflow")
+            log_info(f"[PORT_ALLOCATION] Allocated HTTP port {allocated['http_port']} (internal: {allocated['http_internal_port']}) for {proxy_hostname}", component="workflow")
+            log_info(f"[PORT_ALLOCATION] Total allocated ports: {len(self.allocated_ports)}, Next HTTP port: {self.next_http_port + 1}", component="workflow")
+            
+            self.next_http_port += 1
         
         # Allocate HTTPS port
         if enable_https:
@@ -458,13 +598,16 @@ class InstanceWorkflowOrchestrator:
             allocated['https_internal_port'] = self.next_https_port + 2000
             self.allocated_ports.add(self.next_https_port)
             self.allocated_ports.add(allocated['https_internal_port'])
-            self.next_https_port += 1
             
-            log_info(f"[WORKFLOW] Allocated HTTPS port {allocated['https_port']} for {hostname}", component="workflow")
+            log_info(f"[PORT_ALLOCATION] Allocated HTTPS port {allocated['https_port']} (internal: {allocated['https_internal_port']}) for {proxy_hostname}", component="workflow")
+            log_info(f"[PORT_ALLOCATION] Total allocated ports: {len(self.allocated_ports)}, Next HTTPS port: {self.next_https_port + 1}", component="workflow")
+            
+            self.next_https_port += 1
         
         # Publish ports allocated event with cert status
+        log_info(f"[PORT_ALLOCATION] Publishing ports_allocated event for {proxy_hostname} with ports: {allocated}", component="workflow")
         await self.publisher.publish_event("ports_allocated", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             **allocated
         })
         
@@ -474,7 +617,7 @@ class InstanceWorkflowOrchestrator:
                 await self.publisher.publish_port_changed(
                     port=port,
                     action="allocated",
-                    service=hostname
+                    service=proxy_hostname
                 )
     
     async def handle_ports_allocated(self, event: Dict):
@@ -486,13 +629,13 @@ class InstanceWorkflowOrchestrator:
         2. Start HTTP instance if port allocated
         3. Start HTTPS instance if cert ready, otherwise wait
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         http_port = event.get('http_port')
         https_port = event.get('https_port')
         cert_ready = event.get('cert_ready', False)
         cert_name = event.get('cert_name')
         
-        log_info(f"[WORKFLOW] Ports allocated for {hostname}, creating instances", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname}, creating instances", component="workflow")
         
         # Update state
         state_details = {
@@ -505,21 +648,21 @@ class InstanceWorkflowOrchestrator:
         # Determine initial state based on what's being started
         if http_port and not https_port:
             await self.state_tracker.set_instance_state(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 state=InstanceState.HTTP_ONLY,
                 details=state_details
             )
         elif https_port and not http_port:
             # This would be unusual, but handle it
             await self.state_tracker.set_instance_state(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 state=InstanceState.PENDING,
                 details=state_details
             )
         else:
             # Both HTTP and HTTPS planned
             await self.state_tracker.set_instance_state(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 state=InstanceState.PENDING,
                 details=state_details
             )
@@ -527,7 +670,7 @@ class InstanceWorkflowOrchestrator:
         # Trigger HTTP instance creation if port allocated
         if http_port:
             await self.publisher.publish_event("create_http_instance", {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "http_port": http_port,
                 "http_internal_port": event.get('http_internal_port')
             })
@@ -536,34 +679,34 @@ class InstanceWorkflowOrchestrator:
         if https_port:
             if cert_ready:
                 # Certificate is already ready, start HTTPS immediately!
-                log_info(f"[WORKFLOW] Certificate ready for {hostname}, creating HTTPS instance immediately", component="workflow")
+                log_info(f"[WORKFLOW] {proxy_hostname}, creating HTTPS instance immediately", component="workflow")
                 await self.publisher.publish_event("create_https_instance", {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "https_port": https_port,
                     "https_internal_port": event.get('https_internal_port'),
                     "cert_name": cert_name
                 })
             else:
                 # Need to wait for certificate
-                pending_op = await self.state_tracker.get_pending_operation(hostname)
+                pending_op = await self.state_tracker.get_pending_operation(proxy_hostname)
                 if pending_op and pending_op.get('operation') == 'waiting_for_certificate':
-                    log_info(f"[WORKFLOW] HTTPS port allocated for {hostname}, waiting for certificate", component="workflow")
+                    log_info(f"[WORKFLOW] {proxy_hostname}, waiting for certificate", component="workflow")
                 else:
                     # Check if certificate exists now (race condition handling)
-                    proxy = await self._get_proxy_target(hostname)
+                    proxy = await self._get_proxy_target(proxy_hostname)
                     if proxy and proxy.cert_name:
                         cert = await self._get_certificate(proxy.cert_name)
                         if cert and cert.status == 'active':
                             # Certificate became ready, start HTTPS
-                            log_info(f"[WORKFLOW] Certificate now ready for {hostname}, creating HTTPS instance", component="workflow")
+                            log_info(f"[WORKFLOW] {proxy_hostname}, creating HTTPS instance", component="workflow")
                             await self.publisher.publish_event("create_https_instance", {
-                                "hostname": hostname,
+                                "proxy_hostname": proxy_hostname,
                                 "https_port": https_port,
                                 "https_internal_port": event.get('https_internal_port'),
                                 "cert_name": proxy.cert_name
                             })
                         else:
-                            log_info(f"[WORKFLOW] Certificate {proxy.cert_name} not ready for {hostname}, will wait", component="workflow")
+                            log_info(f"[WORKFLOW] {proxy_hostname}, will wait", component="workflow")
     
     async def handle_http_instance_started(self, event: Dict):
         """
@@ -574,53 +717,53 @@ class InstanceWorkflowOrchestrator:
         2. Update instance state
         3. Check if waiting for HTTPS
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         http_port = event.get('port')
         
-        log_info(f"[WORKFLOW] HTTP instance started for {hostname} on port {http_port}", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname} on port {http_port}", component="workflow")
         
         # Register HTTP route if dispatcher available
         # Note: self.dispatcher is actually the UnifiedMultiInstanceServer
         # The actual dispatcher is self.dispatcher.dispatcher
         if self.dispatcher and hasattr(self.dispatcher, 'dispatcher'):
             self.dispatcher.dispatcher.register_domain(
-                [hostname],
+                [proxy_hostname],
                 http_port,
                 0,  # No HTTPS port yet
                 enable_http=True,
                 enable_https=False
             )
             
-            log_info(f"[WORKFLOW] HTTP route registered for {hostname}", component="workflow")
+            log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
         
         # Update state based on what's pending
-        pending_op = await self.state_tracker.get_pending_operation(hostname)
+        pending_op = await self.state_tracker.get_pending_operation(proxy_hostname)
         if pending_op and pending_op.get('operation') == 'waiting_for_certificate':
             # Still waiting for certificate
             await self.state_tracker.set_instance_state(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 state=InstanceState.HTTP_ONLY,
                 details={"http_port": http_port, "waiting_for": "certificate"}
             )
         else:
             # Check if HTTPS is expected
-            proxy = await self._get_proxy_target(hostname)
+            proxy = await self._get_proxy_target(proxy_hostname)
             if proxy and proxy.enable_https:
                 await self.state_tracker.set_instance_state(
-                    hostname=hostname,
+                    proxy_hostname=proxy_hostname,
                     state=InstanceState.HTTP_ONLY,
                     details={"http_port": http_port}
                 )
             else:
                 # Only HTTP was requested, we're done
                 await self.state_tracker.set_instance_state(
-                    hostname=hostname,
+                    proxy_hostname=proxy_hostname,
                     state=InstanceState.FULLY_RUNNING,
                     details={"http_port": http_port}
                 )
                 
                 await self.publisher.publish_event("instance_fully_operational", {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "http_port": http_port,
                     "https_port": None
                 })
@@ -639,29 +782,29 @@ class InstanceWorkflowOrchestrator:
         
         log_info(f"[WORKFLOW] Certificate {cert_name} ready for domains {domains}", component="workflow")
         
-        for hostname in domains:
+        for proxy_hostname in domains:
             # Clear pending operation
-            await self.state_tracker.clear_pending_operation(hostname)
+            await self.state_tracker.clear_pending_operation(proxy_hostname)
             
             # Get current state
-            state_data = await self.state_tracker.get_instance_state(hostname)
+            state_data = await self.state_tracker.get_instance_state(proxy_hostname)
             if not state_data:
-                log_warning(f"[WORKFLOW] No state found for {hostname}", component="workflow")
+                log_warning(f"[WORKFLOW] No state found for {proxy_hostname}", component="workflow")
                 continue
             
             # Check if HTTPS port was allocated
             https_port = state_data.get('details', {}).get('https_port')
             if https_port:
-                log_info(f"[WORKFLOW] Starting HTTPS for {hostname} on port {https_port}", component="workflow")
+                log_info(f"[WORKFLOW] {proxy_hostname} on port {https_port}", component="workflow")
                 
                 await self.publisher.publish_event("create_https_instance", {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "https_port": https_port,
                     "https_internal_port": https_port + 2000,
                     "cert_name": cert_name
                 })
             else:
-                log_warning(f"[WORKFLOW] No HTTPS port allocated for {hostname}", component="workflow")
+                log_warning(f"[WORKFLOW] No HTTPS port allocated for {proxy_hostname}", component="workflow")
     
     async def handle_https_instance_started(self, event: Dict):
         """
@@ -672,49 +815,49 @@ class InstanceWorkflowOrchestrator:
         2. Update instance state to fully running
         3. Publish completion event
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         https_port = event.get('port')
         
-        log_info(f"[WORKFLOW] HTTPS instance started for {hostname} on port {https_port}", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname} on port {https_port}", component="workflow")
         
         # Register HTTPS route if dispatcher available
         # Note: self.dispatcher is actually the UnifiedMultiInstanceServer
         # The actual dispatcher is self.dispatcher.dispatcher
         if self.dispatcher and hasattr(self.dispatcher, 'dispatcher'):
             # Get HTTP port from state
-            state_data = await self.state_tracker.get_instance_state(hostname)
+            state_data = await self.state_tracker.get_instance_state(proxy_hostname)
             http_port = state_data.get('details', {}).get('http_port', 0)
             
             # Update registration to include HTTPS
             self.dispatcher.dispatcher.register_domain(
-                [hostname],
+                [proxy_hostname],
                 http_port,
                 https_port,
                 enable_http=bool(http_port),
                 enable_https=True
             )
             
-            log_info(f"[WORKFLOW] HTTPS route registered for {hostname}", component="workflow")
+            log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
         
         # Update state to fully running
-        state_data = await self.state_tracker.get_instance_state(hostname)
+        state_data = await self.state_tracker.get_instance_state(proxy_hostname)
         details = state_data.get('details', {})
         details['https_port'] = https_port
         
         await self.state_tracker.set_instance_state(
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             state=InstanceState.FULLY_RUNNING,
             details=details
         )
         
         # Publish completion event
         await self.publisher.publish_event("instance_fully_operational", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "http_port": details.get('http_port'),
             "https_port": https_port
         })
         
-        log_info(f"[WORKFLOW] Instance {hostname} is fully operational", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname} is fully operational", component="workflow")
     
     async def handle_instance_failed(self, event: Dict):
         """
@@ -725,21 +868,21 @@ class InstanceWorkflowOrchestrator:
         2. Release allocated ports
         3. Clean up partial resources
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         error = event.get('error')
         instance_type = event.get('instance_type')
         
-        log_error(f"[WORKFLOW] Instance {instance_type} failed for {hostname}: {error}", component="workflow")
+        log_error(f"[WORKFLOW] Instance {instance_type} failed for {proxy_hostname}: {error}", component="workflow")
         
         # Update state
         await self.state_tracker.set_instance_state(
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             state=InstanceState.FAILED,
             details={"error": error, "failed_component": instance_type}
         )
         
         # Get allocated ports from state
-        state_data = await self.state_tracker.get_instance_state(hostname)
+        state_data = await self.state_tracker.get_instance_state(proxy_hostname)
         if state_data:
             details = state_data.get('details', {})
             
@@ -752,10 +895,10 @@ class InstanceWorkflowOrchestrator:
                     await self.publisher.publish_port_changed(
                         port=port,
                         action="released",
-                        service=hostname
+                        service=proxy_hostname
                     )
                     
-                    log_info(f"[WORKFLOW] Released port {port} for failed instance {hostname}", component="workflow")
+                    log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
         
         # TODO: Clean up any partial resources (routes, instances, etc.)
     
@@ -765,36 +908,39 @@ class InstanceWorkflowOrchestrator:
         
         This event is triggered when ports are allocated and we need to create the HTTP instance.
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         http_port = event.get('http_port')
         http_internal_port = event.get('http_internal_port', http_port)
         
-        log_info(f"[WORKFLOW] Creating HTTP instance for {hostname} on port {http_port}", component="workflow")
+        log_info(f"[WORKFLOW] Creating HTTP instance for {proxy_hostname} on port {http_port}", component="workflow")
+        logger.info(f"[WORKFLOW] Dispatcher check: self.dispatcher={self.dispatcher}, type={type(self.dispatcher) if self.dispatcher else 'None'}")
         
         if self.dispatcher:
+            logger.info(f"[WORKFLOW] Dispatcher is available: {type(self.dispatcher).__name__}")
             try:
-                # The dispatcher's create_instance_for_proxy only takes hostname
+                # The dispatcher's create_instance_for_proxy only takes proxy_hostname
                 # It will handle port allocation and instance creation internally
-                await self.dispatcher.create_instance_for_proxy(hostname)
+                logger.info(f"[WORKFLOW] Calling dispatcher.create_instance_for_proxy({proxy_hostname})")
+                result = await self.dispatcher.create_instance_for_proxy(proxy_hostname)
+                logger.info(f"[WORKFLOW] dispatcher.create_instance_for_proxy completed for {proxy_hostname}, result={result}")
+                # Dispatcher publishes http_instance_started event
+                log_trace(f"[WORKFLOW] HTTP instance creation delegated to dispatcher for {proxy_hostname}", component="workflow")
                 
-                # Publish success event
-                await self.publisher.publish_event("http_instance_started", {
-                    "hostname": hostname,
-                    "port": http_port,
-                    "internal_port": http_internal_port
-                })
-                
-                log_info(f"[WORKFLOW] HTTP instance created for {hostname}", component="workflow")
+                log_info(f"[WORKFLOW] HTTP instance created for {proxy_hostname}", component="workflow")
                 
             except Exception as e:
-                log_error(f"[WORKFLOW] Failed to create HTTP instance for {hostname}: {e}", component="workflow")
+                logger.error(f"[WORKFLOW] Exception in create_instance_for_proxy: {e}", exc_info=True)
+                log_error(f"[WORKFLOW] Failed to create HTTP instance for {proxy_hostname}: {e}", component="workflow", error=e)
+                import traceback
+                log_debug(f"[WORKFLOW] Stack trace: {traceback.format_exc()}", component="workflow")
                 await self.publisher.publish_instance_failed(
-                    hostname=hostname,
+                    proxy_hostname=proxy_hostname,
                     instance_type="http",
                     error=str(e)
                 )
         else:
-            log_error(f"[WORKFLOW] No dispatcher available to create HTTP instance for {hostname}", component="workflow")
+            logger.error(f"[WORKFLOW] No dispatcher available! self.dispatcher is None")
+            log_error(f"[WORKFLOW] No dispatcher available to create HTTP instance for {proxy_hostname}", component="workflow")
     
     async def handle_create_https_instance(self, event: Dict):
         """
@@ -802,21 +948,21 @@ class InstanceWorkflowOrchestrator:
         
         This event is triggered when a certificate is ready and we need to create the HTTPS instance.
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         https_port = event.get('https_port')
         https_internal_port = event.get('https_internal_port', https_port)
         cert_name = event.get('cert_name')
         force_recreate = event.get('force_recreate', False)
         
-        log_info(f"[WORKFLOW] {'Recreating' if force_recreate else 'Creating'} HTTPS instance for {hostname} on port {https_port} with cert {cert_name}", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname} on port {https_port} with cert {cert_name}", component="workflow")
         
         # Verify certificate exists and is active
         cert = await self._get_certificate(cert_name)
         cert_status = cert.get('status') if isinstance(cert, dict) else getattr(cert, 'status', None)
         if not cert or cert_status != 'active':
-            log_error(f"[WORKFLOW] Certificate {cert_name} not ready for {hostname}", component="workflow")
+            log_error(f"[WORKFLOW] Certificate {cert_name} not ready for {proxy_hostname}", component="workflow")
             await self.publisher.publish_instance_failed(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 instance_type="https",
                 error=f"Certificate {cert_name} not active"
             )
@@ -826,34 +972,31 @@ class InstanceWorkflowOrchestrator:
             try:
                 # If this is a certificate update, call update_ssl_context on dispatcher
                 if force_recreate and hasattr(self.dispatcher, 'update_ssl_context'):
-                    log_info(f"[WORKFLOW] Calling update_ssl_context for {hostname}", component="workflow")
+                    log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
                     # Convert cert dict to object if needed
                     self.dispatcher.update_ssl_context(cert)
                 else:
-                    # The dispatcher's create_instance_for_proxy only takes hostname
+                    # The dispatcher's create_instance_for_proxy only takes proxy_hostname
                     # If an HTTP instance already exists, it will upgrade it to HTTPS
                     # If not, it will create a new HTTPS-only instance
-                    await self.dispatcher.create_instance_for_proxy(hostname)
+                    await self.dispatcher.create_instance_for_proxy(proxy_hostname)
                 
                 # Publish success event
-                await self.publisher.publish_event("https_instance_started", {
-                    "hostname": hostname,
-                    "port": https_port,
-                    "internal_port": https_internal_port,
-                    "cert_name": cert_name
-                })
+                # Dispatcher handles publishing https_instance_started
                 
-                log_info(f"[WORKFLOW] HTTPS instance {'recreated' if force_recreate else 'created'} for {hostname}", component="workflow")
+                log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
                 
             except Exception as e:
-                log_error(f"[WORKFLOW] Failed to create HTTPS instance for {hostname}: {e}", component="workflow")
+                log_error(f"[WORKFLOW] Failed to create HTTPS instance for {proxy_hostname}: {e}", component="workflow", error=e)
+                import traceback
+                log_debug(f"[WORKFLOW] Stack trace: {traceback.format_exc()}", component="workflow")
                 await self.publisher.publish_instance_failed(
-                    hostname=hostname,
+                    proxy_hostname=proxy_hostname,
                     instance_type="https",
                     error=str(e)
                 )
         else:
-            log_error(f"[WORKFLOW] No dispatcher available to create HTTPS instance for {hostname}", component="workflow")
+            log_error(f"[WORKFLOW] No dispatcher available to create HTTPS instance for {proxy_hostname}", component="workflow")
     
     async def handle_certificate_renewal(self, event: Dict):
         """
@@ -875,7 +1018,9 @@ class InstanceWorkflowOrchestrator:
                 log_info(f"[WORKFLOW] Certificate renewal initiated for {cert_name}", component="workflow")
                 
             except Exception as e:
-                log_error(f"[WORKFLOW] Failed to start renewal for {cert_name}: {e}", component="workflow")
+                log_error(f"[WORKFLOW] Failed to start renewal for {cert_name}: {e}", component="workflow", error=e)
+                import traceback
+                log_debug(f"[WORKFLOW] Stack trace: {traceback.format_exc()}", component="workflow")
                 await self.publisher.publish_event("certificate_renewal_failed", {
                     "cert_name": cert_name,
                     "error": str(e)
@@ -895,13 +1040,13 @@ class InstanceWorkflowOrchestrator:
         log_info(f"[WORKFLOW] Certificate {cert_name} renewed, updating instances", component="workflow")
         
         # Find all proxies using this certificate
-        for hostname in domains:
-            proxy = await self._get_proxy_target(hostname)
+        for proxy_hostname in domains:
+            proxy = await self._get_proxy_target(proxy_hostname)
             if proxy and proxy.cert_name == cert_name:
                 # Trigger SSL context reload
                 if self.dispatcher:
-                    await self.dispatcher.reload_ssl_context(hostname)
-                    log_info(f"[WORKFLOW] Reloaded SSL context for {hostname}", component="workflow")
+                    await self.dispatcher.reload_ssl_context(proxy_hostname)
+                    log_info(f"[WORKFLOW] {proxy_hostname}", component="workflow")
         
         # Publish completion event
         await self.publisher.publish_event("certificate_renewal_complete", {
@@ -954,11 +1099,11 @@ class InstanceWorkflowOrchestrator:
         
         This triggers the dispatcher to update the SSL context for the instance.
         """
-        hostname = event.get('hostname')
+        proxy_hostname = event.get("proxy_hostname")
         cert_name = event.get('cert_name')
         action = event.get('action', 'reload_ssl_context')
         
-        log_info(f"[WORKFLOW] Certificate updated for {hostname}, action: {action}", component="workflow")
+        log_info(f"[WORKFLOW] {proxy_hostname}, action: {action}", component="workflow")
         
         if action == 'reload_ssl_context':
             # Get the updated certificate
@@ -975,15 +1120,15 @@ class InstanceWorkflowOrchestrator:
             # Trigger instance recreation with new certificate
             # The dispatcher's update_ssl_context method requires direct access
             # So we'll trigger a create_https_instance event which will recreate with new cert
-            log_info(f"[WORKFLOW] Triggering HTTPS instance recreation for {hostname} with updated cert {cert_name}", component="workflow")
+            log_info(f"[WORKFLOW] {proxy_hostname} with updated cert {cert_name}", component="workflow")
             
             # Get current state to preserve port allocation
-            state_data = await self.state_tracker.get_instance_state(hostname)
+            state_data = await self.state_tracker.get_instance_state(proxy_hostname)
             https_port = state_data.get('details', {}).get('https_port', 443) if state_data else 443
             
             # Recreate HTTPS instance with updated certificate
             await self.publisher.publish_event("create_https_instance", {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "cert_name": cert_name,
                 "https_port": https_port,
                 "https_internal_port": https_port + 2000 if https_port != 443 else 11443,
@@ -1000,13 +1145,13 @@ class InstanceWorkflowOrchestrator:
         log_info(f"[WORKFLOW] Production certificate {cert_name} ready, updating instances", component="workflow")
         
         # Update all affected instances
-        for hostname in domains:
-            proxy = await self._get_proxy_target(hostname)
+        for proxy_hostname in domains:
+            proxy = await self._get_proxy_target(proxy_hostname)
             if proxy and proxy.cert_name == cert_name:
                 # Reload SSL context with new production cert
                 if self.dispatcher:
-                    await self.dispatcher.reload_ssl_context(hostname)
-                    log_info(f"[WORKFLOW] Updated {hostname} to production certificate", component="workflow")
+                    await self.dispatcher.reload_ssl_context(proxy_hostname)
+                    log_info(f"[WORKFLOW] {proxy_hostname} to production certificate", component="workflow")
         
         # Publish completion event
         await self.publisher.publish_event("staging_to_production_complete", {

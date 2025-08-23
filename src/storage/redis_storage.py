@@ -491,19 +491,19 @@ class RedisStorage:
             return False
     
     # Proxy Target operations
-    def store_proxy_target(self, hostname: str, target: ProxyTarget) -> bool:
+    def store_proxy_target(self, proxy_hostname: str, target: ProxyTarget) -> bool:
         """Store proxy target configuration."""
         try:
-            key = f"proxy:{hostname}"
+            key = f"proxy:{proxy_hostname}"
             return self.redis_client.set(key, target.json())
         except RedisError as e:
             logger.error(f"Failed to store proxy target: {e}")
             return False
     
-    def get_proxy_target(self, hostname: str) -> Optional[ProxyTarget]:
+    def get_proxy_target(self, proxy_hostname: str) -> Optional[ProxyTarget]:
         """Get proxy target configuration."""
         try:
-            key = f"proxy:{hostname}"
+            key = f"proxy:{proxy_hostname}"
             value = self.redis_client.get(key)
             if value:
                 return ProxyTarget.parse_raw(value)
@@ -523,8 +523,8 @@ class RedisStorage:
                 # Skip client info keys (proxy:client:*) and event streams
                 if ":client:" in key or key == "proxy:events:stream":
                     continue
-                hostname = key.split(":", 1)[1]
-                target = self.get_proxy_target(hostname)
+                proxy_hostname = key.split(":", 1)[1]
+                target = self.get_proxy_target(proxy_hostname)
                 if target:
                     targets.append(target)
             return targets
@@ -532,10 +532,10 @@ class RedisStorage:
             logger.error(f"Failed to list proxy targets: {e}")
             return []
     
-    def delete_proxy_target(self, hostname: str) -> bool:
+    def delete_proxy_target(self, proxy_hostname: str) -> bool:
         """Delete proxy target."""
         try:
-            key = f"proxy:{hostname}"
+            key = f"proxy:{proxy_hostname}"
             return bool(self.redis_client.delete(key))
         except RedisError as e:
             logger.error(f"Failed to delete proxy target: {e}")
@@ -553,10 +553,10 @@ class RedisStorage:
             logger.error(f"Failed to get targets by owner: {e}")
             return []
     
-    def update_proxy_target(self, hostname: str, updates) -> bool:
+    def update_proxy_target(self, proxy_hostname: str, updates) -> bool:
         """Update proxy target with partial data."""
         try:
-            target = self.get_proxy_target(hostname)
+            target = self.get_proxy_target(proxy_hostname)
             if not target:
                 return False
             
@@ -564,7 +564,7 @@ class RedisStorage:
             for field, value in updates.dict(exclude_unset=True).items():
                 setattr(target, field, value)
             
-            return self.store_proxy_target(hostname, target)
+            return self.store_proxy_target(proxy_hostname, target)
         except Exception as e:
             logger.error(f"Failed to update proxy target: {e}")
             return False
@@ -742,10 +742,10 @@ class RedisStorage:
             existing_count = 0
             
             for proxy_dict in DEFAULT_PROXIES:
-                hostname = proxy_dict["hostname"]
+                proxy_hostname = proxy_dict["proxy_hostname"]
                 
                 # Check if this proxy already exists
-                if self.get_proxy_target(hostname):
+                if self.get_proxy_target(proxy_hostname):
                     existing_count += 1
                     continue
                 
@@ -754,11 +754,11 @@ class RedisStorage:
                 
                 # Create the missing default proxy
                 proxy = ProxyTarget(**proxy_dict)
-                if self.store_proxy_target(hostname, proxy):
-                    logger.info(f"Created missing default proxy: {hostname}")
+                if self.store_proxy_target(proxy_hostname, proxy):
+                    logger.info(f"Created missing default proxy: {proxy_hostname}")
                     created_count += 1
                 else:
-                    logger.error(f"Failed to create default proxy: {hostname}")
+                    logger.error(f"Failed to create default proxy: {proxy_hostname}")
             
             if created_count > 0:
                 logger.info(f"Created {created_count} missing default proxies")
@@ -820,7 +820,7 @@ class RedisStorage:
             return []
     
     def list_proxy_names_by_owner(self, owner_token_hash: str) -> List[str]:
-        """List proxy hostnames owned by a specific token."""
+        """List proxy proxy_hostnames owned by a specific token."""
         try:
             names = []
             for key in self.redis_client.scan_iter(match="proxy:*"):
@@ -828,7 +828,7 @@ class RedisStorage:
                 if proxy_data:
                     proxy_dict = json.loads(proxy_data)
                     if proxy_dict.get('owner_token_hash') == owner_token_hash:
-                        names.append(proxy_dict.get('hostname', ''))
+                        names.append(proxy_dict.get('proxy_hostname', ''))
             return names
         except Exception as e:
             logger.error(f"Failed to list proxy names by owner: {e}")

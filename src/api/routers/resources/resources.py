@@ -9,7 +9,6 @@ from authlib.jose.errors import JoseError
 import redis
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_admin
 from src.api.oauth.config import Settings as OAuthSettings
 from src.api.oauth.keys import RSAKeyManager
 
@@ -294,7 +293,7 @@ def create_router(storage):
     
     @router.post("/auto-register")
     async def auto_register_proxy_resources(
-        _: None = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Auto-register Protected Resources from proxy configurations."""
         # Get all proxy targets
@@ -307,7 +306,7 @@ def create_router(storage):
                 continue
             
             # Construct resource URI
-            resource_uri = f"https://{target.hostname}"
+            resource_uri = f"https://{target.proxy_hostname}"
             resource_key = f"resource:{resource_uri}"
             
             # Skip if already registered
@@ -317,8 +316,8 @@ def create_router(storage):
             # Create resource
             resource = ProtectedResource(
                 uri=resource_uri,
-                name=f"Protected Resource at {target.hostname}",
-                proxy_target=target.hostname,
+                name=f"Protected Resource at {target.proxy_hostname}",
+                proxy_target=target.proxy_hostname,
                 scopes=["mcp:read", "mcp:write"],
                 metadata_url=f"{resource_uri}/.well-known/oauth-protected-resource",
                 description=f"Auto-registered from proxy configuration"

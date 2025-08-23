@@ -52,7 +52,7 @@ def create_router(storage, cert_manager):
                 email=cert_request.email,
                 acme_directory_url=cert_request.acme_directory_url,
                 status="pending",
-                owner_token_hash=auth.auth.token_hash,
+                owner_token_hash=auth.token_hash,
                 created_by=auth.principal
             )
             
@@ -74,7 +74,7 @@ def create_router(storage, cert_manager):
                 generate_certificate_async,
                 async_cert_manager,
                 cert_request,
-                auth.auth.token_hash,
+                auth.token_hash,
                 auth.principal
             )
             log_info(f"[API] Background task queued successfully for {cert_request.cert_name}", component="api.certificates")
@@ -124,7 +124,7 @@ def create_router(storage, cert_manager):
                 email=cert_request.email,
                 acme_directory_url=cert_request.acme_directory_url,
                 status="pending",
-                owner_token_hash=auth.auth.token_hash,
+                owner_token_hash=auth.token_hash,
                 created_by=auth.principal
             )
             
@@ -153,7 +153,7 @@ def create_router(storage, cert_manager):
                 generate_certificate_async,
                 async_cert_manager,
                 cert_request,
-                auth.auth.token_hash,
+                auth.token_hash,
                 auth.principal
             )
             log_info(f"[API] Background task queued successfully for multi-domain {cert_request.cert_name}", component="api.certificates")
@@ -174,15 +174,22 @@ def create_router(storage, cert_manager):
     @router.get("/")
     async def list_certificates(
         req: Request,
-        auth: AuthResult = Depends(AuthDep())
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
         """List all certificates."""
         try:
+            # Debug: Check if auth_service exists
+            has_auth_service = hasattr(req.app.state, 'auth_service')
+            auth_service_type = type(req.app.state.auth_service).__name__ if has_auth_service else "None"
+            
             # Get async storage
             async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
             
             # Get all certificates
             all_certs = await async_storage.list_certificates()
+            log_debug(f"list_certificates: Found {len(all_certs)} certificates total", component="api.certificates")
+            log_debug(f"list_certificates: has_auth_service={has_auth_service}, auth_service_type={auth_service_type}", component="api.certificates")
+            log_debug(f"list_certificates: Auth principal={auth.principal}, is_admin={auth.metadata.get('is_admin', False)}, token_hash={auth.token_hash[:16] if auth.token_hash else 'None'}", component="api.certificates")
             
             # Filter by ownership
             certs_to_return = []
@@ -201,7 +208,11 @@ def create_router(storage, cert_manager):
             filtered_certs = []
             for cert in certs_to_return:
                 # Create a copy without the private key
-                cert_copy = cert.copy() if isinstance(cert, dict) else cert.__dict__.copy()
+                if isinstance(cert, dict):
+                    cert_copy = cert.copy()
+                else:
+                    # Pydantic model - use model_dump
+                    cert_copy = cert.model_dump() if hasattr(cert, 'model_dump') else cert.dict()
                 # Remove sensitive/large fields
                 cert_copy.pop('private_key_pem', None)
                 cert_copy.pop('fullchain_pem', None)
@@ -227,7 +238,7 @@ def create_router(storage, cert_manager):
             raise HTTPException(status_code=404, detail="Certificate not found")
         
         # Check ownership
-        if auth.auth.token_hash and cert.owner_token_hash:
+        if auth.token_hash and cert.owner_token_hash:
             # Check if not admin and not owner
             if not auth.metadata.get('is_admin', False) and cert.owner_token_hash != auth.token_hash:
                 raise HTTPException(status_code=403, detail="Access denied")
@@ -386,7 +397,7 @@ def create_router(storage, cert_manager):
                     "events:all:stream",
                     {
                         "event_type": "certificate_updated",
-                        "hostname": cert_domains[0] if cert_domains else "",
+                        "proxy_hostname": cert_domains[0] if cert_domains else "",
                         "cert_name": cert_name,
                         "action": "reload_ssl_context"
                     }

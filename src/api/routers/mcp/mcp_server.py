@@ -337,7 +337,7 @@ class IntegratedMCPServer:
                 if include_details:
                     proxy_list = [
                         {
-                            "hostname": p.hostname,
+                            "proxy_hostname": p.hostname,
                             "target_url": p.target_url,
                             "auth_enabled": p.auth_enabled,
                             "cert_name": p.cert_name,
@@ -348,7 +348,7 @@ class IntegratedMCPServer:
                     ]
                 else:
                     proxy_list = [
-                        {"hostname": p.hostname, "target_url": p.target_url}
+                        {"proxy_hostname": p.hostname, "target_url": p.target_url}
                         for p in proxies
                     ]
 
@@ -375,7 +375,7 @@ class IntegratedMCPServer:
             }
         )
         async def proxy_create(
-            hostname: str,
+            proxy_hostname: str,
             target_url: str,
             token: str,
             enable_http: bool = True,
@@ -404,8 +404,7 @@ class IntegratedMCPServer:
 
             async with self.logger.trace_context(
                 "mcp_tool_create_proxy",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ) as trace_id:
                 # Validate token (required for creation)
                 token_info = await self.storage.get_token_by_hash(token)
@@ -416,7 +415,7 @@ class IntegratedMCPServer:
 
                 # Create proxy configuration
                 proxy_data = {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "target_url": target_url,
                     "enable_http": enable_http,
                     "enable_https": enable_https,
@@ -429,8 +428,7 @@ class IntegratedMCPServer:
 
                 # Publish workflow event for instance creation
                 await self.event_publisher.publish_workflow_event(
-                    event_type="proxy_created",
-                    hostname=hostname,
+                    event_type="proxy_created", proxy_hostname=proxy_hostname,
                     data={
                         "target_url": target_url,
                         "created_by": "mcp",
@@ -447,13 +445,13 @@ class IntegratedMCPServer:
                     action="create_proxy",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname, "target_url": target_url}
+                    details={"proxy_hostname": proxy_hostname, "target_url": target_url}
                 )
 
                 return {
                     "status": "created",
-                    "hostname": hostname,
-                    "message": f"Proxy {hostname} created successfully"
+                    "proxy_hostname": proxy_hostname,
+                    "message": f"Proxy {proxy_hostname} created successfully"
                 }
 
         @self.mcp.tool(
@@ -466,7 +464,7 @@ class IntegratedMCPServer:
             }
         )
         async def proxy_delete(
-            hostname: str,
+            proxy_hostname: str,
             token: str
         ) -> Dict[str, Any]:
             """Delete a proxy configuration.
@@ -487,8 +485,7 @@ class IntegratedMCPServer:
 
             async with self.logger.trace_context(
                 "mcp_tool_delete_proxy",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ) as trace_id:
                 # Validate token
                 token_info = await self.storage.get_token_by_hash(token)
@@ -500,7 +497,7 @@ class IntegratedMCPServer:
                 # Get proxy to check ownership
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy {hostname} not found")
+                    raise ValueError(f"Proxy {proxy_hostname} not found")
 
                 # Check ownership (unless admin token)
                 if proxy.owner_token != token_info["name"] and token_info["name"] != "admin":
@@ -511,8 +508,7 @@ class IntegratedMCPServer:
 
                 # Publish workflow event for instance deletion
                 await self.event_publisher.publish_workflow_event(
-                    event_type="proxy_deleted",
-                    hostname=hostname,
+                    event_type="proxy_deleted", proxy_hostname=proxy_hostname,
                     data={
                         "deleted_by": "mcp",
                         "session_id": session_id,
@@ -526,13 +522,13 @@ class IntegratedMCPServer:
                     action="delete_proxy",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname}
+                    details={"proxy_hostname": proxy_hostname}
                 )
 
                 return {
                     "status": "deleted",
-                    "hostname": hostname,
-                    "message": f"Proxy {hostname} deleted successfully"
+                    "proxy_hostname": proxy_hostname,
+                    "message": f"Proxy {proxy_hostname} deleted successfully"
                 }
 
         # ========== Certificate Management Tools ==========
@@ -733,7 +729,7 @@ class IntegratedMCPServer:
                 session_id=session_id,
                 filters={
                     "hours": hours,
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "status_code": status_code
                 }
             ):

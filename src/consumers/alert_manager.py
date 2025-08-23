@@ -216,7 +216,7 @@ class AlertManager(UnifiedStreamConsumer):
             if data.get("log_type") != "http_response":
                 return
             
-            hostname = data.get("hostname", "unknown")
+            proxy_hostname = data.get("hostname", "unknown")
             duration_ms = data.get("duration_ms")
             
             if duration_ms is None:
@@ -231,15 +231,15 @@ class AlertManager(UnifiedStreamConsumer):
             
             # Check for slow response
             if duration_ms > self.response_time_threshold:
-                alert_key = f"slow_response:{hostname}"
+                alert_key = f"slow_response:{proxy_hostname}"
                 
                 if await self._should_alert(alert_key):
                     await self._send_alert(
                         severity="MEDIUM",
-                        title=f"Slow Response: {hostname}",
+                        title=f"Slow Response: {proxy_hostname}",
                         message=f"Response time {duration_ms:.0f}ms exceeds threshold {self.response_time_threshold}ms",
                         details={
-                            "hostname": hostname,
+                            "proxy_hostname": proxy_hostname,
                             "duration_ms": duration_ms,
                             "threshold_ms": self.response_time_threshold,
                             "path": data.get("path", ""),
@@ -253,15 +253,15 @@ class AlertManager(UnifiedStreamConsumer):
                 historical_avg = sum(self.response_times[hostname][:-10]) / len(self.response_times[hostname][:-10])
                 
                 if recent_avg > historical_avg * self.response_time_spike_ratio:
-                    alert_key = f"response_spike:{hostname}"
+                    alert_key = f"response_spike:{proxy_hostname}"
                     
                     if await self._should_alert(alert_key):
                         await self._send_alert(
                             severity="MEDIUM",
-                            title=f"Response Time Spike: {hostname}",
+                            title=f"Response Time Spike: {proxy_hostname}",
                             message=f"Recent avg {recent_avg:.0f}ms is {recent_avg/historical_avg:.1f}x normal ({historical_avg:.0f}ms)",
                             details={
-                                "hostname": hostname,
+                                "proxy_hostname": proxy_hostname,
                                 "recent_avg_ms": recent_avg,
                                 "historical_avg_ms": historical_avg,
                                 "spike_ratio": recent_avg / historical_avg
@@ -399,7 +399,7 @@ class AlertManager(UnifiedStreamConsumer):
             "active_alerts": active_count,
             "recent_alerts": recent_alerts,
             "error_components": list(self.error_counts.keys()),
-            "slow_hostnames": [
+            "slow_proxy_hostnames": [
                 hostname for hostname, times in self.response_times.items()
                 if times and sum(times) / len(times) > self.response_time_threshold / 2
             ]

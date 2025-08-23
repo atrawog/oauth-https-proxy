@@ -29,7 +29,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_show(
-            hostname: str,
+            proxy_hostname: str,
             token: Optional[str] = None
         ) -> Dict[str, Any]:
             """Show detailed proxy configuration.
@@ -45,13 +45,12 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_show",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership if token provided
                 user = "anonymous"
@@ -67,7 +66,7 @@ class ProxyTools(BaseMCPTools):
                 auth_config = None
                 try:
                     # Try to get from Redis directly
-                    auth_data = await self.storage.redis_client.get(f"proxy:auth:{hostname}")
+                    auth_data = await self.storage.redis_client.get(f"proxy:auth:{proxy_hostname}")
                     if auth_data:
                         import json
                         auth_config = json.loads(auth_data)
@@ -77,7 +76,7 @@ class ProxyTools(BaseMCPTools):
                 # Get protected resource metadata (may not exist)
                 resource_metadata = None
                 try:
-                    resource_data = await self.storage.redis_client.get(f"resource:{hostname}")
+                    resource_data = await self.storage.redis_client.get(f"resource:{proxy_hostname}")
                     if resource_data:
                         import json
                         resource_metadata = json.loads(resource_data)
@@ -90,7 +89,7 @@ class ProxyTools(BaseMCPTools):
                 # Build result handling both dict and object
                 if isinstance(proxy, dict):
                     result = {
-                        "hostname": proxy.get("hostname", ""),
+                        "proxy_hostname": proxy.get("hostname", ""),
                         "target_url": proxy.get("target_url", ""),
                         "enable_http": proxy.get("enable_http", True),
                         "enable_https": proxy.get("enable_https", True),
@@ -104,7 +103,7 @@ class ProxyTools(BaseMCPTools):
                 else:
                     # Handle Pydantic model
                     result = {
-                        "hostname": getattr(proxy, 'hostname', ""),
+                        "proxy_hostname": getattr(proxy, 'hostname', ""),
                         "target_url": getattr(proxy, 'target_url', ""),
                         "enable_http": getattr(proxy, 'enable_http', True),
                         "enable_https": getattr(proxy, 'enable_https', True),
@@ -121,7 +120,7 @@ class ProxyTools(BaseMCPTools):
                     action="proxy_show",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname}
+                    details={"proxy_hostname": proxy_hostname}
                 )
                 
                 return result
@@ -138,7 +137,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_auth_enable(
-            hostname: str,
+            proxy_hostname: str,
             auth_proxy: str,
             mode: str,
             token: str,
@@ -162,8 +161,7 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_auth_enable",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Validate token
                 token_info = await self.validate_token(token)
@@ -172,7 +170,7 @@ class ProxyTools(BaseMCPTools):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership
                 owner_token = getattr(proxy, 'owner_token', '') if hasattr(proxy, 'owner_token') else proxy.get('owner_token', '') if isinstance(proxy, dict) else ''
@@ -193,7 +191,7 @@ class ProxyTools(BaseMCPTools):
                 
                 # Store auth config in Redis
                 import json
-                await self.storage.redis_client.set(f"proxy:auth:{hostname}", json.dumps(auth_config))
+                await self.storage.redis_client.set(f"proxy:auth:{proxy_hostname}", json.dumps(auth_config))
                 
                 # Update proxy auth_enabled flag
                 if isinstance(proxy, dict):
@@ -208,7 +206,7 @@ class ProxyTools(BaseMCPTools):
                     session_id=session_id,
                     user=user,
                     details={
-                        "hostname": hostname,
+                        "proxy_hostname": proxy_hostname,
                         "auth_proxy": auth_proxy,
                         "mode": mode
                     }
@@ -216,10 +214,10 @@ class ProxyTools(BaseMCPTools):
                 
                 return {
                     "status": "enabled",
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "auth_proxy": auth_proxy,
                     "mode": mode,
-                    "message": f"Authentication enabled for proxy '{hostname}'"
+                    "message": f"Authentication enabled for proxy '{proxy_hostname}'"
                 }
         
         @self.mcp.tool(
@@ -232,7 +230,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_auth_disable(
-            hostname: str,
+            proxy_hostname: str,
             token: str
         ) -> Dict[str, Any]:
             """Disable OAuth authentication for a proxy.
@@ -248,8 +246,7 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_auth_disable",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Validate token
                 token_info = await self.validate_token(token)
@@ -258,14 +255,14 @@ class ProxyTools(BaseMCPTools):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership
                 owner_token = getattr(proxy, 'owner_token', '') if hasattr(proxy, 'owner_token') else proxy.get('owner_token', '') if isinstance(proxy, dict) else ''
                 await self.check_ownership(token_info, owner_token, "proxy")
                 
                 # Delete auth config from Redis
-                await self.storage.redis_client.delete(f"proxy:auth:{hostname}")
+                await self.storage.redis_client.delete(f"proxy:auth:{proxy_hostname}")
                 
                 # Update proxy auth_enabled flag
                 if isinstance(proxy, dict):
@@ -279,13 +276,13 @@ class ProxyTools(BaseMCPTools):
                     action="proxy_auth_disable",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname}
+                    details={"proxy_hostname": proxy_hostname}
                 )
                 
                 return {
                     "status": "disabled",
-                    "hostname": hostname,
-                    "message": f"Authentication disabled for proxy '{hostname}'"
+                    "proxy_hostname": proxy_hostname,
+                    "message": f"Authentication disabled for proxy '{proxy_hostname}'"
                 }
         
         @self.mcp.tool(
@@ -298,7 +295,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_auth_config(
-            hostname: str,
+            proxy_hostname: str,
             token: str,
             users: Optional[str] = None,
             emails: Optional[str] = None,
@@ -324,8 +321,7 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_auth_config",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Validate token
                 token_info = await self.validate_token(token)
@@ -334,7 +330,7 @@ class ProxyTools(BaseMCPTools):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership
                 owner_token = getattr(proxy, 'owner_token', '') if hasattr(proxy, 'owner_token') else proxy.get('owner_token', '') if isinstance(proxy, dict) else ''
@@ -343,7 +339,7 @@ class ProxyTools(BaseMCPTools):
                 # Get existing config from Redis
                 auth_config = {}
                 try:
-                    auth_data = await self.storage.redis_client.get(f"proxy:auth:{hostname}")
+                    auth_data = await self.storage.redis_client.get(f"proxy:auth:{proxy_hostname}")
                     if auth_data:
                         import json
                         auth_config = json.loads(auth_data)
@@ -364,21 +360,21 @@ class ProxyTools(BaseMCPTools):
                 
                 # Store updated auth config in Redis
                 import json
-                await self.storage.redis_client.set(f"proxy:auth:{hostname}", json.dumps(auth_config))
+                await self.storage.redis_client.set(f"proxy:auth:{proxy_hostname}", json.dumps(auth_config))
                 
                 # Log audit event
                 await self.log_audit_event(
                     action="proxy_auth_config",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname, "config": auth_config}
+                    details={"proxy_hostname": proxy_hostname, "config": auth_config}
                 )
                 
                 return {
                     "status": "configured",
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "config": auth_config,
-                    "message": f"Authentication configured for proxy '{hostname}'"
+                    "message": f"Authentication configured for proxy '{proxy_hostname}'"
                 }
         
         @self.mcp.tool(
@@ -391,7 +387,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_auth_show(
-            hostname: str,
+            proxy_hostname: str,
             token: Optional[str] = None
         ) -> Dict[str, Any]:
             """Show authentication configuration for a proxy.
@@ -407,13 +403,12 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_auth_show",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership if token provided
                 user = "anonymous"
@@ -428,7 +423,7 @@ class ProxyTools(BaseMCPTools):
                 # Get auth config from Redis
                 auth_config = {}
                 try:
-                    auth_data = await self.storage.redis_client.get(f"proxy:auth:{hostname}")
+                    auth_data = await self.storage.redis_client.get(f"proxy:auth:{proxy_hostname}")
                     if auth_data:
                         import json
                         auth_config = json.loads(auth_data)
@@ -438,7 +433,7 @@ class ProxyTools(BaseMCPTools):
                 auth_enabled = getattr(proxy, 'auth_enabled', False) if hasattr(proxy, 'auth_enabled') else proxy.get('auth_enabled', False) if isinstance(proxy, dict) else False
                 
                 result = {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "auth_enabled": auth_enabled,
                     "config": auth_config
                 }
@@ -448,7 +443,7 @@ class ProxyTools(BaseMCPTools):
                     action="proxy_auth_show",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname}
+                    details={"proxy_hostname": proxy_hostname}
                 )
                 
                 return result
@@ -465,7 +460,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_resource_set(
-            hostname: str,
+            proxy_hostname: str,
             endpoint: str,
             scopes: str,
             token: str,
@@ -497,8 +492,7 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_resource_set",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Validate token
                 token_info = await self.validate_token(token)
@@ -507,7 +501,7 @@ class ProxyTools(BaseMCPTools):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership
                 owner_token = getattr(proxy, 'owner_token', '') if hasattr(proxy, 'owner_token') else proxy.get('owner_token', '') if isinstance(proxy, dict) else ''
@@ -542,21 +536,21 @@ class ProxyTools(BaseMCPTools):
                 
                 # Store resource metadata in Redis
                 import json
-                await self.storage.redis_client.set(f"resource:{hostname}", json.dumps(metadata))
+                await self.storage.redis_client.set(f"resource:{proxy_hostname}", json.dumps(metadata))
                 
                 # Log audit event
                 await self.log_audit_event(
                     action="proxy_resource_set",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname, "endpoint": endpoint}
+                    details={"proxy_hostname": proxy_hostname, "endpoint": endpoint}
                 )
                 
                 return {
                     "status": "configured",
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "metadata": metadata,
-                    "message": f"Protected resource metadata set for proxy '{hostname}'"
+                    "message": f"Protected resource metadata set for proxy '{proxy_hostname}'"
                 }
         
         @self.mcp.tool(
@@ -569,7 +563,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_resource_show(
-            hostname: str,
+            proxy_hostname: str,
             token: Optional[str] = None
         ) -> Dict[str, Any]:
             """Show protected resource metadata for a proxy.
@@ -585,13 +579,12 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_resource_show",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership if token provided
                 user = "anonymous"
@@ -606,7 +599,7 @@ class ProxyTools(BaseMCPTools):
                 # Get metadata from Redis
                 metadata = None
                 try:
-                    resource_data = await self.storage.redis_client.get(f"resource:{hostname}")
+                    resource_data = await self.storage.redis_client.get(f"resource:{proxy_hostname}")
                     if resource_data:
                         import json
                         if isinstance(resource_data, bytes):
@@ -617,7 +610,7 @@ class ProxyTools(BaseMCPTools):
                     metadata = None
                 
                 result = {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "metadata": metadata or {}
                 }
                 
@@ -626,7 +619,7 @@ class ProxyTools(BaseMCPTools):
                     action="proxy_resource_show",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname}
+                    details={"proxy_hostname": proxy_hostname}
                 )
                 
                 return result
@@ -641,7 +634,7 @@ class ProxyTools(BaseMCPTools):
             }
         )
         async def proxy_resource_clear(
-            hostname: str,
+            proxy_hostname: str,
             token: str
         ) -> Dict[str, Any]:
             """Clear protected resource metadata for a proxy.
@@ -657,8 +650,7 @@ class ProxyTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_proxy_resource_clear",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 # Validate token
                 token_info = await self.validate_token(token)
@@ -667,27 +659,27 @@ class ProxyTools(BaseMCPTools):
                 # Get proxy
                 proxy = await self.storage.get_proxy_target(hostname)
                 if not proxy:
-                    raise ValueError(f"Proxy '{hostname}' not found")
+                    raise ValueError(f"Proxy '{proxy_hostname}' not found")
                 
                 # Check ownership
                 owner_token = getattr(proxy, 'owner_token', '') if hasattr(proxy, 'owner_token') else proxy.get('owner_token', '') if isinstance(proxy, dict) else ''
                 await self.check_ownership(token_info, owner_token, "proxy")
                 
                 # Clear metadata from Redis
-                await self.storage.redis_client.delete(f"resource:{hostname}")
+                await self.storage.redis_client.delete(f"resource:{proxy_hostname}")
                 
                 # Log audit event
                 await self.log_audit_event(
                     action="proxy_resource_clear",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname}
+                    details={"proxy_hostname": proxy_hostname}
                 )
                 
                 return {
                     "status": "cleared",
-                    "hostname": hostname,
-                    "message": f"Protected resource metadata cleared for proxy '{hostname}'"
+                    "proxy_hostname": proxy_hostname,
+                    "message": f"Protected resource metadata cleared for proxy '{proxy_hostname}'"
                 }
         
         @self.mcp.tool(
@@ -738,22 +730,22 @@ class ProxyTools(BaseMCPTools):
                     
                     # Get metadata from Redis
                     metadata = None
-                    hostname = getattr(proxy, 'hostname', None) if hasattr(proxy, 'hostname') else proxy.get('hostname') if isinstance(proxy, dict) else None
+                    proxy_hostname = getattr(proxy, 'hostname', None) if hasattr(proxy, 'hostname') else proxy.get('hostname') if isinstance(proxy, dict) else None
                     if hostname:
                         try:
-                            resource_data = await self.storage.redis_client.get(f"resource:{hostname}")
+                            resource_data = await self.storage.redis_client.get(f"resource:{proxy_hostname}")
                             if resource_data:
                                 import json
                                 if isinstance(resource_data, bytes):
                                     resource_data = resource_data.decode('utf-8')
                                 metadata = json.loads(resource_data)
                         except Exception as e:
-                            logger.debug(f"No resource metadata for {hostname}: {e}")
+                            logger.debug(f"No resource metadata for {proxy_hostname}: {e}")
                             metadata = None
                     
                     if metadata:
                         resources.append({
-                            "hostname": hostname,
+                            "proxy_hostname": proxy_hostname,
                             "endpoint": metadata.get("endpoint", "/api"),
                             "scopes": metadata.get("scopes_supported", []),
                             "stateful": metadata.get("stateful", False),

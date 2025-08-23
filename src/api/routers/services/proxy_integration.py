@@ -70,7 +70,7 @@ def create_proxy_integration_router(storage) -> APIRouter:
         
         # Determine hostname
         if not hostname:
-            hostname = f"{service_name}.{Config.BASE_DOMAIN}"
+            proxy_hostname = f"{service_name}.{Config.BASE_DOMAIN}"
         
         # Check if proxy already exists
         # Get async async_storage if available
@@ -78,7 +78,7 @@ def create_proxy_integration_router(storage) -> APIRouter:
         
         existing_proxy = await request.app.state.async_storage.get_proxy_target(hostname)
         if existing_proxy:
-            raise HTTPException(409, f"Proxy for hostname {hostname} already exists")
+            raise HTTPException(409, f"Proxy for hostname {proxy_hostname} already exists")
         
         try:
             # Determine target URL - use internal port
@@ -95,7 +95,7 @@ def create_proxy_integration_router(storage) -> APIRouter:
             
             # Create proxy configuration
             proxy_config = ProxyTarget(
-                hostname=hostname,
+                proxy_hostname=proxy_hostname,
                 target_url=target_url,
                 cert_name=f"cert-{service_name}" if enable_https else None,
                 enabled=True,
@@ -111,11 +111,11 @@ def create_proxy_integration_router(storage) -> APIRouter:
             if not success:
                 raise HTTPException(500, "Failed to store proxy configuration")
             
-            logger.info(f"Created proxy for service {service_name} at {hostname}")
+            logger.info(f"Created proxy for service {service_name} at {proxy_hostname}")
             
             return {
                 "message": f"Proxy created for service {service_name}",
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "target_url": target_url,
                 "enable_https": enable_https
             }

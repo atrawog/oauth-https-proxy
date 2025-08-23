@@ -128,7 +128,7 @@ class LogTools(BaseMCPTools):
             }
         )
         async def logs_proxy(
-            hostname: str,
+            proxy_hostname: str,
             hours: int = 24,
             limit: int = 100,
             token: Optional[str] = None
@@ -148,8 +148,7 @@ class LogTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_logs_proxy",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ):
                 user = "anonymous"
                 if token:
@@ -166,7 +165,7 @@ class LogTools(BaseMCPTools):
                 logs = []
                 try:
                     # Get log keys from hostname index
-                    index_key = f"idx:req:host:{hostname}"
+                    index_key = f"idx:req:host:{proxy_hostname}"
                     log_keys = await self.storage.redis_client.zrevrange(index_key, 0, limit - 1)
                     
                     # Fetch log entries
@@ -206,7 +205,7 @@ class LogTools(BaseMCPTools):
                     action="logs_proxy",
                     session_id=session_id,
                     user=user,
-                    details={"hostname": hostname, "hours": hours, "count": len(formatted_logs)}
+                    details={"proxy_hostname": proxy_hostname, "hours": hours, "count": len(formatted_logs)}
                 )
                 
                 # Match proxy-client API format for search endpoint with hostname filter
@@ -217,7 +216,7 @@ class LogTools(BaseMCPTools):
                         "hours": hours,
                         "limit": limit,
                         "offset": 0,
-                        "hostname": hostname
+                        "proxy_hostname": proxy_hostname
                     }
                 }
         

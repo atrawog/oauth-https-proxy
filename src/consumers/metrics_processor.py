@@ -154,7 +154,7 @@ class MetricsProcessor(UnifiedStreamConsumer):
                 )
                 await self.redis.expire(f"metrics:errors:{current_hour}", 86400 * 7)
             
-            log_info(f"Aggregated metrics for {len(self.response_times)} hostnames", component="metrics_processor")
+            log_info(f"Aggregated metrics for {len(self.response_times)} proxy_hostnames", component="metrics_processor")
             
         except Exception as e:
             log_error(f"Failed to aggregate metrics: {e}", component="metrics_processor", error=e)

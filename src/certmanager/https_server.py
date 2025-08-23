@@ -69,7 +69,7 @@ class HTTPSServer:
         
         for proxy in proxy_targets:
             if proxy.cert_name and proxy.cert_name in cert_contexts:
-                domain_to_cert[proxy.hostname] = proxy.cert_name
+                domain_to_cert[proxy.proxy_hostname] = proxy.cert_name
         
         # Third pass: Apply certificates with proxy preferences taking priority
         for cert_name, (context, domains) in cert_contexts.items():

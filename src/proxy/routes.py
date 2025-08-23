@@ -99,7 +99,7 @@ class Route(BaseModel):
     @field_validator('proxy_hostnames')
     @classmethod
     def validate_proxy_hostnames(cls, v: List[str], info: ValidationInfo) -> List[str]:
-        """Validate proxy hostnames are only set for proxy-scoped routes."""
+        """Validate proxy proxy_hostnames are only set for proxy-scoped routes."""
         scope = info.data.get('scope', RouteScope.GLOBAL)
         if scope == RouteScope.PROXY and not v:
             raise ValueError("proxy_hostnames must be specified for proxy-scoped routes")
@@ -271,7 +271,7 @@ async def get_applicable_routes_async(async_storage, proxy_config: 'ProxyTarget'
     import time
     
     # Check cache first
-    cache_key = f"routes:{proxy_config.hostname if proxy_config else 'global'}"
+    cache_key = f"routes:{proxy_config.proxy_hostname if proxy_config else 'global'}"
     now = time.time()
     
     if cache_key in _route_cache and cache_key in _route_cache_time:
@@ -350,7 +350,7 @@ def _filter_routes_by_scope(all_routes: List[Route], proxy_config: 'ProxyTarget'
         if route.scope == RouteScope.GLOBAL:
             # Global routes apply to all proxies
             applicable_routes.append(route)
-        elif route.scope == RouteScope.PROXY and proxy_config.hostname in route.proxy_hostnames:
+        elif route.scope == RouteScope.PROXY and proxy_config.proxy_hostname in route.proxy_hostnames:
             # Proxy-specific routes only apply to listed proxies
             applicable_routes.append(route)
     

@@ -59,11 +59,11 @@ class EnhancedProxyHandler:
         # Log at debug level to reduce overhead
         log_debug(f"EnhancedProxyHandler initialized with timeouts: read={request_timeout}s, connect={connect_timeout}s", component="proxy_handler")
     
-    async def _get_proxy_target_cached(self, hostname: str):
+    async def _get_proxy_target_cached(self, proxy_hostname: str):
         """Get proxy target - always fetch fresh for auth changes."""
         # Always fetch fresh from storage to ensure auth changes are immediate
         if self.async_storage:
-            proxy_json = await self.async_storage.redis_client.get(f"proxy:{hostname}")
+            proxy_json = await self.async_storage.redis_client.get(f"proxy:{proxy_hostname}")
             if proxy_json:
                 from .models import ProxyTarget
                 target = ProxyTarget(**json.loads(proxy_json))
@@ -89,7 +89,7 @@ class EnhancedProxyHandler:
         )
         
         # Extract hostname from request
-        hostname = request.headers.get("host", "").split(":")[0]
+        proxy_hostname = request.headers.get("host", "").split(":")[0]
         
         if not hostname:
             log_warning(
@@ -104,8 +104,7 @@ class EnhancedProxyHandler:
         request_context = await log_request(
             logger,
             request,
-            client_ip,
-            hostname=hostname
+            client_ip, proxy_hostname=proxy_hostname
         )
         request_key = request_context.get("_request_key") if request_context else None
         
@@ -125,27 +124,25 @@ class EnhancedProxyHandler:
             
             log_warning(
                 "No proxy target configured",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 available_proxies=available_proxies[:10]  # Show first 10
             ,
             
                 component="proxy_handler"
             
             )
-            raise HTTPException(404, f"No proxy target configured for {hostname}")
+            raise HTTPException(404, f"No proxy target configured for {proxy_hostname}")
         
         if not target.enabled:
             log_warning(
                 "Proxy target disabled - returning 503",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 target_url=target.target_url,
                 created_at=str(target.created_at),
                 auth_enabled=target.auth_enabled,
                 cert_name=target.cert_name
             )
-            raise HTTPException(503, f"Proxy target {hostname} is disabled")
+            raise HTTPException(503, f"Proxy target {proxy_hostname} is disabled")
         
         # Check routes FIRST - routes bypass proxy auth!
         from ..proxy.routes import get_applicable_routes, get_applicable_routes_async, RouteTargetType
@@ -162,8 +159,7 @@ class EnhancedProxyHandler:
         
         log_debug(
             "Checking routes for request",
-            ip=client_ip,
-            hostname=hostname,
+            ip=client_ip, proxy_hostname=proxy_hostname,
             route_count=len(applicable_routes),
             method=request_method,
             path=request_path,
@@ -202,8 +198,7 @@ class EnhancedProxyHandler:
             if match_result:
                 log_info(
                     "Route matched",
-                    ip=client_ip,
-                    hostname=hostname,
+                    ip=client_ip, proxy_hostname=proxy_hostname,
                     method=request_method,
                     path=request_path,
                     route_id=route.route_id,
@@ -222,9 +217,9 @@ class EnhancedProxyHandler:
         # Check protocol-specific enable flags
         is_https = request.url.scheme == "https"
         if is_https and not target.enable_https:
-            raise HTTPException(404, f"HTTPS not enabled for {hostname}")
+            raise HTTPException(404, f"HTTPS not enabled for {proxy_hostname}")
         elif not is_https and not target.enable_http:
-            raise HTTPException(404, f"HTTP not enabled for {hostname}")
+            raise HTTPException(404, f"HTTP not enabled for {proxy_hostname}")
         
         # Check if auth is required
         if target.auth_enabled:
@@ -244,7 +239,7 @@ class EnhancedProxyHandler:
             # Only perform auth check if path is not excluded
             if not path_excluded:
                 # DEBUG: Print auth check details
-                log_debug(f"Auth check for {hostname}: client_ip={client_ip}, path={request_path}, auth_enabled={target.auth_enabled}", component="proxy_handler")
+                log_debug(f"Auth check for {proxy_hostname}: client_ip={client_ip}, path={request_path}, auth_enabled={target.auth_enabled}", component="proxy_handler")
                 
                 # Extract and log Authorization header details
                 auth_header = request.headers.get("authorization", "")
@@ -272,8 +267,7 @@ class EnhancedProxyHandler:
                 
                 log_info(
                     "Starting authentication check - DETAILED CONTEXT WITH TOKEN INFO",
-                    ip=client_ip,
-                    hostname=hostname,
+                    ip=client_ip, proxy_hostname=proxy_hostname,
                     auth_proxy=target.auth_proxy,
                     auth_mode=target.auth_mode,
                     request_path=request_path,
@@ -297,8 +291,7 @@ class EnhancedProxyHandler:
                     duration_ms = (time.perf_counter() - start_time) * 1000
                     log_warning(
                         "Authentication failed - DETAILED FAILURE ANALYSIS",
-                        ip=client_ip,
-                        hostname=hostname,
+                        ip=client_ip, proxy_hostname=proxy_hostname,
                         status=auth_result.status_code,
                         duration_ms=duration_ms,
                         auth_proxy=target.auth_proxy,
@@ -310,14 +303,13 @@ class EnhancedProxyHandler:
                         response_body=getattr(auth_result, 'body', b'').decode('utf-8', errors='ignore')[:500] if hasattr(auth_result, 'body') else "No body"
                     )
                     # Fire-and-forget logging for better performance
-                    log_response(auth_result.status_code, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname, auth_failure=True)
+                    log_response(auth_result.status_code, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname, auth_failure=True)
                     return auth_result
                 # auth_result contains user info to add as headers
                 request.state.auth_user = auth_result
                 log_info(
                     "Authentication successful - USER DETAILS",
-                    ip=client_ip,
-                    hostname=hostname,
+                    ip=client_ip, proxy_hostname=proxy_hostname,
                     user_id=auth_result.get("sub"),
                     username=auth_result.get("username"),
                     email=auth_result.get("email"),
@@ -360,8 +352,7 @@ class EnhancedProxyHandler:
                 log_warning(
                     "Proxy cannot handle route type",
                     route_type=matched_route.target_type.value,
-                    route_id=matched_route.route_id,
-                    hostname=hostname
+                    route_id=matched_route.route_id, proxy_hostname=proxy_hostname
                 ,
                     component="proxy_handler"
                 )
@@ -389,8 +380,7 @@ class EnhancedProxyHandler:
             # Log detailed request info before sending
             log_debug(
                 "Preparing proxy request",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 method=request.method,
                 target_url=target_url,
                 target_backend=target.target_url,
@@ -409,12 +399,11 @@ class EnhancedProxyHandler:
             )
             
             # DEBUG: Print backend connection attempt
-            log_debug(f"Attempting backend connection: {hostname} -> {target_url}", component="proxy_handler")
+            log_debug(f"Attempting backend connection: {proxy_hostname} -> {target_url}", component="proxy_handler")
             
             log_info(
                 "ATTEMPTING BACKEND CONNECTION - DETAILED DEBUG INFO",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 target_url=target_url,
                 target_backend_base=target.target_url,
                 request_method=request.method,
@@ -439,8 +428,7 @@ class EnhancedProxyHandler:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_info(
                 "Proxy request successful",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 method=request.method,
                 path=request.url.path,
                 target_url=target_url,
@@ -478,7 +466,7 @@ class EnhancedProxyHandler:
             
             # Log response
             # Fire-and-forget logging for better performance
-            log_response(response.status_code, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname, target_url=target_url)
+            log_response(response.status_code, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname, target_url=target_url)
             
             return response
             
@@ -486,8 +474,7 @@ class EnhancedProxyHandler:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_error(
                 "Failed to connect to upstream - returning 502 - CONNECTION REFUSED",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 target_url=target_url,
                 target_backend=target.target_url,
                 duration_ms=duration_ms,
@@ -507,7 +494,7 @@ class EnhancedProxyHandler:
                         "url": str(req.url) if 'req' in locals() else None,
                     },
                     "network_details": {
-                        "target_hostname": target.hostname,
+                        "target_hostname": target.proxy_hostname,
                         "backend_url_parsed": {
                             "scheme": target.target_url.split("://")[0] if "://" in target.target_url else "",
                             "netloc": target.target_url.split("://")[1].split("/")[0] if "://" in target.target_url else target.target_url
@@ -517,14 +504,13 @@ class EnhancedProxyHandler:
             )
             response = Response(content="Bad Gateway - Unable to connect to upstream server", status_code=502)
             # Fire-and-forget logging for better performance
-            log_response(502, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname)
+            log_response(502, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname)
             raise HTTPException(502, "Bad Gateway - Unable to connect to upstream server")
         except httpx.TimeoutException as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_error(
                 "Timeout connecting to upstream - returning 504",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 target_url=target_url,
                 target_backend=target.target_url,
                 timeout_config=str(self.client.timeout),
@@ -533,14 +519,13 @@ class EnhancedProxyHandler:
             )
             response = Response(content="Gateway Timeout - Upstream server timeout", status_code=504)
             # Fire-and-forget logging for better performance
-            log_response(504, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname)
+            log_response(504, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname)
             raise HTTPException(504, "Gateway Timeout - Upstream server timeout")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_error(
                 "Proxy error - returning 500",
-                ip=client_ip,
-                hostname=hostname,
+                ip=client_ip, proxy_hostname=proxy_hostname,
                 target_url=target_url,
                 target_backend=target.target_url if target else "unknown",
                 exception_type=type(e).__name__,
@@ -550,13 +535,13 @@ class EnhancedProxyHandler:
             )
             response = Response(content=f"Proxy error: {str(e)}", status_code=500)
             # Fire-and-forget logging for better performance
-            log_response(500, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname)
+            log_response(500, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname)
             raise HTTPException(500, f"Proxy error: {str(e)}")
     
     async def handle_websocket(self, websocket: WebSocket, path: str):
         """Handle WebSocket proxy connections."""
         # Extract hostname
-        hostname = websocket.headers.get("host", "").split(":")[0]
+        proxy_hostname = websocket.headers.get("host", "").split(":")[0]
         
         if not hostname:
             await websocket.close(code=1008, reason="No host header")
@@ -565,11 +550,11 @@ class EnhancedProxyHandler:
         # Lookup proxy target with caching
         target = await self._get_proxy_target_cached(hostname)
         if not target:
-            await websocket.close(code=1008, reason=f"No proxy target for {hostname}")
+            await websocket.close(code=1008, reason=f"No proxy target for {proxy_hostname}")
             return
         
         if not target.enabled:
-            await websocket.close(code=1008, reason=f"Proxy target {hostname} is disabled")
+            await websocket.close(code=1008, reason=f"Proxy target {proxy_hostname} is disabled")
             return
         
         # Build WebSocket URL
@@ -817,7 +802,7 @@ class EnhancedProxyHandler:
     async def _handle_url_route(self, request: Request, route, request_key: Optional[str] = None) -> Response:
         """Handle URL route by forwarding to the specified URL."""
         start_time = time.perf_counter()  # More accurate timing
-        hostname = request.headers.get("host", "").split(":")[0]
+        proxy_hostname = request.headers.get("host", "").split(":")[0]
         
         # Extract client IP using centralized function
         client_ip = get_real_client_ip(request)
@@ -899,7 +884,7 @@ class EnhancedProxyHandler:
             
             # Log the response
             # Fire-and-forget logging for better performance
-            log_response(response.status_code, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname, target_url=full_url)
+            log_response(response.status_code, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname, target_url=full_url)
             
             # Return the response
             return response
@@ -909,21 +894,21 @@ class EnhancedProxyHandler:
             log_error(f"Failed to connect to URL route {full_url}", component="proxy_handler")
             error_response = Response(content="Bad Gateway - Unable to connect to route target", status_code=502)
             # Fire-and-forget logging for better performance
-            log_response(502, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname, target_url=full_url)
+            log_response(502, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname, target_url=full_url)
             raise HTTPException(502, "Bad Gateway - Unable to connect to route target")
         except httpx.TimeoutException:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_error(f"Timeout connecting to URL route {full_url}", component="proxy_handler")
             error_response = Response(content="Gateway Timeout - Route target timeout", status_code=504)
             # Fire-and-forget logging for better performance
-            log_response(504, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname, target_url=full_url)
+            log_response(504, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname, target_url=full_url)
             raise HTTPException(504, "Gateway Timeout - Route target timeout")
         except Exception as e:
             duration_ms = (time.perf_counter() - start_time) * 1000
             log_error(f"URL route error: {e}", component="proxy_handler")
             error_response = Response(content=f"Route error: {str(e)}", status_code=500)
             # Fire-and-forget logging for better performance
-            log_response(500, duration_ms, trace_id=request_key, ip=client_ip, hostname=hostname, target_url=full_url)
+            log_response(500, duration_ms, trace_id=request_key, ip=client_ip, proxy_hostname=proxy_hostname, target_url=full_url)
             raise HTTPException(500, f"Route error: {str(e)}")
     
     async def close(self):
@@ -944,7 +929,7 @@ class EnhancedProxyHandler:
         headers = {
             "X-Original-URL": str(request.url),
             "X-Original-Method": request.method,
-            "X-Forwarded-Host": target.hostname,  # Pass the actual target hostname for resource validation
+            "X-Forwarded-Host": target.proxy_hostname,  # Pass the actual target hostname for resource validation
             "X-Forwarded-Proto": request.url.scheme,
             "X-Forwarded-For": client_ip,
             "X-Forwarded-Path": request.url.path,  # Pass the path for full resource URL construction
@@ -959,12 +944,11 @@ class EnhancedProxyHandler:
         # Log the headers being sent to auth service
         log_debug(
             "Sending auth verification request - DETAILED HEADERS",
-            ip=client_ip,
-            hostname=target.hostname,
+            ip=client_ip, proxy_hostname=target.proxy_hostname,
             api_url=api_url,
             forwarded_headers=headers,
             original_request_headers=dict(request.headers),
-            resource_uri_will_be=f"{request.url.scheme}://{target.hostname}"
+            resource_uri_will_be=f"{request.url.scheme}://{target.proxy_hostname}"
         )
         
         # Include auth cookie if present
@@ -977,14 +961,13 @@ class EnhancedProxyHandler:
         if "authorization" in request.headers:
             headers["Authorization"] = request.headers["authorization"]
             auth_header_preview = request.headers["authorization"][:20] + "..." if len(request.headers["authorization"]) > 20 else request.headers["authorization"]
-            log_debug(f"Including Authorization header: {auth_header_preview}", ip=client_ip, hostname=target.hostname, component="proxy_handler")
+            log_debug(f"Including Authorization header: {auth_header_preview}", ip=client_ip, proxy_hostname=target.proxy_hostname, component="proxy_handler")
         
         try:
             # Make auth verification request
             log_debug(
                 "Making auth verification request to OAuth server",
-                ip=client_ip,
-                hostname=target.hostname,
+                ip=client_ip, proxy_hostname=target.proxy_hostname,
                 api_url=api_url,
                 has_auth_header=bool(headers.get("Authorization")),
                 has_cookies=bool(cookies)
@@ -1000,8 +983,7 @@ class EnhancedProxyHandler:
             # Log the raw auth response for debugging
             log_debug(
                 "Received auth verification response - RAW RESPONSE DETAILS",
-                ip=client_ip,
-                hostname=target.hostname,
+                ip=client_ip, proxy_hostname=target.proxy_hostname,
                 auth_proxy=target.auth_proxy,
                 response_status=auth_response.status_code,
                 response_headers=dict(auth_response.headers),
@@ -1015,8 +997,7 @@ class EnhancedProxyHandler:
                     user_info = auth_response.json()
                     log_info(
                         "Auth verification successful - USER INFO RECEIVED",
-                        ip=client_ip,
-                        hostname=target.hostname,
+                        ip=client_ip, proxy_hostname=target.proxy_hostname,
                         auth_proxy=target.auth_proxy,
                         user_info=user_info,
                         user_id=user_info.get("sub"),
@@ -1028,8 +1009,7 @@ class EnhancedProxyHandler:
                 except json.JSONDecodeError as e:
                     log_error(
                         "Auth service returned invalid JSON - returning 503",
-                        ip=client_ip,
-                        hostname=target.hostname,
+                        ip=client_ip, proxy_hostname=target.proxy_hostname,
                         auth_proxy=target.auth_proxy,
                         response_status=auth_response.status_code,
                         response_body=auth_response.text[:200],  # First 200 chars
@@ -1045,8 +1025,7 @@ class EnhancedProxyHandler:
                     if username not in target.auth_required_users:
                         log_warning(
                             "User authorization failed - user not in allowed list",
-                            ip=client_ip,
-                            hostname=target.hostname,
+                            ip=client_ip, proxy_hostname=target.proxy_hostname,
                             username=username,
                             required_users=target.auth_required_users
                         ,
@@ -1062,8 +1041,7 @@ class EnhancedProxyHandler:
                     if not email_matches:
                         log_warning(
                             "Email authorization failed - email not in allowed patterns",
-                            ip=client_ip,
-                            hostname=target.hostname,
+                            ip=client_ip, proxy_hostname=target.proxy_hostname,
                             user_email=email,
                             required_email_patterns=target.auth_required_emails
                         ,
@@ -1079,8 +1057,7 @@ class EnhancedProxyHandler:
                     if not group_matches:
                         log_warning(
                             "Group authorization failed - user not in required groups",
-                            ip=client_ip,
-                            hostname=target.hostname,
+                            ip=client_ip, proxy_hostname=target.proxy_hostname,
                             user_groups=user_groups,
                             required_groups=target.auth_required_groups
                         ,
@@ -1096,8 +1073,7 @@ class EnhancedProxyHandler:
                 # Not authenticated - handle based on mode
                 log_warning(
                     "Auth verification failed - 401 Unauthorized from OAuth server",
-                    ip=client_ip,
-                    hostname=target.hostname,
+                    ip=client_ip, proxy_hostname=target.proxy_hostname,
                     auth_proxy=target.auth_proxy,
                     auth_mode=target.auth_mode,
                     response_body=auth_response.text[:200] if auth_response.text else "No body",
@@ -1107,15 +1083,15 @@ class EnhancedProxyHandler:
                 if target.auth_mode == "redirect":
                     # Redirect to auth proxy login with proxy hostname for per-proxy GitHub user checking
                     return_url = str(request.url)
-                    auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}&proxy_hostname={quote(target.hostname)}"
-                    log_info(f"Redirecting to auth login: {auth_login_url}", ip=client_ip, hostname=target.hostname, component="proxy_handler")
+                    auth_login_url = f"https://{target.auth_proxy}/login?return_url={quote(return_url)}&proxy_hostname={quote(target.proxy_hostname)}"
+                    log_info(f"Redirecting to auth login: {auth_login_url}", ip=client_ip, proxy_hostname=target.proxy_hostname, component="proxy_handler")
                     headers = {}
                     headers = self._add_custom_response_headers(headers, target)
                     return RedirectResponse(url=auth_login_url, status_code=302, headers=headers)
                 else:
                     # Return 401 Unauthorized with MCP-compliant headers (RFC 9728)
                     # Build resource metadata URL based on current host
-                    host = request.headers.get("host", target.hostname)
+                    host = request.headers.get("host", target.proxy_hostname)
                     proto = request.headers.get("x-forwarded-proto", "https")
                     resource_metadata_url = f"{proto}://{host}/.well-known/oauth-protected-resource"
                     auth_metadata_url = f"https://{target.auth_proxy}/.well-known/oauth-authorization-server"
@@ -1131,8 +1107,7 @@ class EnhancedProxyHandler:
                     www_authenticate_header = ', '.join(www_auth_params)
                     log_info(
                         "Returning 401 with MCP-compliant WWW-Authenticate header",
-                        ip=client_ip,
-                        hostname=target.hostname,
+                        ip=client_ip, proxy_hostname=target.proxy_hostname,
                         www_authenticate=www_authenticate_header,
                         resource_metadata_url=resource_metadata_url,
                         auth_metadata_url=auth_metadata_url
@@ -1167,15 +1142,14 @@ class EnhancedProxyHandler:
                         error_data = auth_response.json()
                         if error_data.get("detail", {}).get("error") == "invalid_audience":
                             is_audience_error = True
-                            error_detail = f"Token not valid for {target.hostname}. Please re-authenticate with this resource."
+                            error_detail = f"Token not valid for {target.proxy_hostname}. Please re-authenticate with this resource."
                     except:
                         pass
                 
                 # Log comprehensive error details
                 log_error(
                     "Auth service returned unexpected status - COMPREHENSIVE ERROR DETAILS",
-                    ip=client_ip,
-                    hostname=target.hostname,
+                    ip=client_ip, proxy_hostname=target.proxy_hostname,
                     auth_proxy=target.auth_proxy,
                     api_url=api_url,
                     response_status=auth_response.status_code,
@@ -1186,10 +1160,10 @@ class EnhancedProxyHandler:
                     parsed_error_data=error_data,
                     request_headers_sent=headers,
                     cookies_sent=bool(cookies),
-                    expected_resource_uri=f"{request.url.scheme}://{target.hostname}",
+                    expected_resource_uri=f"{request.url.scheme}://{target.proxy_hostname}",
                     debug_context={
                         "client_ip": client_ip,
-                        "hostname": target.hostname,
+                        "proxy_hostname": target.proxy_hostname,
                         "request_path": request.url.path,
                         "request_method": request.method,
                         "auth_mode": target.auth_mode
@@ -1202,8 +1176,7 @@ class EnhancedProxyHandler:
         except httpx.ConnectError as e:
             log_error(
                 "Failed to connect to auth service - CONNECTION ERROR",
-                ip=client_ip,
-                hostname=target.hostname,
+                ip=client_ip, proxy_hostname=target.proxy_hostname,
                 auth_proxy=target.auth_proxy,
                 api_url=api_url,
                 auth_mode=target.auth_mode,
@@ -1212,13 +1185,13 @@ class EnhancedProxyHandler:
                 connection_details={
                     "target_url": api_url,
                     "client_ip": client_ip,
-                    "hostname": target.hostname,
+                    "proxy_hostname": target.proxy_hostname,
                     "timeout_config": str(self.client.timeout)
                 }
             )
             if target.auth_mode == "passthrough":
                 # Continue without auth in passthrough mode
-                log_info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, hostname=target.hostname, component="proxy_handler")
+                log_info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, proxy_hostname=target.proxy_hostname, component="proxy_handler")
                 return {}
             headers = {}
             headers = self._add_custom_response_headers(headers, target)
@@ -1226,8 +1199,7 @@ class EnhancedProxyHandler:
         except httpx.TimeoutException as e:
             log_error(
                 "Timeout connecting to auth service - TIMEOUT ERROR",
-                ip=client_ip,
-                hostname=target.hostname,
+                ip=client_ip, proxy_hostname=target.proxy_hostname,
                 auth_proxy=target.auth_proxy,
                 api_url=api_url,
                 auth_mode=target.auth_mode,
@@ -1241,7 +1213,7 @@ class EnhancedProxyHandler:
             )
             if target.auth_mode == "passthrough":
                 # Continue without auth in passthrough mode
-                log_info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, hostname=target.hostname, component="proxy_handler")
+                log_info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, proxy_hostname=target.proxy_hostname, component="proxy_handler")
                 return {}
             headers = {}
             headers = self._add_custom_response_headers(headers, target)
@@ -1249,8 +1221,7 @@ class EnhancedProxyHandler:
         except Exception as e:
             log_error(
                 "Failed to verify auth - UNEXPECTED ERROR",
-                ip=client_ip,
-                hostname=target.hostname,
+                ip=client_ip, proxy_hostname=target.proxy_hostname,
                 auth_proxy=target.auth_proxy,
                 api_url=api_url,
                 auth_mode=target.auth_mode,
@@ -1259,7 +1230,7 @@ class EnhancedProxyHandler:
                 traceback=traceback.format_exc(),
                 request_context={
                     "client_ip": client_ip,
-                    "hostname": target.hostname,
+                    "proxy_hostname": target.proxy_hostname,
                     "method": request.method,
                     "path": request.url.path,
                     "query": str(request.url.query)
@@ -1267,7 +1238,7 @@ class EnhancedProxyHandler:
             )
             if target.auth_mode == "passthrough":
                 # Continue without auth in passthrough mode
-                log_info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, hostname=target.hostname, component="proxy_handler")
+                log_info(f"Passthrough mode enabled - continuing without auth", ip=client_ip, proxy_hostname=target.proxy_hostname, component="proxy_handler")
                 return {}
             headers = {}
             headers = self._add_custom_response_headers(headers, target)

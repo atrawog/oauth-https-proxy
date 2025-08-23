@@ -81,23 +81,23 @@ class RedisStreamPublisher:
             logger.error(f"[STREAM_PUBLISH] Failed to publish {event_type} event: {e}", exc_info=True)
             return None
     
-    async def publish_proxy_created(self, hostname: str, target_url: str, 
+    async def publish_proxy_created(self, proxy_hostname: str, target_url: str, 
                                    cert_name: Optional[str] = None,
                                    enable_http: bool = True,
                                    enable_https: bool = True) -> Optional[str]:
         """Publish a proxy_created event."""
         return await self.publish_event("proxy_created", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "target_url": target_url,
             "cert_name": cert_name or "",
             "enable_http": enable_http,
             "enable_https": enable_https
         })
     
-    async def publish_proxy_deleted(self, hostname: str) -> Optional[str]:
+    async def publish_proxy_deleted(self, proxy_hostname: str) -> Optional[str]:
         """Publish a proxy_deleted event."""
         return await self.publish_event("proxy_deleted", {
-            "hostname": hostname
+            "proxy_hostname": proxy_hostname
         })
     
     async def publish_certificate_ready(self, cert_name: str, domains: list,
@@ -109,34 +109,34 @@ class RedisStreamPublisher:
             "is_renewal": is_renewal
         })
     
-    async def publish_proxy_updated(self, hostname: str, changes: dict) -> Optional[str]:
+    async def publish_proxy_updated(self, proxy_hostname: str, changes: dict) -> Optional[str]:
         """Publish a proxy_updated event."""
         return await self.publish_event("proxy_updated", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "changes": changes
         })
     
-    async def publish_http_instance_created(self, hostname: str, port: int) -> Optional[str]:
+    async def publish_http_instance_created(self, proxy_hostname: str, port: int) -> Optional[str]:
         """Publish an http_instance_created event."""
         return await self.publish_event("http_instance_created", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "port": port
         })
     
-    async def publish_https_instance_created(self, hostname: str, port: int, 
+    async def publish_https_instance_created(self, proxy_hostname: str, port: int, 
                                             cert_name: str) -> Optional[str]:
         """Publish an https_instance_created event."""
         return await self.publish_event("https_instance_created", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "port": port,
             "cert_name": cert_name
         })
     
-    async def publish_instance_failed(self, hostname: str, instance_type: str, 
+    async def publish_instance_failed(self, proxy_hostname: str, instance_type: str, 
                                      error: str) -> Optional[str]:
         """Publish an instance_failed event."""
         return await self.publish_event("instance_failed", {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "instance_type": instance_type,
             "error": error
         })

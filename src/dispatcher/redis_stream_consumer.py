@@ -2,11 +2,16 @@
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any, Callable, Dict, List, Optional
 import redis.asyncio as redis_async
 from redis.exceptions import ResponseError
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
+
+# Set up Python standard logger for debugging
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.DEBUG)
 
 
 class RedisStreamConsumer:
@@ -23,7 +28,11 @@ class RedisStreamConsumer:
         self.redis_url = redis_url
         self.stream_key = "events:all:stream"  # Changed to use unified event stream
         self.group_name = group_name
-        self.consumer_name = f"dispatcher-{os.getpid()}"
+        # Use group-specific consumer name
+        if group_name == "workflow-orchestrator":
+            self.consumer_name = f"workflow-{os.getpid()}"
+        else:
+            self.consumer_name = f"dispatcher-{os.getpid()}"
         self.redis: Optional[redis_async.Redis] = None
         self.running = False
         
@@ -70,6 +79,7 @@ class RedisStreamConsumer:
             await self.initialize()
         
         self.running = True
+        logger.info(f"[STREAM_CONSUMER] Starting event consumption as {self.consumer_name} for group {self.group_name}")
         log_info(f"[STREAM_CONSUMER] Starting event consumption as {self.consumer_name}", component="stream_consumer")
         
         while self.running:
@@ -87,8 +97,11 @@ class RedisStreamConsumer:
                 if not messages:
                     continue
                 
+                logger.debug(f"[STREAM_CONSUMER] Received {len(messages)} message batches")
+                
                 # Process messages
                 for stream_name, stream_messages in messages:
+                    logger.debug(f"[STREAM_CONSUMER] Processing {len(stream_messages)} messages from stream {stream_name}")
                     for message_id, data in stream_messages:
                         try:
                             # Parse event data

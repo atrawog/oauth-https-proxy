@@ -31,7 +31,7 @@ class RequestLogger:
     async def log_request(
         self,
         ip: str,
-        hostname: str,
+        proxy_hostname: str,
         method: str,
         path: str,
         query: Optional[str] = None,
@@ -88,8 +88,8 @@ class RequestLogger:
         await self.redis.expire(f"idx:req:fqdn:{client_fqdn}", self.ttl_seconds)
         
         # Index by hostname
-        await self.redis.zadd(f"idx:req:host:{hostname}", {request_key: timestamp})
-        await self.redis.expire(f"idx:req:host:{hostname}", self.ttl_seconds)
+        await self.redis.zadd(f"idx:req:host:{proxy_hostname}", {request_key: timestamp})
+        await self.redis.expire(f"idx:req:host:{proxy_hostname}", self.ttl_seconds)
         
         # Index by user if authenticated
         if auth_user:
@@ -137,7 +137,7 @@ class RequestLogger:
         
         # Track unique IPs
         await self.redis.pfadd(f"stats:unique_ips:{date_hour}", ip)
-        await self.redis.pfadd(f"stats:unique_ips:{hostname}:{date_hour}", ip)
+        await self.redis.pfadd(f"stats:unique_ips:{proxy_hostname}:{date_hour}", ip)
         
         # Return the request key for linking with response
         return request_key
@@ -233,10 +233,10 @@ class RequestLogger:
             # Track p50, p95, p99 in time windows
             await self._update_response_time_stats(proxy_hostname, duration_ms)
     
-    async def _update_response_time_stats(self, hostname: str, duration_ms: float):
+    async def _update_response_time_stats(self, proxy_hostname: str, duration_ms: float):
         """Update response time statistics for monitoring."""
         # Use a sliding window for response times
-        window_key = f"stats:response_times:{hostname}"
+        window_key = f"stats:response_times:{proxy_hostname}"
         timestamp = time.time()
         
         # Add to sorted set with timestamp as score
@@ -271,12 +271,12 @@ class RequestLogger:
         data = [r for r in results if r]
         return sorted(data, key=lambda x: float(x.get('timestamp', 0)), reverse=True)
     
-    async def query_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
+    async def query_by_hostname(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
         """Query requests by hostname."""
         min_timestamp = time.time() - (hours * 3600)
         
         request_keys = await self.redis.zrangebyscore(
-            f"idx:req:host:{hostname}",
+            f"idx:req:host:{proxy_hostname}",
             min_timestamp,
             "+inf",
             start=0,
@@ -358,7 +358,7 @@ class RequestLogger:
         
         # Get unique IP counts
         if hostname:
-            unique_ips = await self.redis.pfcount(f"stats:unique_ips:{hostname}:{current_hour}")
+            unique_ips = await self.redis.pfcount(f"stats:unique_ips:{proxy_hostname}:{current_hour}")
             stats["unique_ips"][hostname] = unique_ips
         else:
             # Get total unique IPs

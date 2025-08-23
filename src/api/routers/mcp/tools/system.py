@@ -97,7 +97,7 @@ class SystemTools(BaseMCPTools):
                 proxy_exports = []
                 for proxy in proxies:
                     proxy_export = {
-                        "hostname": proxy.hostname,
+                        "proxy_hostname": proxy.proxy_hostname,
                         "target_url": proxy.target_url,
                         "enable_http": proxy.enable_http,
                         "enable_https": proxy.enable_https,
@@ -107,12 +107,12 @@ class SystemTools(BaseMCPTools):
                     }
                     
                     # Include auth config
-                    auth_config = await self.storage.get_proxy_auth_config(proxy.hostname)
+                    auth_config = await self.storage.get_proxy_auth_config(proxy.proxy_hostname)
                     if auth_config:
                         proxy_export["auth_config"] = auth_config
                     
                     # Include resource metadata
-                    resource_metadata = await self.storage.get_protected_resource_metadata(proxy.hostname)
+                    resource_metadata = await self.storage.get_protected_resource_metadata(proxy.proxy_hostname)
                     if resource_metadata:
                         proxy_export["resource_metadata"] = resource_metadata
                     
@@ -293,7 +293,7 @@ class SystemTools(BaseMCPTools):
                 if "proxies" in config:
                     for proxy_data in config["proxies"]:
                         try:
-                            existing = await self.storage.get_proxy_target(proxy_data["hostname"])
+                            existing = await self.storage.get_proxy_target(proxy_data["proxy_hostname"])
                             if existing and not force:
                                 results["skipped"]["proxies"] += 1
                                 continue
@@ -303,14 +303,14 @@ class SystemTools(BaseMCPTools):
                             # Import auth config if present
                             if "auth_config" in proxy_data:
                                 await self.storage.set_proxy_auth_config(
-                                    proxy_data["hostname"],
+                                    proxy_data["proxy_hostname"],
                                     proxy_data["auth_config"]
                                 )
                             
                             # Import resource metadata if present
                             if "resource_metadata" in proxy_data:
                                 await self.storage.set_protected_resource_metadata(
-                                    proxy_data["hostname"],
+                                    proxy_data["proxy_hostname"],
                                     proxy_data["resource_metadata"]
                                 )
                             

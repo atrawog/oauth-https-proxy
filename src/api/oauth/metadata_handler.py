@@ -34,14 +34,14 @@ class OAuthMetadataHandler:
         """
         # Use provided hostname or get from headers
         if not hostname:
-            hostname = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{self.settings.base_domain}")
+            proxy_hostname = request.headers.get("x-forwarded-host") or request.headers.get("host", f"auth.{self.settings.base_domain}")
             if ":" in hostname:
-                hostname = hostname.split(":")[0]
+                proxy_hostname=proxy_hostname.split(":")[0]
         
         # Get protocol from headers
         proto = request.headers.get("x-forwarded-proto") or request.url.scheme
         
-        return f"{proto}://{hostname}"
+        return f"{proto}://{proxy_hostname}"
     
     async def get_authorization_server_metadata(self, request: Request, hostname: Optional[str] = None) -> Dict[str, Any]:
         """Get OAuth authorization server metadata, optionally customized per proxy.
@@ -57,9 +57,9 @@ class OAuthMetadataHandler:
         
         # If no hostname provided, try to extract from headers
         if not hostname:
-            hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+            proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
             if not hostname:
-                hostname = request.headers.get("host", "").split(":")[0]
+                proxy_hostname = request.headers.get("host", "").split(":")[0]
         
         # Default metadata
         api_url = self.get_external_url(request, hostname)
@@ -91,7 +91,7 @@ class OAuthMetadataHandler:
             try:
                 proxy_target = self.storage.get_proxy_target(hostname)
                 if proxy_target and proxy_target.oauth_server_override_defaults:
-                    log_info(f"Using proxy-specific OAuth server config for {hostname}")
+                    log_info(f"Using proxy-specific OAuth server config for {proxy_hostname}")
                     
                     # Override with proxy-specific configuration
                     if proxy_target.oauth_server_issuer:
@@ -128,21 +128,20 @@ class OAuthMetadataHandler:
                     if proxy_target.oauth_server_custom_metadata:
                         metadata.update(proxy_target.oauth_server_custom_metadata)
                     
-                    log_debug(f"OAuth server metadata customized for {hostname}")
+                    log_debug(f"OAuth server metadata customized for {proxy_hostname}")
             except Exception as e:
-                log_error(f"Failed to get proxy-specific OAuth config for {hostname}: {e}")
+                log_error(f"Failed to get proxy-specific OAuth config for {proxy_hostname}: {e}")
                 # Fall back to defaults on error
         
         log_info(
             "OAuth authorization server metadata requested",
-            ip=client_ip,
-            hostname=hostname,
+            ip=client_ip, proxy_hostname=proxy_hostname,
             issuer=metadata.get("issuer")
         )
         
         return metadata
     
-    async def get_protected_resource_metadata(self, request: Request, hostname: str) -> Dict[str, Any]:
+    async def get_protected_resource_metadata(self, request: Request, proxy_hostname: str) -> Dict[str, Any]:
         """Get OAuth protected resource metadata for a specific proxy.
         
         Args:
@@ -157,7 +156,7 @@ class OAuthMetadataHandler:
         """
         client_ip = get_real_client_ip(request)
         
-        log_info(f"Protected resource metadata requested for {hostname} from {client_ip}")
+        log_info(f"Protected resource metadata requested for {proxy_hostname} from {client_ip}")
         
         if not self.storage:
             raise HTTPException(500, "Storage not available")
@@ -165,17 +164,17 @@ class OAuthMetadataHandler:
         # Get proxy target
         target = self.storage.get_proxy_target(hostname)
         if not target:
-            log_error(f"No proxy target configured for {hostname}")
-            raise HTTPException(404, f"No proxy target configured for {hostname}")
+            log_error(f"No proxy target configured for {proxy_hostname}")
+            raise HTTPException(404, f"No proxy target configured for {proxy_hostname}")
         
         # Check if protected resource metadata is configured
         if not target.resource_endpoint:
-            log_warning(f"Protected resource metadata not configured for {hostname}")
+            log_warning(f"Protected resource metadata not configured for {proxy_hostname}")
             raise HTTPException(404, "Protected resource metadata not configured for this proxy")
         
         # Build resource URI
         proto = request.headers.get("x-forwarded-proto", "https")
-        resource_uri = f"{proto}://{hostname}{target.resource_endpoint}"
+        resource_uri = f"{proto}://{proxy_hostname}{target.resource_endpoint}"
         
         # Get authorization server URL - can be custom per proxy
         auth_servers = []
@@ -214,6 +213,6 @@ class OAuthMetadataHandler:
         if target.resource_custom_metadata:
             metadata.update(target.resource_custom_metadata)
         
-        log_info(f"Protected resource metadata served for {hostname}")
+        log_info(f"Protected resource metadata served for {proxy_hostname}")
         
         return metadata

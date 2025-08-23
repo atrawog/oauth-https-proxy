@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator, field_serializer
 
 class ProxyTarget(BaseModel):
     """Proxy target configuration."""
-    hostname: str
+    proxy_hostname: str
     target_url: str
     cert_name: Optional[str] = None
     owner_token_hash: str
@@ -93,7 +93,7 @@ class ProxyTarget(BaseModel):
 
 class ProxyTargetRequest(BaseModel):
     """Request model for creating proxy target."""
-    hostname: str
+    proxy_hostname: str
     target_url: str
     cert_email: Optional[str] = None
     acme_directory_url: Optional[str] = None
@@ -103,14 +103,14 @@ class ProxyTargetRequest(BaseModel):
     custom_headers: Optional[Dict[str, str]] = None
     custom_response_headers: Optional[Dict[str, str]] = None
     
-    @field_validator('hostname')
+    @field_validator('proxy_hostname')
     @classmethod
-    def validate_hostname(cls, v: str) -> str:
+    def validate_proxy_hostname(cls, v: str) -> str:
         v = v.strip()
         if not v or not '.' in v:
-            raise ValueError('Invalid hostname format')
+            raise ValueError('Invalid proxy_hostname format')
         if v.startswith('.') or v.endswith('.'):
-            raise ValueError('Hostname cannot start or end with a dot')
+            raise ValueError('proxy_hostname cannot start or end with a dot')
         return v.lower()
     
     @field_validator('target_url')
@@ -338,7 +338,7 @@ class ProxyOAuthServerConfig(BaseModel):
 # Default proxy configurations that should always exist
 DEFAULT_PROXIES = [
     {
-        "hostname": "localhost",
+        "proxy_hostname": "localhost",
         "target_url": "http://127.0.0.1:9000",
         "cert_name": "",
         "enabled": True,

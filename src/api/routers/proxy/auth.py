@@ -8,7 +8,6 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_proxy_owner
 from src.proxy.models import ProxyAuthConfig
 
 logger = logging.getLogger(__name__)
@@ -27,20 +26,20 @@ def create_auth_router(async_storage):
     """
     router = APIRouter()
     
-    @router.post("/{hostname}/auth")
+    @router.post("/{proxy_hostname}/auth")
     async def configure_proxy_auth(
         req: Request,
-        hostname: str,
+        proxy_hostname: str,
         config: ProxyAuthConfig,
-        _=Depends(require_proxy_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Configure unified auth for a proxy target - owner only."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Validate auth proxy exists
         if config.auth_proxy:
@@ -63,7 +62,7 @@ def create_auth_router(async_storage):
         target.auth_excluded_paths = config.excluded_paths
         
         # Store updated target
-        success = await async_storage.store_proxy_target(hostname, target)
+        success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
@@ -80,22 +79,22 @@ def create_auth_router(async_storage):
                 target_value="auth",  # Route to auth service, not hostname
                 priority=90,  # High priority but below system routes
                 enabled=True,
-                description=f"OAuth metadata for {hostname}",
+                description=f"OAuth metadata for {proxy_hostname}",
                 owner_token_hash=target.owner_token_hash
             )
             
             # Store the route
             await async_storage.store_route(oauth_route)
-            logger.info(f"Created OAuth metadata route {route_id} for {hostname}")
+            logger.info(f"Created OAuth metadata route {route_id} for {proxy_hostname}")
             
             # Add to proxy's enabled routes if using selective mode
             if target.route_mode == "selective":
                 if route_id not in target.enabled_routes:
                     target.enabled_routes.append(route_id)
-                    await async_storage.store_proxy_target(hostname, target)
-                    logger.info(f"Added route {route_id} to enabled routes for {hostname}")
+                    await async_storage.store_proxy_target(proxy_hostname, target)
+                    logger.info(f"Added route {route_id} to enabled routes for {proxy_hostname}")
         
-        logger.info(f"Auth configured for proxy {hostname}: enabled={config.enabled}")
+        logger.info(f"Auth configured for proxy {proxy_hostname}: enabled={config.enabled}")
         
         # No need to clear cache or recreate instances - proxy reads fresh from Redis on each request
         # The proxy handler's get_proxy_target() call will get the updated auth config immediately
@@ -103,19 +102,19 @@ def create_auth_router(async_storage):
         return {"status": "Auth configured", "proxy_target": target}
     
     
-    @router.delete("/{hostname}/auth")
+    @router.delete("/{proxy_hostname}/auth")
     async def remove_proxy_auth(
         req: Request,
-        hostname: str,
-        _=Depends(require_proxy_owner)
+        proxy_hostname: str,
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Disable auth protection for a proxy target - owner only."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Disable auth
         target.auth_enabled = False
@@ -125,7 +124,7 @@ def create_auth_router(async_storage):
         target.auth_required_groups = None
         
         # Store updated target
-        success = await async_storage.store_proxy_target(hostname, target)
+        success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
@@ -134,7 +133,7 @@ def create_auth_router(async_storage):
         route = await async_storage.get_route(route_id)
         if route:
             await async_storage.delete_route(route_id)
-        logger.info(f"Auth disabled for proxy {hostname}")
+        logger.info(f"Auth disabled for proxy {proxy_hostname}")
         
         # No need to clear cache or recreate instances - proxy reads fresh from Redis on each request
         # The proxy handler's get_proxy_target() call will get the updated auth config immediately
@@ -142,18 +141,18 @@ def create_auth_router(async_storage):
         return {"status": "Auth protection removed", "proxy_target": target}
     
     
-    @router.get("/{hostname}/auth")
+    @router.get("/{proxy_hostname}/auth")
     async def get_proxy_auth_config(
         req: Request,
-        hostname: str
+        proxy_hostname: str
     ):
         """Get auth configuration for a proxy target."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Return auth configuration
         return {

@@ -198,7 +198,7 @@ class OAuthStatusRouter:
         
         # Proxy integration endpoints
         self.router.get("/proxies", response_model=Dict)(self.list_proxy_oauth_status)
-        self.router.get("/proxies/{hostname}/sessions", response_model=Dict)(self.list_proxy_sessions)
+        self.router.get("/proxies/{proxy_hostname}/sessions", response_model=Dict)(self.list_proxy_sessions)
     
     async def list_clients(
         self,
@@ -368,7 +368,7 @@ class OAuthStatusRouter:
                 if proxy.auth_enabled and proxy.auth_proxy:
                     # Check if any sessions for this client accessed this proxy
                     proxy_associations.append({
-                        "hostname": proxy.hostname,
+                        "proxy_hostname": proxy.proxy_hostname,
                         "auth_enabled": proxy.auth_enabled,
                         "auth_mode": proxy.auth_mode,
                         "active_sessions": 0  # TODO: Count active sessions
@@ -797,7 +797,7 @@ class OAuthStatusRouter:
             auth_proxy = None
             proxies = self.storage.list_proxy_targets()
             for proxy in proxies:
-                if proxy.hostname.startswith("auth."):
+                if proxy.proxy_hostname.startswith("auth."):
                     auth_proxy = proxy
                     break
             
@@ -893,7 +893,7 @@ class OAuthStatusRouter:
                 checks=checks,
                 last_successful_auth=last_auth_time,
                 auth_proxy={
-                    "hostname": auth_proxy.hostname if auth_proxy else None,
+                    "proxy_hostname": auth_proxy.hostname if auth_proxy else None,
                     "status": "active" if auth_proxy and auth_proxy.enabled else "inactive",
                     "certificate_valid": bool(auth_proxy.cert_name) if auth_proxy else False
                 } if auth_proxy else {}
@@ -915,7 +915,7 @@ class OAuthStatusRouter:
                     auth_enabled_count += 1
                 
                 proxy_status = {
-                    "hostname": proxy.hostname,
+                    "proxy_hostname": proxy.proxy_hostname,
                     "auth_enabled": proxy.auth_enabled,
                     "auth_mode": proxy.auth_mode if proxy.auth_enabled else None,
                     "auth_proxy": proxy.auth_proxy if proxy.auth_enabled else None,
@@ -942,11 +942,11 @@ class OAuthStatusRouter:
             logger.error(f"Error listing proxy OAuth status: {e}")
             raise HTTPException(500, f"Failed to list proxy OAuth status: {str(e)}")
     
-    async def list_proxy_sessions(self, hostname: str) -> Dict:
+    async def list_proxy_sessions(self, proxy_hostname: str) -> Dict:
         """List active sessions for a specific proxy."""
         # TODO: Implement when session tracking is available
         return {
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "sessions": [],
             "total_sessions": 0
         }

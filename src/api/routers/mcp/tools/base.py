@@ -129,8 +129,7 @@ class BaseMCPTools:
             trace_id: Trace ID for correlation
         """
         await self.event_publisher.publish_workflow_event(
-            event_type=event_type,
-            hostname=hostname,
+            event_type=event_type, proxy_hostname=proxy_hostname,
             data=data or {},
             trace_id=trace_id
         )

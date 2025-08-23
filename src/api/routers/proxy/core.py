@@ -15,7 +15,6 @@ import io
 from tabulate import tabulate
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_proxy_owner
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
 
@@ -41,7 +40,7 @@ def create_core_router(storage, cert_manager):
         req: Request,
         request: ProxyTargetRequest,
         background_tasks: BackgroundTasks,
-        auth: AuthResult = Depends(AuthDep())
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
         """Create a new proxy target with optional certificate generation."""
         # Get cert_email from auth or request
@@ -52,14 +51,14 @@ def create_core_router(storage, cert_manager):
         async_cert_manager = req.app.state.cert_manager if hasattr(req.app.state, 'cert_manager') else None
         
         # Check if target already exists
-        existing = await async_storage.get_proxy_target(request.hostname)
+        existing = await async_storage.get_proxy_target(request.proxy_hostname)
         if existing:
-            raise HTTPException(409, f"Proxy target for {request.hostname} already exists")
+            raise HTTPException(409, f"Proxy target for {request.proxy_hostname} already exists")
         
         # Create proxy target - don't set cert_name yet
-        cert_name = f"proxy-{request.hostname.replace('.', '-')}"  # Pattern for checking
+        cert_name = f"proxy-{request.proxy_hostname.replace('.', '-')}"  # Pattern for checking
         target = ProxyTarget(
-            hostname=request.hostname,
+            proxy_hostname = request.proxy_hostname,
             target_url=request.target_url,
             cert_name=None,  # Will be set later if cert exists or created
             owner_token_hash=auth.token_hash,
@@ -73,7 +72,7 @@ def create_core_router(storage, cert_manager):
         )
         
         # Store proxy target
-        success = await async_storage.store_proxy_target(request.hostname, target)
+        success = await async_storage.store_proxy_target(request.proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to store proxy target")
         
@@ -90,7 +89,7 @@ def create_core_router(storage, cert_manager):
                 # Certificate already exists and is active - use it
                 cert_status = "existing"
                 actual_cert_name = cert_name
-                logger.info(f"Using existing certificate {cert_name} for {request.hostname}")
+                logger.info(f"Using existing certificate {cert_name} for {request.proxy_hostname}")
             else:
                 # No existing certificate - check if we should create one
                 acme_url = request.acme_directory_url
@@ -105,11 +104,11 @@ def create_core_router(storage, cert_manager):
                     email = request.cert_email if request.cert_email else cert_email
                     if not email:
                         # Rollback proxy creation since we can't create cert
-                        await async_storage.delete_proxy_target(request.hostname)
+                        await async_storage.delete_proxy_target(request.proxy_hostname)
                         raise HTTPException(400, "Certificate email required for HTTPS proxy")
                     
                     cert_request = CertificateRequest(
-                        domain=request.hostname,
+                        domain=request.proxy_hostname,
                         email=email,
                         cert_name=cert_name,
                         acme_directory_url=acme_url
@@ -119,7 +118,7 @@ def create_core_router(storage, cert_manager):
                     from src.certmanager.models import Certificate
                     cert = Certificate(
                         cert_name=cert_name,
-                        domains=[request.hostname],
+                        domains=[request.proxy_hostname],
                         email=email,
                         acme_directory_url=acme_url,
                         status="pending",
@@ -142,34 +141,37 @@ def create_core_router(storage, cert_manager):
                     )
                     cert_status = "Certificate generation started"
                     actual_cert_name = cert_name  # Will have cert soon
-                    logger.info(f"Started certificate generation for {request.hostname}")
+                    logger.info(f"Started certificate generation for {request.proxy_hostname}")
                 else:
                     # No cert exists and no ACME URL - disable HTTPS
-                    logger.warning(f"No certificate exists for {request.hostname} and no ACME URL provided - disabling HTTPS")
+                    logger.warning(f"No certificate exists for {request.proxy_hostname} and no ACME URL provided - disabling HTTPS")
                     target.enable_https = False
                     target.cert_name = None
                     # Update the stored proxy to reflect HTTPS disabled
-                    await async_storage.store_proxy_target(request.hostname, target)
+                    await async_storage.store_proxy_target(request.proxy_hostname, target)
                     cert_status = "https_disabled_no_cert"
         else:
-            logger.info(f"HTTPS disabled for {request.hostname}, skipping certificate generation")
+            logger.info(f"HTTPS disabled for {request.proxy_hostname}, skipping certificate generation")
         
         # Update cert_name in target if we have one
         if actual_cert_name:
             target.cert_name = actual_cert_name
-            await async_storage.store_proxy_target(request.hostname, target)
+            await async_storage.store_proxy_target(request.proxy_hostname, target)
         
-        # Use workflow orchestrator for complete instance creation
-        logger.info(f"Initiating workflow for proxy creation: {request.hostname}")
+        # Use workflow orchestrator for complete instance creation - NEW ARCHITECTURE ONLY!
+        from src.shared.logger import log_info, log_warning, log_error
+        log_info(f"Initiating workflow for proxy creation: {request.proxy_hostname}", 
+                component="proxy_api", proxy_hostname=request.proxy_hostname)
         try:
             from src.storage.redis_stream_publisher import RedisStreamPublisher
             
             redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
             publisher = RedisStreamPublisher(redis_url=redis_url)
+            # No initialize() needed - publisher connects on first publish
             
-            # Publish proxy_creation_requested to start the workflow
-            event_id = await publisher.publish_event("proxy_creation_requested", {
-                "hostname": request.hostname,
+            # Publish proxy_creation_requested to start the workflow - NO LEGACY EVENTS!
+            event_data = {
+                "proxy_hostname": request.proxy_hostname,  # Use consistent naming!
                 "target_url": request.target_url,
                 "enable_http": request.enable_http,
                 "enable_https": request.enable_https,
@@ -177,26 +179,33 @@ def create_core_router(storage, cert_manager):
                 "cert_name": actual_cert_name,
                 "owner_token_hash": auth.token_hash,
                 "created_by": auth.principal
-            })
+            }
+            
+            log_info(f"Publishing proxy_creation_requested event", 
+                    component="proxy_api", 
+                    proxy_hostname=request.proxy_hostname, 
+                    event_data=event_data)
+            
+            event_id = await publisher.publish_event("proxy_creation_requested", event_data)
             
             if event_id:
-                logger.info(f"Successfully initiated workflow with event {event_id} for {request.hostname}")
+                log_info(f"Successfully initiated workflow with event {event_id}", 
+                        component="proxy_api", 
+                        proxy_hostname=request.proxy_hostname, 
+                        event_id=event_id)
             else:
-                logger.warning(f"Failed to initiate workflow for {request.hostname}")
+                log_warning(f"Failed to initiate workflow", 
+                           component="proxy_api", 
+                           proxy_hostname=request.proxy_hostname)
                 
-            # Also publish the legacy proxy_created event for backward compatibility
-            # This can be removed once everything uses the workflow
-            await publisher.publish_proxy_created(
-                hostname=request.hostname,
-                target_url=request.target_url,
-                cert_name=actual_cert_name,
-                enable_http=request.enable_http,
-                enable_https=request.enable_https
-            )
+            # NO BACKWARD COMPATIBILITY - REMOVED legacy proxy_created event!
                 
             await publisher.close()
         except Exception as e:
-            logger.error(f"Failed to initiate workflow for {request.hostname}: {e}", exc_info=True)
+            log_error(f"Failed to initiate workflow: {e}", 
+                     component="proxy_api", 
+                     proxy_hostname=request.proxy_hostname, 
+                     error=str(e))
             
         return {
             "proxy_target": target,
@@ -269,7 +278,7 @@ def create_core_router(storage, cert_manager):
             cert_info = target.cert_name if target.cert_name else "no-cert"
             
             rows.append([
-                target.hostname,
+                target.proxy_hostname,
                 target.target_url,
                 status,
                 cert_info,
@@ -291,33 +300,33 @@ def create_core_router(storage, cert_manager):
         return PlainTextResponse(table, media_type="text/plain")
     
     
-    @router.get("/{hostname}")
+    @router.get("/{proxy_hostname}")
     async def get_proxy_target(
         request: Request,
-        hostname: str
+        proxy_hostname: str
     ):
         """Get specific proxy target details."""
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         return target
     
     
-    @router.put("/{hostname}")
+    @router.put("/{proxy_hostname}")
     async def update_proxy_target(
         request: Request,
-        hostname: str,
+        proxy_hostname: str,
         updates: ProxyTargetUpdate,
-        _=Depends(require_proxy_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Update proxy target configuration - owner only."""
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Apply updates
         if updates.target_url is not None:
@@ -336,54 +345,54 @@ def create_core_router(storage, cert_manager):
             target.custom_headers = updates.custom_headers
         
         # Store updated target
-        if not await async_storage.store_proxy_target(hostname, target):
+        if not await async_storage.store_proxy_target(proxy_hostname, target):
             raise HTTPException(500, "Failed to update proxy target")
         
         return target
     
     
-    @router.delete("/{hostname}")
+    @router.delete("/{proxy_hostname}")
     async def delete_proxy_target(
-    request: Request,
-    hostname: str,
+        request: Request,
+        proxy_hostname: str,
         delete_certificate: bool = False,
-        _=Depends(require_proxy_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Delete proxy target and optionally its certificate - owner only."""
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Delete proxy target
-        if not await async_storage.delete_proxy_target(hostname):
+        if not await async_storage.delete_proxy_target(proxy_hostname):
             raise HTTPException(500, "Failed to delete proxy target")
         
         # Publish to Redis Stream to trigger instance removal
-        logger.info(f"Publishing proxy_deleted event for {hostname}")
+        logger.info(f"Publishing proxy_deleted event for {proxy_hostname}")
         try:
             from src.async_storage.redis_stream_publisher import RedisStreamPublisher
             
             redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
             publisher = RedisStreamPublisher(redis_url=redis_url)
             
-            event_id = await publisher.publish_proxy_deleted(hostname=hostname)
+            event_id = await publisher.publish_proxy_deleted(proxy_hostname=proxy_hostname)
             
             if event_id:
-                logger.info(f"Successfully published proxy_deleted event {event_id} for {hostname}")
+                logger.info(f"Successfully published proxy_deleted event {event_id} for {proxy_hostname}")
             else:
-                logger.warning(f"Failed to publish proxy_deleted event for {hostname}")
+                logger.warning(f"Failed to publish proxy_deleted event for {proxy_hostname}")
                 
             await publisher.close()
         except Exception as e:
-            logger.error(f"Failed to publish proxy_deleted event for {hostname}: {e}", exc_info=True)
+            logger.error(f"Failed to publish proxy_deleted event for {proxy_hostname}: {e}", exc_info=True)
         
         # Optionally delete certificate
         if delete_certificate and target.cert_name:
             cert_manager.delete_certificate(target.cert_name)
         
-        return {"message": f"Proxy target {hostname} deleted successfully"}
+        return {"message": f"Proxy target {proxy_hostname} deleted successfully"}
     
     # Proxy auth configuration endpoints
     

@@ -307,8 +307,7 @@ class TokenTools(BaseMCPTools):
                 # Publish workflow events for cascaded deletions
                 for proxy in deleted_proxies:
                     await self.publish_workflow_event(
-                        event_type="proxy_deleted",
-                        hostname=proxy,
+                        event_type="proxy_deleted", proxy_hostname=proxy,
                         data={
                             "deleted_by": "mcp_token_cascade",
                             "session_id": session_id,

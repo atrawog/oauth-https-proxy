@@ -79,7 +79,7 @@ def create_ownership_router(async_storage) -> APIRouter:
             "proxy_count": len(proxies),
             "proxies": [
                 {
-                    "hostname": proxy.get('hostname', ''),
+                    "proxy_hostname": proxy.get('hostname', ''),
                     "target_url": proxy.get('target_url', ''),
                     "enabled": proxy.get('enabled', True),
                     "enable_https": proxy.get('enable_https', False),

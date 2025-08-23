@@ -16,7 +16,6 @@ from src.api.models import (
     AuthConfigTestResponse
 )
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_admin
 from src.api.pattern_matcher import PathPatternMatcher
 from src.api.unified_auth import invalidate_auth_cache
 
@@ -64,7 +63,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     async def create_auth_config(
         request: Request,
         config_request: AuthConfigRequest,
-        admin_info: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Create a new authentication configuration.
         
@@ -107,7 +106,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
             "priority": config_request.priority,
             "description": config_request.description,
             "enabled": config_request.enabled,
-            "created_by": admin_info.get("name", "ADMIN"),
+            "created_by": auth.principal or "ADMIN",
             "created_at": datetime.now(timezone.utc).isoformat()
         }
         
@@ -129,7 +128,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
                 "path_pattern": config_request.path_pattern,
                 "method": config_request.method,
                 "auth_type": config_request.auth_type,
-                "created_by": admin_info.get("name")
+                "created_by": auth.principal
             }
         )
         
@@ -193,7 +192,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
         request: Request,
         config_id: str,
         updates: AuthConfigRequest,
-        admin_info: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Update an existing authentication configuration."""
         storage = request.app.state.async_storage or async_storage
@@ -208,7 +207,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
         
         # Prepare updates
         update_data = updates.dict(exclude_unset=True)
-        update_data["updated_by"] = admin_info.get("name", "ADMIN")
+        update_data["updated_by"] = auth.principal or "ADMIN"
         
         # Update configuration
         success = await storage.update_auth_config(config_id, update_data)
@@ -226,7 +225,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
             extra={
                 "config_id": config_id,
                 "updates": list(update_data.keys()),
-                "updated_by": admin_info.get("name")
+                "updated_by": auth.principal
             }
         )
         
@@ -238,7 +237,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     async def delete_auth_config(
         request: Request,
         config_id: str,
-        admin_info: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Delete an authentication configuration.
         
@@ -270,7 +269,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
             extra={
                 "config_id": config_id,
                 "path_pattern": existing.get("path_pattern"),
-                "deleted_by": admin_info.get("name")
+                "deleted_by": auth.principal
             }
         )
         
@@ -334,7 +333,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     @router.post("/apply-defaults")
     async def apply_default_configs(
         request: Request,
-        admin_info: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Apply a sensible set of default authentication configurations.
         
@@ -441,7 +440,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
                 ).hexdigest()[:16]
                 
                 # Add metadata
-                config_data["created_by"] = admin_info.get("name", "ADMIN")
+                config_data["created_by"] = auth.principal or "ADMIN"
                 config_data["enabled"] = True
                 
                 # Store configuration
@@ -462,7 +461,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
     @router.delete("/cache/clear")
     async def clear_auth_cache(
         request: Request,
-        admin_info: dict = Depends(require_admin)
+        auth: AuthResult = Depends(AuthDep(admin=True))
     ):
         """Clear the authentication configuration cache.
         
@@ -480,7 +479,7 @@ def create_auth_config_router(async_storage) -> APIRouter:
             f"Cleared auth config cache",
             extra={
                 "redis_entries": redis_cleared,
-                "cleared_by": admin_info.get("name")
+                "cleared_by": auth.principal
             }
         )
         

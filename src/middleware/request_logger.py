@@ -46,11 +46,11 @@ class RequestLoggerMiddleware(BaseHTTPMiddleware):
         client_ip = get_real_client_ip(request)
         
         # Get hostname from headers
-        hostname = request.headers.get("x-forwarded-host", "")
+        proxy_hostname = request.headers.get("x-forwarded-host", "")
         if not hostname:
-            hostname = request.headers.get("host", "")
+            proxy_hostname = request.headers.get("host", "")
         if hostname:
-            hostname = hostname.split(":")[0]
+            proxy_hostname=proxy_hostname.split(":")[0]
         
         # Build request data
         method = request.method

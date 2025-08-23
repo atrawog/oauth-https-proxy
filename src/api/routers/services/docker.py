@@ -117,7 +117,7 @@ def create_docker_router(async_storage) -> APIRouter:
                 try:
                     proxy_hostname = f"{config.service_name}.{Config.BASE_DOMAIN}"
                     proxy_config = ProxyTarget(
-                        hostname=proxy_hostname,
+                        proxy_hostname = proxy_hostname,
                         target_url=f"http://{config.service_name}:{service_info.internal_port}",
                         cert_name=f"cert-{config.service_name}",
                         enabled=True,
@@ -129,7 +129,7 @@ def create_docker_router(async_storage) -> APIRouter:
                     
                     # Get async async_storage if available
                     async_storage = request.app.state.async_storage
-                    await async_storage.store_proxy_target(proxy_config.hostname, proxy_config)
+                    await async_storage.store_proxy_target(proxy_config.proxy_hostname, proxy_config)
                     response.proxy_created = True
                     response.warnings.append(f"Created proxy at {proxy_hostname}")
                     

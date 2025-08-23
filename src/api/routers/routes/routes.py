@@ -6,7 +6,6 @@ from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_route_owner
 from src.proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
 
 logger = logging.getLogger(__name__)
@@ -24,7 +23,6 @@ def create_router(async_storage):
     ):
         """Create a new routing rule."""
         async_storage = request.app.state.async_storage
-        auth.token_hash, auth.principal, _ = token_info
         
         # Generate unique route ID
         route_id = f"{route_request.path_pattern.replace('/', '-').strip('-')}-{uuid.uuid4().hex[:8]}"
@@ -150,7 +148,7 @@ def create_router(async_storage):
         request: Request,
         route_id: str,
         route_request: RouteUpdateRequest,
-        _=Depends(require_route_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="route_id"))
     ):
         """Update an existing route."""
         async_storage = request.app.state.async_storage
@@ -188,7 +186,7 @@ def create_router(async_storage):
     async def delete_route(
         request: Request,
         route_id: str,
-        _=Depends(require_route_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="route_id"))
     ):
         """Delete a route."""
         async_storage = request.app.state.async_storage

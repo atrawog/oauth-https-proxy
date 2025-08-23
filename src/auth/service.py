@@ -185,7 +185,7 @@ class FlexibleAuthService:
     async def check_proxy_auth(
         self,
         request: Request,
-        hostname: str,
+        proxy_hostname: str,
         path: str,
         credentials: Optional[HTTPAuthorizationCredentials] = None
     ) -> AuthResult:
@@ -217,13 +217,13 @@ class FlexibleAuthService:
             return AuthResult(
                 authenticated=False,
                 error="proxy_not_found",
-                error_description=f"No proxy configuration for {hostname}"
+                error_description=f"No proxy configuration for {proxy_hostname}"
             )
         
         # Check if auth is enabled for this proxy
-        logger.debug(f"Proxy {hostname}: auth_enabled={proxy_data.auth_enabled}")
+        logger.debug(f"Proxy {proxy_hostname}: auth_enabled={proxy_data.auth_enabled}")
         if not proxy_data.auth_enabled:
-            logger.debug(f"Auth not enabled for {hostname}, allowing anonymous access")
+            logger.debug(f"Auth not enabled for {proxy_hostname}, allowing anonymous access")
             return AuthResult(
                 authenticated=True,
                 auth_type="none",
@@ -242,7 +242,7 @@ class FlexibleAuthService:
         
         # Create ProxyAuthConfig from proxy data
         config = ProxyAuthConfig(
-            hostname=hostname,
+            proxy_hostname=proxy_hostname,
             auth_type="oauth" if proxy_data.auth_proxy else "bearer",
             oauth_allowed_users=proxy_data.auth_required_users,
             oauth_allowed_emails=proxy_data.auth_required_emails,

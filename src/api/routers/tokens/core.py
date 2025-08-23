@@ -234,8 +234,8 @@ def create_core_router(async_storage) -> APIRouter:
             # Delete owned proxies
             proxies = await async_storage.list_proxies_by_owner(token_data['hash'])
             for proxy in proxies:
-                await async_storage.delete_proxy_target(proxy.hostname)
-                log_info(f"Cascade deleted proxy: {proxy.hostname}", component="api.tokens")
+                await async_storage.delete_proxy_target(proxy.proxy_hostname)
+                log_info(f"Cascade deleted proxy: {proxy.proxy_hostname}", component="api.tokens")
         # Delete token
         result = await async_storage.delete_api_token_by_name(name)
         if not result:

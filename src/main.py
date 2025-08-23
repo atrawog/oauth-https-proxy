@@ -165,6 +165,14 @@ def create_asgi_app():
         # Start scheduler
         scheduler.start()
         
+        # Start workflow orchestrator
+        log_info("Starting workflow orchestrator in ASGI mode...", component="main")
+        if workflow_orchestrator:
+            await workflow_orchestrator.start()
+            log_info("✓ Workflow orchestrator started successfully", component="main")
+        else:
+            log_error("✗ No workflow orchestrator available to start!", component="main")
+        
         # For ASGI mode, we don't start the full server here
         log_info("ASGI app initialized and ready", component="main")
         
@@ -197,8 +205,10 @@ def create_asgi_app():
 
 async def run_server(config: Config) -> None:
     """Run the unified multi-instance server with async architecture."""
+    print("MAIN.PY: run_server() called", file=sys.stderr)
     # Initialize all components
     storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
+    print(f"MAIN.PY: Components initialized, workflow_orchestrator={workflow_orchestrator is not None}", file=sys.stderr)
     
     # Create FastAPI app
     log_info("Creating FastAPI app...", component="main")
@@ -222,7 +232,7 @@ async def run_server(config: Config) -> None:
     # The middleware will access it via app.state.async_storage
     log_info("Using AsyncLogStorage for request logging via Redis Streams", component="main")
     
-    # Initialize auth service
+    # Initialize auth service SYNCHRONOUSLY before router registration
     from src.auth import FlexibleAuthService
     from src.auth.defaults import initialize_auth_system
     oauth_components = getattr(app.state, 'oauth_components', None)
@@ -231,24 +241,24 @@ async def run_server(config: Config) -> None:
         oauth_components=oauth_components
     )
     
-    # Initialize auth in background
-    async def init_auth():
-        try:
-            await app.state.auth_service.initialize()
-            await initialize_auth_system(
-                async_components.async_storage,
-                load_defaults=True,
-                migrate=True
-            )
-            log_info("✓ Flexible auth system initialized", component="main")
-        except Exception as e:
-            log_error(f"Failed to initialize auth: {e}", component="main")
-    
-    asyncio.create_task(init_auth())
+    # Initialize auth SYNCHRONOUSLY - must complete before routers are registered
+    try:
+        await app.state.auth_service.initialize()
+        await initialize_auth_system(
+            async_components.async_storage,
+            load_defaults=True,
+            migrate=True
+        )
+        log_info("✓ Flexible auth system initialized BEFORE router registration", component="main")
+    except Exception as e:
+        log_error(f"Failed to initialize auth: {e}", component="main")
+        # Don't continue if auth fails to initialize
+        raise RuntimeError(f"Auth initialization failed: {e}")
     
     log_info("✓ All components attached to app state", component="main")
     
     # ========== REGISTER ALL ROUTERS USING UNIFIED REGISTRY ==========
+    # Note: Auth service is now initialized and ready for AuthDep to use
     log_info("=" * 60, component="main")
     log_info("STARTING UNIFIED ROUTER REGISTRATION", component="main")
     log_info("=" * 60, component="main")
@@ -320,7 +330,9 @@ async def run_server(config: Config) -> None:
         
         # Start workflow orchestrator AFTER dispatcher is set
         log_info("Starting workflow orchestrator...", component="main")
+        print("MAIN.PY: About to start workflow orchestrator", file=sys.stderr)
         await workflow_orchestrator.start()
+        print("MAIN.PY: workflow_orchestrator.start() completed", file=sys.stderr)
         log_info("Workflow orchestrator started successfully", component="main")
         
         log_info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)", component="main")
@@ -365,20 +377,25 @@ def main() -> None:
     This is used when running the server directly via `python run.py` or
     `python -m src.main`. It initializes everything and runs the full server.
     """
+    print("MAIN.PY: main() function called!", file=sys.stderr)
     try:
         # Get and validate configuration
         config = get_config()
+        print(f"MAIN.PY: Config loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}", file=sys.stderr)
         
         # Setup logging
 
         log_info("=" * 60, component="main")
+        print("MAIN.PY: After first log_info", file=sys.stderr)
         log_info("OAUTH HTTPS PROXY STARTING (CLI MODE)", component="main")
         log_info("=" * 60, component="main")
         log_info("Starting OAuth HTTPS Proxy via run.py...", component="main")
         log_info(f"Configuration loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}", component="main")
         
         # Run the server
+        print("MAIN.PY: About to call asyncio.run(run_server(config))", file=sys.stderr)
         asyncio.run(run_server(config))
+        print("MAIN.PY: asyncio.run() completed", file=sys.stderr)
         
     except KeyboardInterrupt:
         log_info("Shutting down OAuth HTTPS Proxy (interrupted)", component="main")

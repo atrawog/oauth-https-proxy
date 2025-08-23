@@ -25,7 +25,7 @@ class WorkflowTools(BaseMCPTools):
             }
         )
         async def quickstart(
-            hostname: str,
+            proxy_hostname: str,
             target_url: str,
             token: str,
             enable_auth: bool = False,
@@ -47,8 +47,7 @@ class WorkflowTools(BaseMCPTools):
             
             async with self.logger.trace_context(
                 "mcp_tool_quickstart",
-                session_id=session_id,
-                hostname=hostname
+                session_id=session_id, proxy_hostname=proxy_hostname
             ) as trace_id:
                 # Validate token
                 token_info = await self.validate_token(token)
@@ -59,7 +58,7 @@ class WorkflowTools(BaseMCPTools):
                     raise ValueError("Email required for certificate generation")
                 
                 results = {
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "target_url": target_url,
                     "steps": []
                 }
@@ -67,7 +66,7 @@ class WorkflowTools(BaseMCPTools):
                 # Step 1: Create proxy
                 try:
                     proxy_data = {
-                        "hostname": hostname,
+                        "proxy_hostname": proxy_hostname,
                         "target_url": target_url,
                         "enable_http": True,
                         "enable_https": True,
@@ -78,7 +77,7 @@ class WorkflowTools(BaseMCPTools):
                     results["steps"].append({
                         "step": "create_proxy",
                         "status": "success",
-                        "message": f"Proxy {hostname} created"
+                        "message": f"Proxy {proxy_hostname} created"
                     })
                 except Exception as e:
                     results["steps"].append({
@@ -90,12 +89,11 @@ class WorkflowTools(BaseMCPTools):
                 
                 # Step 2: Request certificate
                 try:
-                    cert_name = f"auto-{hostname}"
+                    cert_name = f"auto-{proxy_hostname}"
                     
                     # Publish workflow event for certificate
                     await self.publish_workflow_event(
-                        event_type="certificate_requested",
-                        hostname=hostname,
+                        event_type="certificate_requested", proxy_hostname=proxy_hostname,
                         data={
                             "cert_name": cert_name,
                             "domains": [hostname],
@@ -144,8 +142,7 @@ class WorkflowTools(BaseMCPTools):
                 
                 # Publish workflow event
                 await self.publish_workflow_event(
-                    event_type="quickstart_completed",
-                    hostname=hostname,
+                    event_type="quickstart_completed", proxy_hostname=proxy_hostname,
                     data={
                         "target_url": target_url,
                         "auth_enabled": enable_auth,
@@ -165,7 +162,7 @@ class WorkflowTools(BaseMCPTools):
                 )
                 
                 results["status"] = "completed"
-                results["message"] = f"Proxy {hostname} setup completed"
+                results["message"] = f"Proxy {proxy_hostname} setup completed"
                 return results
         
         @self.mcp.tool(
@@ -265,8 +262,7 @@ class WorkflowTools(BaseMCPTools):
                 
                 # Publish workflow event
                 await self.publish_workflow_event(
-                    event_type="oauth_setup_completed",
-                    hostname=domain,
+                    event_type="oauth_setup_completed", proxy_hostname=domain,
                     data={
                         "routes_created": len([s for s in results["steps"] if s.get("path")]),
                         "key_generated": generate_key,
@@ -331,12 +327,12 @@ class WorkflowTools(BaseMCPTools):
                 if not hostname:
                     import os
                     base_domain = os.getenv("BASE_DOMAIN", "localhost")
-                    hostname = f"{name}.{base_domain}"
+                    proxy_hostname = f"{name}.{base_domain}"
                 
                 results = {
                     "name": name,
                     "image": image,
-                    "hostname": hostname,
+                    "proxy_hostname": proxy_hostname,
                     "steps": []
                 }
                 
@@ -380,7 +376,7 @@ class WorkflowTools(BaseMCPTools):
                 try:
                     target_url = f"http://{name}:{port}"
                     proxy_data = {
-                        "hostname": hostname,
+                        "proxy_hostname": proxy_hostname,
                         "target_url": target_url,
                         "enable_http": True,
                         "enable_https": True,
@@ -391,7 +387,7 @@ class WorkflowTools(BaseMCPTools):
                     results["steps"].append({
                         "step": "create_proxy",
                         "status": "success",
-                        "message": f"Proxy {hostname} -> {target_url} created"
+                        "message": f"Proxy {proxy_hostname} -> {target_url} created"
                     })
                     results["target_url"] = target_url
                 except Exception as e:
@@ -410,7 +406,7 @@ class WorkflowTools(BaseMCPTools):
                 )
                 
                 results["status"] = "completed"
-                results["message"] = f"App {name} created with proxy at {hostname}"
+                results["message"] = f"App {name} created with proxy at {proxy_hostname}"
                 return results
         
         @self.mcp.tool(
@@ -457,9 +453,9 @@ class WorkflowTools(BaseMCPTools):
                 for proxy in proxies:
                     owner_token = await self.storage.get_api_token_by_name(proxy.owner_token)
                     if not owner_token:
-                        results["orphaned_proxies"].append(proxy.hostname)
+                        results["orphaned_proxies"].append(proxy.proxy_hostname)
                         if not orphaned_only:
-                            await self.storage.delete_proxy_target(proxy.hostname)
+                            await self.storage.delete_proxy_target(proxy.proxy_hostname)
                 
                 # Find orphaned certificates
                 certs = await self.storage.list_certificates()

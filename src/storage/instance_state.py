@@ -36,7 +36,7 @@ class InstanceStateTracker:
                 decode_responses=True
             )
     
-    async def set_instance_state(self, hostname: str, state: InstanceState, 
+    async def set_instance_state(self, proxy_hostname: str, state: InstanceState, 
                                  details: Dict = None) -> bool:
         """
         Set the state of an instance.
@@ -53,13 +53,13 @@ class InstanceStateTracker:
             await self._ensure_connection()
             
             state_data = {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "state": state.value,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "details": details or {}
             }
             
-            key = f"instance:state:{hostname}"
+            key = f"instance:state:{proxy_hostname}"
             await self.redis.set(key, json.dumps(state_data))
             
             # Also track in a set for quick lookups
@@ -70,14 +70,14 @@ class InstanceStateTracker:
                 if other_state != state:
                     await self.redis.srem(f"instances:{other_state.value}", hostname)
             
-            logger.info(f"[STATE] Set {hostname} to {state.value}")
+            logger.info(f"[STATE] Set {proxy_hostname} to {state.value}")
             return True
             
         except Exception as e:
-            logger.error(f"[STATE] Failed to set state for {hostname}: {e}")
+            logger.error(f"[STATE] Failed to set state for {proxy_hostname}: {e}")
             return False
     
-    async def get_instance_state(self, hostname: str) -> Optional[Dict]:
+    async def get_instance_state(self, proxy_hostname: str) -> Optional[Dict]:
         """
         Get the current state of an instance.
         
@@ -90,7 +90,7 @@ class InstanceStateTracker:
         try:
             await self._ensure_connection()
             
-            key = f"instance:state:{hostname}"
+            key = f"instance:state:{proxy_hostname}"
             data = await self.redis.get(key)
             
             if data:
@@ -98,7 +98,7 @@ class InstanceStateTracker:
             return None
             
         except Exception as e:
-            logger.error(f"[STATE] Failed to get state for {hostname}: {e}")
+            logger.error(f"[STATE] Failed to get state for {proxy_hostname}: {e}")
             return None
     
     async def get_instances_by_state(self, state: InstanceState) -> List[str]:
@@ -109,7 +109,7 @@ class InstanceStateTracker:
             state: The state to query
             
         Returns:
-            List of hostnames in that state
+            List of proxy_hostnames in that state
         """
         try:
             await self._ensure_connection()
@@ -121,7 +121,7 @@ class InstanceStateTracker:
             logger.error(f"[STATE] Failed to get instances for state {state}: {e}")
             return []
     
-    async def set_pending_operation(self, hostname: str, operation: str, 
+    async def set_pending_operation(self, proxy_hostname: str, operation: str, 
                                    details: Dict = None) -> bool:
         """
         Track a pending operation for an instance.
@@ -138,23 +138,23 @@ class InstanceStateTracker:
             await self._ensure_connection()
             
             operation_data = {
-                "hostname": hostname,
+                "proxy_hostname": proxy_hostname,
                 "operation": operation,
                 "timestamp": datetime.now(timezone.utc).isoformat(),
                 "details": details or {}
             }
             
-            key = f"instance:pending:{hostname}"
+            key = f"instance:pending:{proxy_hostname}"
             await self.redis.set(key, json.dumps(operation_data), ex=3600)  # Expire after 1 hour
             
-            logger.info(f"[STATE] Set pending operation '{operation}' for {hostname}")
+            logger.info(f"[STATE] Set pending operation '{operation}' for {proxy_hostname}")
             return True
             
         except Exception as e:
-            logger.error(f"[STATE] Failed to set pending operation for {hostname}: {e}")
+            logger.error(f"[STATE] Failed to set pending operation for {proxy_hostname}: {e}")
             return False
     
-    async def get_pending_operation(self, hostname: str) -> Optional[Dict]:
+    async def get_pending_operation(self, proxy_hostname: str) -> Optional[Dict]:
         """
         Get pending operation for an instance.
         
@@ -167,7 +167,7 @@ class InstanceStateTracker:
         try:
             await self._ensure_connection()
             
-            key = f"instance:pending:{hostname}"
+            key = f"instance:pending:{proxy_hostname}"
             data = await self.redis.get(key)
             
             if data:
@@ -175,10 +175,10 @@ class InstanceStateTracker:
             return None
             
         except Exception as e:
-            logger.error(f"[STATE] Failed to get pending operation for {hostname}: {e}")
+            logger.error(f"[STATE] Failed to get pending operation for {proxy_hostname}: {e}")
             return None
     
-    async def clear_pending_operation(self, hostname: str) -> bool:
+    async def clear_pending_operation(self, proxy_hostname: str) -> bool:
         """
         Clear pending operation for an instance.
         
@@ -191,14 +191,14 @@ class InstanceStateTracker:
         try:
             await self._ensure_connection()
             
-            key = f"instance:pending:{hostname}"
+            key = f"instance:pending:{proxy_hostname}"
             await self.redis.delete(key)
             
-            logger.info(f"[STATE] Cleared pending operation for {hostname}")
+            logger.info(f"[STATE] Cleared pending operation for {proxy_hostname}")
             return True
             
         except Exception as e:
-            logger.error(f"[STATE] Failed to clear pending operation for {hostname}: {e}")
+            logger.error(f"[STATE] Failed to clear pending operation for {proxy_hostname}: {e}")
             return False
     
     async def close(self):

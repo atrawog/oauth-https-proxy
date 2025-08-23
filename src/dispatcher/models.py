@@ -15,7 +15,7 @@ class DomainService:
     ssl_context: Optional[ssl.SSLContext] = None
     
     def __repr__(self):
-        return (f"DomainService(hostname={self.hostname}, "
+        return (f"DomainService(proxy_hostname={self.hostname}, "
                 f"api={self.is_api_service}, "
                 f"http={self.internal_http_port}, "
                 f"https={self.internal_https_port})")

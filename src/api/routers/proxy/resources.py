@@ -7,7 +7,6 @@ import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 
 from src.auth import AuthDep, AuthResult
-from src.api.auth import require_proxy_owner
 from src.proxy.models import ProxyResourceConfig
 
 logger = logging.getLogger(__name__)
@@ -26,20 +25,20 @@ def create_resources_router(async_storage):
     """
     router = APIRouter()
     
-    @router.post("/{hostname}/resource")
+    @router.post("/{proxy_hostname}/resource")
     async def configure_proxy_resource(
         req: Request,
-        hostname: str,
+        proxy_hostname: str,
         config: ProxyResourceConfig,
-        _=Depends(require_proxy_owner)
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Configure protected resource metadata for a proxy target - owner only."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Update resource metadata fields directly on target
         target.resource_endpoint = config.endpoint
@@ -59,27 +58,27 @@ def create_resources_router(async_storage):
             target.custom_response_headers["X-HackerOne-Research"] = config.hacker_one_research_header
         
         # Store updated target
-        success = await async_storage.store_proxy_target(hostname, target)
+        success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
-        logger.info(f"Protected resource metadata configured for proxy {hostname}")
+        logger.info(f"Protected resource metadata configured for proxy {proxy_hostname}")
         
         return {"status": "Protected resource metadata configured", "proxy_target": target}
     
     
-    @router.get("/{hostname}/resource")
+    @router.get("/{proxy_hostname}/resource")
     async def get_proxy_resource_config(
         req: Request,
-        hostname: str
+        proxy_hostname: str
     ):
         """Get protected resource metadata configuration for a proxy target."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         if not target.resource_endpoint:
             return {
@@ -102,19 +101,19 @@ def create_resources_router(async_storage):
         }
     
     
-    @router.delete("/{hostname}/resource")
+    @router.delete("/{proxy_hostname}/resource")
     async def remove_proxy_resource(
         req: Request,
-        hostname: str,
-        _=Depends(require_proxy_owner)
+        proxy_hostname: str,
+        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
         """Remove protected resource metadata from a proxy target - owner only."""
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
-        target = await async_storage.get_proxy_target(hostname)
+        target = await async_storage.get_proxy_target(proxy_hostname)
         if not target:
-            raise HTTPException(404, f"Proxy target {hostname} not found")
+            raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
         # Remove resource metadata fields
         target.resource_endpoint = None
@@ -128,11 +127,11 @@ def create_resources_router(async_storage):
         target.resource_custom_metadata = None
         
         # Store updated target
-        success = await async_storage.store_proxy_target(hostname, target)
+        success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
-        logger.info(f"Protected resource metadata removed for proxy {hostname}")
+        logger.info(f"Protected resource metadata removed for proxy {proxy_hostname}")
         
         return {"status": "Protected resource metadata removed", "proxy_target": target}
     

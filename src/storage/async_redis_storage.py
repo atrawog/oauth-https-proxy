@@ -514,33 +514,33 @@ class AsyncRedisStorage:
             return False
     
     # Proxy Target operations
-    async def store_proxy_target(self, hostname: str, target: ProxyTarget) -> bool:
+    async def store_proxy_target(self, proxy_hostname: str, target: ProxyTarget) -> bool:
         """Store proxy target configuration."""
         try:
-            key = f"proxy:{hostname}"
+            key = f"proxy:{proxy_hostname}"
             return await self.redis_client.set(key, target.json())
         except RedisError as e:
             log_error(f"Failed to store proxy target: {e}", component="redis_storage", error=e)
             return False
     
-    async def get_proxy_target(self, hostname: str) -> Optional[ProxyTarget]:
+    async def get_proxy_target(self, proxy_hostname: str) -> Optional[ProxyTarget]:
         """Get proxy target configuration."""
         try:
-            key = f"proxy:{hostname}"
+            key = f"proxy:{proxy_hostname}"
             value = await self.redis_client.get(key)
             if value:
                 # Decode bytes to string if needed
                 if isinstance(value, bytes):
                     value = value.decode('utf-8')
-                log_trace(f"Parsing proxy data for {hostname}: {value[:100]}", component="redis_storage")
+                log_trace(f"Parsing proxy data for {proxy_hostname}: {value[:100]}", component="redis_storage")
                 parsed = ProxyTarget.parse_raw(value)
-                log_trace(f"Successfully parsed proxy target for {hostname}", component="redis_storage")
+                log_trace(f"Successfully parsed proxy target for {proxy_hostname}", component="redis_storage")
                 return parsed
             else:
                 log_warning(f"No data found for key {key}", component="redis_storage")
             return None
         except (RedisError, json.JSONDecodeError) as e:
-            log_error(f"Failed to get proxy target for {hostname}: {e}", exc_info=True)
+            log_error(f"Failed to get proxy target for {proxy_hostname}: {e}", exc_info=True)
             return None
     
     async def list_proxy_targets(self) -> List[ProxyTarget]:
@@ -559,24 +559,24 @@ class AsyncRedisStorage:
                 if ":client:" in key or key == "proxy:events:stream":
                     log_trace(f"Skipping non-proxy key: {key}", component="redis_storage")
                     continue
-                hostname = key.split(":", 1)[1]
-                log_trace(f"Getting proxy target for hostname: {hostname}", component="redis_storage")
-                target = await self.get_proxy_target(hostname)
+                proxy_hostname = key.split(":", 1)[1]
+                log_trace(f"Getting proxy target for hostname: {proxy_hostname}", component="redis_storage")
+                target = await self.get_proxy_target(proxy_hostname)
                 if target:
                     targets.append(target)
-                    log_trace(f"Added proxy target: {hostname}", component="redis_storage")
+                    log_trace(f"Added proxy target: {proxy_hostname}", component="redis_storage")
                 else:
-                    log_error(f"Could not get proxy target for {hostname} - get_proxy_target returned None", component="redis_storage")
+                    log_error(f"Could not get proxy target for {proxy_hostname} - get_proxy_target returned None", component="redis_storage")
             log_trace(f"list_proxy_targets: scanned {key_count} keys, found {len(targets)} proxy targets", component="redis_storage")
             return targets
         except RedisError as e:
             log_error(f"Failed to list proxy targets: {e}", component="redis_storage", error=e)
             return []
     
-    async def delete_proxy_target(self, hostname: str) -> bool:
+    async def delete_proxy_target(self, proxy_hostname: str) -> bool:
         """Delete proxy target."""
         try:
-            key = f"proxy:{hostname}"
+            key = f"proxy:{proxy_hostname}"
             return bool(await self.redis_client.delete(key))
         except RedisError as e:
             log_error(f"Failed to delete proxy target: {e}", component="redis_storage", error=e)
@@ -594,10 +594,10 @@ class AsyncRedisStorage:
             log_error(f"Failed to get targets by owner: {e}", component="redis_storage", error=e)
             return []
     
-    async def update_proxy_target(self, hostname: str, updates) -> bool:
+    async def update_proxy_target(self, proxy_hostname: str, updates) -> bool:
         """Update proxy target with partial data."""
         try:
-            target = await self.get_proxy_target(hostname)
+            target = await self.get_proxy_target(proxy_hostname)
             if not target:
                 return False
             
@@ -605,7 +605,7 @@ class AsyncRedisStorage:
             for field, value in updates.dict(exclude_unset=True).items():
                 setattr(target, field, value)
             
-            return await self.store_proxy_target(hostname, target)
+            return await self.store_proxy_target(proxy_hostname, target)
         except Exception as e:
             log_error(f"Failed to update proxy target: {e}", component="redis_storage", error=e)
             return False
@@ -783,10 +783,10 @@ class AsyncRedisStorage:
             existing_count = 0
             
             for proxy_dict in DEFAULT_PROXIES:
-                hostname = proxy_dict["hostname"]
+                proxy_hostname = proxy_dict["proxy_hostname"]
                 
                 # Check if this proxy already exists
-                if await self.get_proxy_target(hostname):
+                if await self.get_proxy_target(proxy_hostname):
                     existing_count += 1
                     continue
                 
@@ -795,11 +795,11 @@ class AsyncRedisStorage:
                 
                 # Create the missing default proxy
                 proxy = ProxyTarget(**proxy_dict)
-                if await self.store_proxy_target(hostname, proxy):
-                    log_info(f"Created missing default proxy: {hostname}", component="redis_storage")
+                if await self.store_proxy_target(proxy_hostname, proxy):
+                    log_info(f"Created missing default proxy: {proxy_hostname}", component="redis_storage")
                     created_count += 1
                 else:
-                    log_error(f"Failed to create default proxy: {hostname}", component="redis_storage")
+                    log_error(f"Failed to create default proxy: {proxy_hostname}", component="redis_storage")
             
             if created_count > 0:
                 log_info(f"Created {created_count} missing default proxies", component="redis_storage")
@@ -900,7 +900,7 @@ class AsyncRedisStorage:
             return []
     
     async def list_proxy_names_by_owner(self, owner_token_hash: str) -> List[str]:
-        """List proxy hostnames owned by a specific token."""
+        """List proxy proxy_hostnames owned by a specific token."""
         try:
             names = []
             async for key in self.redis_client.scan_iter(match="proxy:*"):
@@ -911,7 +911,7 @@ class AsyncRedisStorage:
                 if proxy_data:
                     proxy_dict = json.loads(proxy_data)
                     if proxy_dict.get('owner_token_hash') == owner_token_hash:
-                        names.append(proxy_dict.get('hostname', ''))
+                        names.append(proxy_dict.get('proxy_hostname', ''))
             return names
         except Exception as e:
             log_error(f"Failed to list proxy names by owner: {e}", component="redis_storage", error=e)
@@ -1127,7 +1127,7 @@ class AsyncRedisStorage:
             return await self.log_storage.get_logs_by_ip(ip, hours, limit)
         return []
     
-    async def get_logs_by_hostname(self, hostname: str, hours: int = 24, limit: int = 100) -> list:
+    async def get_logs_by_hostname(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> list:
         """Get logs by hostname."""
         if not hasattr(self, 'log_storage') or not self.log_storage:
             await self.initialize_logging()
@@ -1136,7 +1136,7 @@ class AsyncRedisStorage:
             return await self.log_storage.get_logs_by_hostname(hostname, hours, limit)
         return []
     
-    async def get_logs_by_proxy(self, hostname: str, hours: int = 24, limit: int = 100) -> list:
+    async def get_logs_by_proxy(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> list:
         """Get logs by proxy hostname."""
         if not hasattr(self, 'log_storage') or not self.log_storage:
             await self.initialize_logging()

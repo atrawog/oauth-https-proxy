@@ -36,7 +36,7 @@ class MCPEventPublisher:
     async def publish_workflow_event(
         self,
         event_type: str,
-        hostname: str,
+        proxy_hostname: str,
         data: Dict[str, Any],
         trace_id: Optional[str] = None
     ) -> str:
@@ -53,7 +53,7 @@ class MCPEventPublisher:
         """
         event_data = {
             "event_type": event_type,
-            "hostname": hostname,
+            "proxy_hostname": proxy_hostname,
             "data": json.dumps(data),
             "timestamp": str(time.time()),
             "source": "mcp"
@@ -67,7 +67,7 @@ class MCPEventPublisher:
 
         # Log the event publication
         await self.logger.debug(
-            f"Published workflow event: {event_type} for {hostname}",
+            f"Published workflow event: {event_type} for {proxy_hostname}",
             event_id=event_id,
             trace_id=trace_id
         )

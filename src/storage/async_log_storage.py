@@ -202,7 +202,7 @@ class AsyncLogStorage:
                             'path': 'path',
                             'user': 'user_id',
                             'ip': 'client_ip',
-                            'hostname': 'proxy_hostname',
+                            'proxy_hostname': 'proxy_hostname',
                             'component': 'component',
                             'level': 'level',
                             'error': 'error'
@@ -438,7 +438,7 @@ class AsyncLogStorage:
                     stats['errors_by_hour'][hour_time.strftime('%Y-%m-%d %H:00')] = hour_errors
             
             # Get unique visitors (approximate with HyperLogLog)
-            # This would need to aggregate across all hostnames
+            # This would need to aggregate across all proxy_hostnames
             # For now, return a placeholder
             stats['unique_visitors'] = len(set())  # Would use PFCOUNT
             

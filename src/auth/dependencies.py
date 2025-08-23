@@ -73,11 +73,19 @@ class AuthDep:
         Raises:
             HTTPException: If authentication fails
         """
+        # Debug logging
+        import sys
+        print(f"AuthDep called: has_credentials={credentials is not None}, auth_type={self.auth_type}", file=sys.stderr)
+        if credentials:
+            print(f"AuthDep credentials preview: {credentials.credentials[:20]}...", file=sys.stderr)
+        
         # Get auth service from app state
         auth_service = None
         if hasattr(request.app.state, 'auth_service'):
             auth_service = request.app.state.auth_service
+            logger.debug(f"AuthDep: Found auth_service in app.state, type={type(auth_service).__name__}")
         else:
+            logger.debug("AuthDep: No auth_service in app.state, creating new one")
             # Try to create auth service from storage
             storage = None
             if hasattr(request.app.state, 'async_storage'):
@@ -100,6 +108,7 @@ class AuthDep:
         
         # Check authentication
         if self.auth_type:
+            print(f"AuthDep: Using specified auth_type={self.auth_type}", file=sys.stderr)
             # Use specified auth type
             from .models import AuthConfig
             config = AuthConfig(
@@ -122,6 +131,7 @@ class AuthDep:
                 resource_id=resource_id
             )
         else:
+            print(f"AuthDep: Using endpoint configuration for path={request.url.path}", file=sys.stderr)
             # Use endpoint configuration
             result = await auth_service.check_endpoint_auth(
                 request=request,
@@ -129,6 +139,7 @@ class AuthDep:
                 method=request.method,
                 credentials=credentials
             )
+            print(f"AuthDep: check_endpoint_auth returned authenticated={result.authenticated}, principal={result.principal}", file=sys.stderr)
         
         # Handle failed authentication
         if not result.authenticated:

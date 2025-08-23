@@ -73,11 +73,11 @@ class EnhancedAsyncProxyHandler:
     async def handle_request(self, request: Request) -> Response:
         # Test: Make httpx request
         try:
-            hostname = request.headers.get("host", "").split(":")[0]
+            proxy_hostname = request.headers.get("host", "").split(":")[0]
             target = await self.storage.get_proxy_target(hostname)
             if not target:
                 return Response(
-                    content=f'{{"error": "No proxy target for {hostname}"}}'.encode(),
+                    content=f'{{"error": "No proxy target for {proxy_hostname}"}}'.encode(),
                     status_code=404,
                     headers={"Content-Type": "application/json"}
                 )
@@ -400,8 +400,7 @@ class EnhancedAsyncProxyHandler:
         """
         from ..proxy.routes import get_applicable_routes, RouteTargetType
         
-        self.logger.add_span(trace_id, "check_routes",
-                            hostname=target.hostname,
+        self.logger.add_span(trace_id, "check_routes", proxy_hostname=target.proxy_hostname,
                             path=str(request.url.path))
         
         applicable_routes = await get_applicable_routes(self.storage, target)
@@ -532,8 +531,7 @@ class EnhancedAsyncProxyHandler:
             # Check proxy auth
             proxy_hostname = request.headers.get("host", "").split(":")[0]
             result = await self.auth_service.check_proxy_auth(
-                request=request,
-                hostname=proxy_hostname,
+                request=request, proxy_hostname=proxy_hostname,
                 path=str(request.url.path),
                 credentials=credentials
             )

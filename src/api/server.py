@@ -12,7 +12,6 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.datastructures import URL, Headers, MutableHeaders
 
-from .auth import require_auth, require_auth_header, get_token_info_from_header
 from .models import HealthStatus
 from ..shared.client_ip import get_real_client_ip
 
@@ -29,7 +28,7 @@ class ProxyHeadersMiddleware(BaseHTTPMiddleware):
     """Middleware to handle X-Forwarded headers when behind a proxy.
     
     This ensures FastAPI generates correct redirect URLs using the external
-    hostname instead of internal Docker hostnames.
+    hostname instead of internal Docker proxy_hostnames.
     """
     
     async def dispatch(self, request: Request, call_next):
@@ -258,18 +257,18 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             logger.info(f"MCP metadata endpoint requested - IP: {client_ip}, Path: {request.url.path}")
             
             # Get hostname from request - check x-forwarded-host first (set by proxy)
-            hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+            proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
             if not hostname:
                 # Fallback to host header
-                hostname = request.headers.get("host", "").split(":")[0]
+                proxy_hostname = request.headers.get("host", "").split(":")[0]
             if not hostname:
                 logger.error(f"MCP metadata request failed - no host header, IP: {client_ip}")
                 raise HTTPException(404, "No host header")
             
-            logger.debug(f"MCP metadata hostname resolved: {hostname}")
+            logger.debug(f"MCP metadata hostname resolved: {proxy_hostname}")
             
             # Get proxy target
-            logger.info(f"Looking up proxy target for hostname: {hostname}")
+            logger.info(f"Looking up proxy target for hostname: {proxy_hostname}")
             target = request.app.state.storage.get_proxy_target(hostname)
             logger.info(f"Got proxy target: {target}")
             if not target:
@@ -280,24 +279,24 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 except Exception:
                     pass
                 
-                logger.error(f"MCP metadata request failed - no proxy target configured for {hostname}")
-                raise HTTPException(404, f"No proxy target configured for {hostname}")
+                logger.error(f"MCP metadata request failed - no proxy target configured for {proxy_hostname}")
+                raise HTTPException(404, f"No proxy target configured for {proxy_hostname}")
             
-            logger.debug(f"MCP metadata proxy target found for {hostname}")
+            logger.debug(f"MCP metadata proxy target found for {proxy_hostname}")
             
             # Check if protected resource metadata is configured
             logger.info(f"Checking resource metadata - endpoint: {target.resource_endpoint}, scopes: {target.resource_scopes}")
             
             if not target.resource_endpoint:
-                logger.warning(f"Protected resource metadata request failed - not configured for proxy {hostname}")
+                logger.warning(f"Protected resource metadata request failed - not configured for proxy {proxy_hostname}")
                 raise HTTPException(404, "Protected resource metadata not configured for this proxy")
             
             # Build resource URI
             logger.info("Building resource URI")
             proto = request.headers.get("x-forwarded-proto", "https")
             resource_endpoint = target.resource_endpoint
-            logger.info(f"Protocol: {proto}, hostname: {hostname}, endpoint: {resource_endpoint}")
-            resource_uri = f"{proto}://{hostname}{resource_endpoint}"
+            logger.info(f"Protocol: {proto}, hostname: {proxy_hostname}, endpoint: {resource_endpoint}")
+            resource_uri = f"{proto}://{proxy_hostname}{resource_endpoint}"
             
             logger.debug(f"MCP metadata building resource URI: {resource_uri}")
             
@@ -344,7 +343,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 logger.info(f"Adding custom metadata: {target.resource_custom_metadata}")
                 metadata.update(target.resource_custom_metadata)
             
-            logger.info(f"MCP metadata endpoint responding successfully for {hostname}")
+            logger.info(f"MCP metadata endpoint responding successfully for {proxy_hostname}")
             
             return metadata
         

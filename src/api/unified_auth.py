@@ -19,15 +19,38 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 
 from .models import UnifiedAuthContext, EndpointAuthConfig
 from .pattern_matcher import PathPatternMatcher
-from .auth import (
-    get_current_token_info,
-    is_admin_token,
-    hash_token,
-    get_storage
-)
+# Auth module moved to src.auth - these functions now come from there or are reimplemented
 from ..shared.client_ip import get_real_client_ip
 
 logger = logging.getLogger(__name__)
+
+# Helper function to get token info using the new auth system
+async def get_current_token_info(request: Request, credentials: Optional[HTTPAuthorizationCredentials]) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """Get current token information using the new auth system.
+    
+    Returns:
+        Tuple of (token_hash, principal, cert_email)
+    """
+    if not credentials:
+        return None, None, None
+    
+    # Get auth service from app state
+    auth_service = getattr(request.app.state, 'auth_service', None)
+    if not auth_service:
+        logger.warning("Auth service not found in app state")
+        return None, None, None
+    
+    # Validate the token
+    validation = await auth_service.validate_bearer_token(credentials.credentials)
+    if not validation.valid:
+        return None, None, None
+    
+    # Get cert email from token data if available
+    cert_email = None
+    if validation.token_data:
+        cert_email = validation.token_data.get('cert_email')
+    
+    return validation.token_hash, validation.token_name, cert_email
 
 # Reuse the existing security scheme
 security = HTTPBearer(auto_error=False)

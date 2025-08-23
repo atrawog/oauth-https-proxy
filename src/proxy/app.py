@@ -11,7 +11,7 @@ from starlette.responses import Response, PlainTextResponse, JSONResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
-from .simple_async_handler import SimpleAsyncProxyHandler as EnhancedAsyncProxyHandler
+from .simple_async_handler import SimpleAsyncProxyHandler
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
@@ -129,9 +129,13 @@ class ProxyOnlyApp:
                     await self.handler_storage.initialize()
                     log_info("Async storage initialized on first request", component="proxy_app")
                 
-                # Create the proxy handler
-                self.proxy_handler = EnhancedAsyncProxyHandler(self.handler_storage, self.redis_clients)
-                log_info("Proxy handler created on first request", component="proxy_app")
+                # Create the proxy handler with hostname for route filtering
+                proxy_hostname = self.domains[0] if self.domains else None
+                self.proxy_handler = SimpleAsyncProxyHandler(
+                    self.handler_storage, 
+                    self.redis_clients, proxy_hostname=proxy_hostname
+                )
+                log_info(f"Proxy handler created on first request for {proxy_hostname}", component="proxy_app")
             except Exception as e:
                 log_error(f"Failed to initialize proxy handler: {e}", component="proxy_app")
                 import traceback
@@ -142,12 +146,12 @@ class ProxyOnlyApp:
         """Handle OAuth authorization server metadata requests."""
         try:
             # Get hostname from request
-            hostname = request.headers.get("host", "").split(":")[0]
-            if not hostname:
+            proxy_hostname = request.headers.get("host", "").split(":")[0]
+            if not proxy_hostname:  # Fixed: use correct variable name
                 return JSONResponse({"error": "No host header"}, status_code=404)
             
             # Get metadata using the handler
-            metadata = await self.metadata_handler.get_authorization_server_metadata(request, hostname)
+            metadata = await self.metadata_handler.get_authorization_server_metadata(request, proxy_hostname)  # Fixed: use correct variable name
             return JSONResponse(metadata)
         except Exception as e:
             log_error(f"OAuth metadata error: {e}", component="proxy_app")

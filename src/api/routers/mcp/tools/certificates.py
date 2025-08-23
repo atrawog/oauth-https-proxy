@@ -87,8 +87,7 @@ class CertificateTools(BaseMCPTools):
                 
                 # Publish workflow event for certificate creation
                 await self.publish_workflow_event(
-                    event_type="certificate_requested",
-                    hostname=domains[0],
+                    event_type="certificate_requested", proxy_hostname=domains[0],
                     data={
                         "cert_name": name,
                         "domains": domains,
@@ -274,7 +273,7 @@ class CertificateTools(BaseMCPTools):
                     for proxy in proxies:
                         if proxy.cert_name == name:
                             raise ValueError(
-                                f"Certificate '{name}' is in use by proxy '{proxy.hostname}'. "
+                                f"Certificate '{name}' is in use by proxy '{proxy.proxy_hostname}'. "
                                 "Use force=true to delete anyway."
                             )
                 
@@ -286,8 +285,7 @@ class CertificateTools(BaseMCPTools):
                 # Publish workflow event
                 domains = getattr(cert, 'domains', [""]) if hasattr(cert, 'domains') else cert.get('domains', [""]) if isinstance(cert, dict) else [""]
                 await self.publish_workflow_event(
-                    event_type="certificate_deleted",
-                    hostname=domains[0] if domains else "",
+                    event_type="certificate_deleted", proxy_hostname=domains[0] if domains else "",
                     data={
                         "cert_name": name,
                         "deleted_by": "mcp",
@@ -382,8 +380,7 @@ class CertificateTools(BaseMCPTools):
                 # Publish workflow event for renewal
                 domains = getattr(cert, 'domains', [""]) if hasattr(cert, 'domains') else cert.get('domains', [""]) if isinstance(cert, dict) else [""]
                 await self.publish_workflow_event(
-                    event_type="certificate_renewal_requested",
-                    hostname=domains[0] if domains else "",
+                    event_type="certificate_renewal_requested", proxy_hostname=domains[0] if domains else "",
                     data={
                         "cert_name": name,
                         "domains": domains,
@@ -477,8 +474,7 @@ class CertificateTools(BaseMCPTools):
                 # Publish workflow event for conversion
                 domains = getattr(cert, 'domains', [""]) if hasattr(cert, 'domains') else cert.get('domains', [""]) if isinstance(cert, dict) else [""]
                 await self.publish_workflow_event(
-                    event_type="certificate_convert_to_production",
-                    hostname=domains[0] if domains else "",
+                    event_type="certificate_convert_to_production", proxy_hostname=domains[0] if domains else "",
                     data={
                         "cert_name": name,
                         "domains": domains,
