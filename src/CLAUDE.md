@@ -10,11 +10,10 @@ This document describes the source code organization and technical implementatio
   ├── auth/        # Flexible authentication system
   ├── certmanager/ # Certificate management with async ACME
   ├── consumers/   # Redis Streams consumers
-  ├── dispatcher/  # Unified async dispatcher
+  ├── dispatcher/  # Unified async dispatcher with event handling
   ├── docker/      # Docker service management
   ├── logging/     # Logging system
   ├── middleware/  # Middleware components including PROXY protocol handler
-  ├── orchestration/# Workflow orchestrator for instance management
   ├── ports/       # Port management
   ├── proxy/       # Proxy management with async forwarding
   ├── shared/      # Shared utilities and config
@@ -50,8 +49,9 @@ The entire system has been migrated to a fully asynchronous architecture for imp
 - **Async Proxy Forwarding**: Streaming request/response handling
 - **Async Service Manager**: Docker operations via async python-on-whales
 - **Async Consumers**: Redis Streams consumers with async processing
-- **Unified Consumer**: Single consumer handles all workflow events
-- **Instance Workflow**: Async orchestration of proxy instances
+- **Unified Dispatcher**: Single component handles all events and routing
+- **Event-Driven Instances**: Direct proxy instance management via 3 simple events
+- **Non-Blocking Operations**: Background tasks using `asyncio.create_task()`
 - **Async Initialization**: Background tasks for service startup
 
 ### Async Benefits
@@ -98,6 +98,6 @@ For detailed documentation on specific components:
 - [Port Management](ports/CLAUDE.md) - Port allocation and control
 - [Storage Layer](storage/CLAUDE.md) - Redis storage schema
 - [Dispatcher](dispatcher/CLAUDE.md) - Unified dispatcher architecture
-- [Workflow Orchestration](orchestration/CLAUDE.md) - Event-driven lifecycle
+- [Unified Event System](dispatcher/CLAUDE.md#unified-event-architecture) - Simplified event-driven lifecycle
 - [Middleware](middleware/CLAUDE.md) - PROXY protocol and middleware
 - [Logging System](logging/CLAUDE.md) - Advanced logging architecture

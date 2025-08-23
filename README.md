@@ -1,10 +1,12 @@
 # OAuth HTTPS Proxy
 
-A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic ACME certificate management. This proxy provides secure, authenticated access to backend services with automatic SSL/TLS certificate provisioning.
+A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic ACME certificate management, and unified event-driven architecture. This proxy provides secure, authenticated access to backend services with automatic SSL/TLS certificate provisioning and zero-restart dynamic configuration.
 
 ## Features
 
 ### Core Proxy Capabilities
+- **Zero-Restart Architecture**: Dynamic proxy creation/deletion without service restarts
+- **Unified Event System**: Simple 3-event architecture (proxy_created, proxy_deleted, certificate_ready)
 - **Dynamic Reverse Proxy**: Route traffic to multiple backend services
 - **Automatic HTTPS**: Obtain and renew Let's Encrypt certificates via ACME
 - **OAuth 2.1 Integration**: Built-in OAuth server with GitHub authentication
@@ -14,6 +16,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Docker Service Management**: Create and manage Docker containers dynamically
 - **Port Management**: Comprehensive port allocation with bind address control
 - **Multi-Port Services**: Services can expose multiple ports with access controls
+- **Non-Blocking Operations**: All operations use async/await for maximum performance
 
 ### Security Features
 - **Flexible Authentication System**: Configure different auth types (none/bearer/admin/oauth) per endpoint, route, or proxy
@@ -451,9 +454,10 @@ just service-port-list <service>
 ```
 ┌─────────────────┐     ┌──────────────────────────┐
 │                 │     │                          │
-│  HTTP Client    │───▶│       API Service        │
+│  HTTP Client    │───▶│    Unified Dispatcher    │
 │                 │     │  - HTTP/HTTPS Gateway    │
-└─────────────────┘     │  - OAuth Server          │
+└─────────────────┘     │  - Event Handler         │
+                        │  - OAuth Server          │
                         │  - Certificate Manager   │
                         │  - Docker Manager        │
                         └────────────┬─────────────┘
@@ -461,9 +465,9 @@ just service-port-list <service>
                     ┌────────────────┼────────────────┐
                     │                │                │
               ┌─────▼────┐     ┌─────▼────┐    ┌────▼─────┐
-              │          │     │  Docker  │    │          │
-              │  Redis   │     │  Socket  │    │ Backend  │
-              │          │     │          │    │ Services │
+              │  Redis   │     │  Docker  │    │          │
+              │ Storage/ │     │  Socket  │    │ Backend  │
+              │  Events  │     │          │    │ Services │
               └──────────┘     └──────────┘    └──────────┘
 ```
 
@@ -487,8 +491,9 @@ The PROXY protocol handler:
 - Forwards clean traffic to port 9000 (Hypercorn)
 - ASGI middleware retrieves client IP and injects headers
 
-- **API Service**: All-in-one container with HTTP/HTTPS gateway, OAuth server, certificate manager, and Docker management
-- **Redis**: Stores all configuration, certificates, tokens, and session data
+- **Unified Dispatcher**: Single component handling HTTP/HTTPS gateway, event processing, OAuth server, and certificate management
+- **Redis Storage/Events**: Stores all configuration, certificates, tokens, and processes events via Redis Streams
+- **Event System**: Just 3 simple events (proxy_created, proxy_deleted, certificate_ready) for all dynamic operations
 - **Docker Socket**: Enables dynamic container creation and management
 - **Backend Services**: Your applications (protected resources, APIs, Docker containers)
 

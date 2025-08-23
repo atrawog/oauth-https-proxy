@@ -158,51 +158,33 @@ def create_core_router(storage, cert_manager):
             target.cert_name = actual_cert_name
             await async_storage.store_proxy_target(request.proxy_hostname, target)
         
-        # Use workflow orchestrator for complete instance creation - NEW ARCHITECTURE ONLY!
+        # UNIFIED ARCHITECTURE: Publish simple event
         from src.shared.logger import log_info, log_warning, log_error
-        log_info(f"Initiating workflow for proxy creation: {request.proxy_hostname}", 
+        log_info(f"Publishing proxy created event: {request.proxy_hostname}", 
                 component="proxy_api", proxy_hostname=request.proxy_hostname)
         try:
             from src.storage.redis_stream_publisher import RedisStreamPublisher
             
             redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
             publisher = RedisStreamPublisher(redis_url=redis_url)
-            # No initialize() needed - publisher connects on first publish
             
-            # Publish proxy_creation_requested to start the workflow - NO LEGACY EVENTS!
-            event_data = {
-                "proxy_hostname": request.proxy_hostname,  # Use consistent naming!
-                "target_url": request.target_url,
-                "enable_http": request.enable_http,
-                "enable_https": request.enable_https,
-                "cert_email": cert_email if cert_email else None,
-                "cert_name": actual_cert_name,
-                "owner_token_hash": auth.token_hash,
-                "created_by": auth.principal
-            }
-            
-            log_info(f"Publishing proxy_creation_requested event", 
-                    component="proxy_api", 
-                    proxy_hostname=request.proxy_hostname, 
-                    event_data=event_data)
-            
-            event_id = await publisher.publish_event("proxy_creation_requested", event_data)
+            # SIMPLIFIED: Just publish proxy_created - that's it!
+            event_id = await publisher.publish_event("proxy_created", {
+                "proxy_hostname": request.proxy_hostname
+            })
             
             if event_id:
-                log_info(f"Successfully initiated workflow with event {event_id}", 
+                log_info(f"✅ Published proxy_created event {event_id}", 
                         component="proxy_api", 
-                        proxy_hostname=request.proxy_hostname, 
-                        event_id=event_id)
+                        proxy_hostname=request.proxy_hostname)
             else:
-                log_warning(f"Failed to initiate workflow", 
+                log_warning(f"Failed to publish event", 
                            component="proxy_api", 
                            proxy_hostname=request.proxy_hostname)
                 
-            # NO BACKWARD COMPATIBILITY - REMOVED legacy proxy_created event!
-                
             await publisher.close()
         except Exception as e:
-            log_error(f"Failed to initiate workflow: {e}", 
+            log_error(f"Failed to publish event: {e}", 
                      component="proxy_api", 
                      proxy_hostname=request.proxy_hostname, 
                      error=str(e))
@@ -369,18 +351,21 @@ def create_core_router(storage, cert_manager):
         if not await async_storage.delete_proxy_target(proxy_hostname):
             raise HTTPException(500, "Failed to delete proxy target")
         
-        # Publish to Redis Stream to trigger instance removal
+        # UNIFIED ARCHITECTURE: Publish simple proxy_deleted event
         logger.info(f"Publishing proxy_deleted event for {proxy_hostname}")
         try:
-            from src.async_storage.redis_stream_publisher import RedisStreamPublisher
+            from src.storage.redis_stream_publisher import RedisStreamPublisher
             
             redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
             publisher = RedisStreamPublisher(redis_url=redis_url)
             
-            event_id = await publisher.publish_proxy_deleted(proxy_hostname=proxy_hostname)
+            # SIMPLIFIED: Just publish proxy_deleted
+            event_id = await publisher.publish_event("proxy_deleted", {
+                "proxy_hostname": proxy_hostname
+            })
             
             if event_id:
-                logger.info(f"Successfully published proxy_deleted event {event_id} for {proxy_hostname}")
+                logger.info(f"✅ Published proxy_deleted event {event_id} for {proxy_hostname}")
             else:
                 logger.warning(f"Failed to publish proxy_deleted event for {proxy_hostname}")
                 

@@ -1,11 +1,14 @@
 """Route models and management for HTTP request routing."""
 
 import json
+import logging
 from datetime import datetime, timezone
 from typing import Dict, List, Optional, Union, TYPE_CHECKING, Any
 from enum import Enum
 from pydantic import BaseModel, Field, field_validator, ValidationInfo
 import re
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .models import ProxyTarget
@@ -280,6 +283,10 @@ async def get_applicable_routes_async(async_storage, proxy_config: 'ProxyTarget'
     
     # Load all routes from storage
     all_routes = []
+    if not async_storage or not hasattr(async_storage, 'redis_client') or not async_storage.redis_client:
+        logger.warning("No async Redis client available for loading routes")
+        return []
+    
     async for key in async_storage.redis_client.scan_iter(match="route:*", count=100):
         # Skip priority and unique index keys
         if key.startswith("route:priority:") or key.startswith("route:unique:"):
@@ -316,6 +323,10 @@ def get_applicable_routes(storage, proxy_config: 'ProxyTarget') -> List[Route]:
     """Get routes applicable to a specific proxy based on its configuration and scope (sync version)."""
     # Load all routes from storage
     all_routes = []
+    if not storage or not hasattr(storage, 'redis_client') or not storage.redis_client:
+        logger.warning("No Redis client available for loading routes")
+        return []
+    
     for key in storage.redis_client.scan_iter(match="route:*"):
         # Skip priority and unique index keys
         if key.startswith("route:priority:") or key.startswith("route:unique:"):

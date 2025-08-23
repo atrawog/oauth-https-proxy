@@ -13,7 +13,6 @@ from .dispatcher import UnifiedMultiInstanceServer
 from .api.server import create_api_app
 from .api.async_init import init_async_components
 from .api.routers.registry import register_all_routers
-from .orchestration.instance_workflow import InstanceWorkflowOrchestrator
 from .docker.async_manager import AsyncDockerManager
 from .certmanager.async_manager import AsyncCertificateManager
 
@@ -24,14 +23,13 @@ manager: Optional[CertificateManager] = None
 https_server: Optional[HTTPSServer] = None
 scheduler: Optional[CertificateScheduler] = None
 proxy_handler: Optional[ProxyHandler] = None
-workflow_orchestrator: Optional[InstanceWorkflowOrchestrator] = None
 
 
 async def initialize_components(config: Config) -> tuple:
     """Initialize all system components with async architecture.
     
     Returns:
-        Tuple of (storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components)
+        Tuple of (storage, manager, scheduler, proxy_handler, async_components, https_server)
     """
     # Initialize storage with Redis URL
     redis_url = config.get_redis_url_with_password()
@@ -57,17 +55,6 @@ async def initialize_components(config: Config) -> tuple:
     # Initialize proxy handler
     proxy_handler = ProxyHandler(storage)
     
-    # Initialize workflow orchestrator
-    log_info("Creating InstanceWorkflowOrchestrator...", component="main")
-    workflow_orchestrator = InstanceWorkflowOrchestrator(
-        redis_url=redis_url,
-        storage=storage,
-        cert_manager=manager,
-        dispatcher=None,  # Will be set later when dispatcher is created
-        async_components=async_components
-    )
-    log_info(f"InstanceWorkflowOrchestrator created: {workflow_orchestrator}", component="main")
-    
     # Initialize default routes
     storage.initialize_default_routes()
     
@@ -78,7 +65,7 @@ async def initialize_components(config: Config) -> tuple:
     
     log_info("All components initialized successfully", component="main")
     
-    return storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server
+    return storage, manager, scheduler, proxy_handler, async_components, https_server
 
 
 def create_asgi_app():
@@ -104,7 +91,7 @@ def create_asgi_app():
         log_info("Starting OAuth HTTPS Proxy (ASGI mode)", component="main")
         
         # Initialize all components
-        storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
+        storage, manager, scheduler, proxy_handler, async_components, https_server = await initialize_components(config)
         
         # Create base API app
         # Note: We don't use create_api_app here to avoid circular dependencies
@@ -116,7 +103,6 @@ def create_asgi_app():
         app.state.scheduler = scheduler
         app.state.https_server = https_server
         app.state.proxy_handler = proxy_handler
-        app.state.workflow_orchestrator = workflow_orchestrator
         
         # Attach async components
         app.state.async_components = async_components
@@ -165,14 +151,6 @@ def create_asgi_app():
         # Start scheduler
         scheduler.start()
         
-        # Start workflow orchestrator
-        log_info("Starting workflow orchestrator in ASGI mode...", component="main")
-        if workflow_orchestrator:
-            await workflow_orchestrator.start()
-            log_info("✓ Workflow orchestrator started successfully", component="main")
-        else:
-            log_error("✗ No workflow orchestrator available to start!", component="main")
-        
         # For ASGI mode, we don't start the full server here
         log_info("ASGI app initialized and ready", component="main")
         
@@ -183,8 +161,6 @@ def create_asgi_app():
         scheduler.stop()
         if proxy_handler:
             await proxy_handler.close()
-        if workflow_orchestrator:
-            await workflow_orchestrator.close()
         await async_components.shutdown()
     
     # Create the FastAPI app with lifespan
@@ -205,10 +181,8 @@ def create_asgi_app():
 
 async def run_server(config: Config) -> None:
     """Run the unified multi-instance server with async architecture."""
-    print("MAIN.PY: run_server() called", file=sys.stderr)
     # Initialize all components
-    storage, manager, scheduler, proxy_handler, workflow_orchestrator, async_components, https_server = await initialize_components(config)
-    print(f"MAIN.PY: Components initialized, workflow_orchestrator={workflow_orchestrator is not None}", file=sys.stderr)
+    storage, manager, scheduler, proxy_handler, async_components, https_server = await initialize_components(config)
     
     # Create FastAPI app
     log_info("Creating FastAPI app...", component="main")
@@ -315,7 +289,8 @@ async def run_server(config: Config) -> None:
                 https_server_instance=https_server,
                 app=None,  # No app needed - just proxy instances
                 host=config.SERVER_HOST,
-                async_components=async_components
+                async_components=async_components,
+                storage=storage  # Pass the sync storage for compatibility
             )
             log_info("UnifiedMultiInstanceServer created successfully", component="main")
         except Exception as e:
@@ -324,27 +299,17 @@ async def run_server(config: Config) -> None:
             traceback.print_exc()
             raise
         
-        # Set server reference in workflow orchestrator
-        workflow_orchestrator.dispatcher = unified_server
-        log_info("Workflow orchestrator linked to unified server", component="main")
-        
-        # Start workflow orchestrator AFTER dispatcher is set
-        log_info("Starting workflow orchestrator...", component="main")
-        print("MAIN.PY: About to start workflow orchestrator", file=sys.stderr)
-        await workflow_orchestrator.start()
-        print("MAIN.PY: workflow_orchestrator.start() completed", file=sys.stderr)
-        log_info("Workflow orchestrator started successfully", component="main")
-        
         log_info(f"Starting MCP HTTP Proxy on ports {config.HTTP_PORT} (HTTP) and {config.HTTPS_PORT} (HTTPS)", component="main")
         log_info("Each domain will have its own dedicated Hypercorn instance", component="main")
         
-        # Create unified server task
-        log_info("Creating unified_server.run() task", component="main")
+        # Start the unified dispatcher
+        log_info("Starting unified dispatcher (HTTP/HTTPS servers)...", component="main")
         try:
+            # Start unified_server.run() as a task
             unified_task = asyncio.create_task(unified_server.run())
-            log_info("unified_server.run() task created", component="main")
+            log_info("Unified dispatcher started", component="main")
         except Exception as e:
-            log_error(f"Failed to create unified_server.run() task: {e}", component="main")
+            log_error(f"Failed to start unified dispatcher: {e}", component="main")
             import traceback
             traceback.print_exc()
             raise
@@ -362,10 +327,6 @@ async def run_server(config: Config) -> None:
         if proxy_handler:
             await proxy_handler.close()
         
-        # Stop workflow orchestrator
-        await workflow_orchestrator.close()
-        log_info("Workflow orchestrator stopped", component="main")
-        
         # Shutdown async components
         await async_components.shutdown()
         log_info("Async components shut down", component="main")
@@ -377,25 +338,19 @@ def main() -> None:
     This is used when running the server directly via `python run.py` or
     `python -m src.main`. It initializes everything and runs the full server.
     """
-    print("MAIN.PY: main() function called!", file=sys.stderr)
     try:
         # Get and validate configuration
         config = get_config()
-        print(f"MAIN.PY: Config loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}", file=sys.stderr)
         
         # Setup logging
-
         log_info("=" * 60, component="main")
-        print("MAIN.PY: After first log_info", file=sys.stderr)
         log_info("OAUTH HTTPS PROXY STARTING (CLI MODE)", component="main")
         log_info("=" * 60, component="main")
         log_info("Starting OAuth HTTPS Proxy via run.py...", component="main")
         log_info(f"Configuration loaded: HTTP={config.HTTP_PORT}, HTTPS={config.HTTPS_PORT}", component="main")
         
         # Run the server
-        print("MAIN.PY: About to call asyncio.run(run_server(config))", file=sys.stderr)
         asyncio.run(run_server(config))
-        print("MAIN.PY: asyncio.run() completed", file=sys.stderr)
         
     except KeyboardInterrupt:
         log_info("Shutting down OAuth HTTPS Proxy (interrupted)", component="main")

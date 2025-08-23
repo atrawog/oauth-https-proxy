@@ -771,7 +771,7 @@ class EnhancedProxyHandler:
             available_services = []
             try:
                 # Get all service keys from Redis using async if available
-                if self.async_storage:
+                if self.async_storage and hasattr(self.async_storage, 'redis_client') and self.async_storage.redis_client:
                     # Use async scan for better performance
                     service_keys = []
                     async for key in self.async_storage.redis_client.scan_iter("service:url:*", count=10):
@@ -779,11 +779,11 @@ class EnhancedProxyHandler:
                         if len(service_keys) >= 10:
                             break
                     available_services = [key.split(":", 2)[2] for key in service_keys]
-                else:
+                elif self.storage and hasattr(self.storage, 'redis_client') and self.storage.redis_client:
                     service_keys = self.storage.redis_client.keys("service:url:*")
                     available_services = [key.decode().split(":", 2)[2] for key in service_keys[:10]]
-            except Exception:
-                pass
+            except Exception as e:
+                log_debug(f"Could not list available services: {str(e)}", component="proxy_handler")
                 
             log_error(
                 "Service not found in registry - returning 503",

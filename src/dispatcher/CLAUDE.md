@@ -220,11 +220,43 @@ All configuration and state in Redis:
 - Route configurations
 - Client IP information
 
-### Workflow Orchestration
-Event-driven instance management:
-- Proxy events trigger instance updates
-- Certificate events trigger SSL updates
-- No manual intervention required
+## Unified Event Architecture
+
+The dispatcher now directly handles all event processing without an intermediate orchestrator:
+
+### Simplified Event System
+Only 3 event types (down from 15+):
+- **proxy_created**: Create/update proxy instance
+- **proxy_deleted**: Remove proxy instance
+- **certificate_ready**: Enable HTTPS for domain
+
+### Event Processing
+```python
+async def handle_unified_event(self, event: dict):
+    """Direct event handling - simple and efficient"""
+    event_type = event.get('event_type')
+    
+    if event_type == 'proxy_created':
+        await self._ensure_instance_exists(proxy_hostname)
+    elif event_type == 'proxy_deleted':
+        await self._remove_instance(proxy_hostname)
+    elif event_type == 'certificate_ready':
+        await self._enable_https(domain, cert_name)
+```
+
+### Non-Blocking Reconciliation
+Startup reconciliation uses `asyncio.create_task()` to avoid blocking:
+```python
+self.reconciliation_task = asyncio.create_task(
+    self._reconcile_all_proxies()
+)
+```
+
+### Consumer Configuration
+- **Stream**: `events:all:stream`
+- **Consumer Group**: `unified-dispatcher`
+- **Single Consumer**: No competing consumers
+- **Automatic ACK**: Events acknowledged after processing
 
 ## Best Practices
 
@@ -261,4 +293,4 @@ curl https://hostname --resolve hostname:443:127.0.0.1
 - [Proxy Manager](../proxy/CLAUDE.md) - Proxy configuration
 - [Certificate Manager](../certmanager/CLAUDE.md) - SSL certificates
 - [Middleware](../middleware/CLAUDE.md) - PROXY protocol
-- [Workflow Orchestration](../orchestration/CLAUDE.md) - Instance lifecycle
+- [Storage Layer](../storage/CLAUDE.md) - Redis Streams configuration

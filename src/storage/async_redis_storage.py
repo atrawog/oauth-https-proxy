@@ -67,6 +67,17 @@ class AsyncRedisStorage:
             await self.redis_client.close()
             self.redis_client = None
     
+    async def ensure_initialized(self) -> bool:
+        """Ensure Redis client is initialized."""
+        if not self.redis_client:
+            try:
+                await self.initialize()
+                return self.redis_client is not None
+            except Exception as e:
+                log_error(f"Failed to initialize Redis client: {e}", component="redis_storage")
+                return False
+        return True
+    
     async def health_check(self) -> bool:
         """Check Redis connectivity."""
         try:
@@ -127,6 +138,13 @@ class AsyncRedisStorage:
     
     async def list_certificates(self) -> List[Certificate]:
         """List all certificates."""
+        # Ensure Redis client is initialized
+        if not self.redis_client:
+            await self.initialize()
+            if not self.redis_client:
+                log_error("Failed to initialize Redis client in list_certificates", component="redis_storage")
+                return []
+        
         try:
             certificates = []
             async for key in self.redis_client.scan_iter(match="cert:*"):
@@ -144,6 +162,9 @@ class AsyncRedisStorage:
     
     async def delete_certificate(self, cert_name: str) -> bool:
         """Delete certificate from Redis and clean up associated proxy targets and domain indexes."""
+        if not await self.ensure_initialized():
+            return False
+        
         try:
             # Get certificate to find domains
             cert = await self.get_certificate(cert_name)
@@ -547,6 +568,14 @@ class AsyncRedisStorage:
         """List all proxy targets."""
         import sys
         print(f"DEBUG async_redis_storage.list_proxy_targets() called", file=sys.stderr)
+        
+        # Ensure Redis client is initialized
+        if not self.redis_client:
+            await self.initialize()
+            if not self.redis_client:
+                log_error("Failed to initialize Redis client in list_proxy_targets", component="redis_storage")
+                return []
+        
         try:
             targets = []
             key_count = 0
@@ -680,6 +709,9 @@ class AsyncRedisStorage:
     
     async def list_routes(self) -> List[Route]:
         """List all routes sorted by priority (highest first)."""
+        if not await self.ensure_initialized():
+            return []
+        
         try:
             routes = []
             route_ids = set()
@@ -829,6 +861,9 @@ class AsyncRedisStorage:
     
     async def count_proxies_by_owner(self, owner_token_hash: str) -> int:
         """Count proxy targets owned by a specific token."""
+        if not await self.ensure_initialized():
+            return 0
+        
         try:
             count = 0
             async for key in self.redis_client.scan_iter(match="proxy:*"):

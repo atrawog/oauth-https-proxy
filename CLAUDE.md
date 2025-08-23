@@ -52,6 +52,7 @@ The system provides a complete reverse proxy solution with:
 ┌─────────────────────────────────────────────────────────┐
 │                   Unified Dispatcher                     │
 │                    (Ports 80/443)                       │
+│           Event-Driven Dynamic Proxy Manager            │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
@@ -66,13 +67,13 @@ The system provides a complete reverse proxy solution with:
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │   Cert   │  │  Docker  │  │  Workflow            │ │
-│  │  Manager │  │ Services │  │  Orchestrator        │ │
+│  │   Cert   │  │  Docker  │  │   Redis Streams      │ │
+│  │  Manager │  │ Services │  │   Event Consumer     │ │
 │  └──────────┘  └──────────┘  └──────────────────────┘ │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │                    Redis Storage                        │
-│              (Configuration, State, Logs)               │
+│         (Configuration, State, Logs, Events)           │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -103,7 +104,7 @@ This documentation is organized into modular component-specific files:
 #### Infrastructure
 - **[Storage Layer](src/storage/CLAUDE.md)** - Redis schema and async operations
 - **[Dispatcher](src/dispatcher/CLAUDE.md)** - Request routing and SSL termination
-- **[Workflow Orchestration](src/orchestration/CLAUDE.md)** - Event-driven lifecycle management
+- **[Unified Event System](src/dispatcher/CLAUDE.md#unified-event-architecture)** - Simplified event-driven lifecycle management
 - **[Middleware](src/middleware/CLAUDE.md)** - PROXY protocol and request processing
 - **[Logging System](src/logging/CLAUDE.md)** - Advanced logging and analytics
 
@@ -204,20 +205,20 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 ## Key Implementation Insights
 
 1. **Fully Async Architecture**: All components use async/await for non-blocking operations
-2. **Zero-Restart Design**: Workflow orchestrator enables dynamic updates without restarts
-3. **Event-Driven Instances**: All proxy instances created via Redis Streams events
-4. **Unified Dispatcher**: Single entry point for all HTTP/HTTPS traffic
-5. **Redis-Only Storage**: All configuration and state in Redis, no filesystem dependencies
-6. **Smart Certificate Handling**: Automatic detection and creation of certificates
-7. **Per-Proxy User Allowlists**: Granular GitHub user access control per proxy
-8. **PROXY Protocol Support**: Preserves real client IPs through load balancers
-9. **Enhanced CLI Client**: Smart table formatting with context-aware display
-10. **Exactly-Once Processing**: Redis Streams with consumer groups ensure reliability
-11. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
-12. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes, and real-time analytics
-13. **Organized Router Structure**: Directory structure matches API paths for intuitive navigation
-14. **Component Name Immutability**: Each logger instance has immutable component name to prevent log contamination
-15. **Chronological Log Display**: Logs displayed oldest to newest for natural reading flow
+2. **Zero-Restart Design**: Unified dispatcher enables dynamic updates without restarts
+3. **Simplified Event System**: Just 3 event types (proxy_created, proxy_deleted, certificate_ready) vs 15+ previously
+4. **Direct Event Handling**: Dispatcher directly handles all events without intermediate orchestrator
+5. **Non-Blocking Reconciliation**: Uses `asyncio.create_task()` for background proxy reconciliation
+6. **Unified Dispatcher**: Single entry point for all HTTP/HTTPS traffic and event processing
+7. **Redis-Only Storage**: All configuration and state in Redis, no filesystem dependencies
+8. **Smart Certificate Handling**: Automatic detection and creation of certificates
+9. **Per-Proxy User Allowlists**: Granular GitHub user access control per proxy
+10. **PROXY Protocol Support**: Preserves real client IPs through load balancers
+11. **Enhanced CLI Client**: Smart table formatting with context-aware display
+12. **Exactly-Once Processing**: Redis Streams with single consumer group ensure reliability
+13. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
+14. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes, and real-time analytics
+15. **Robust Error Handling**: Comprehensive null checks and graceful degradation throughout
 
 ## Environment Configuration
 
@@ -352,11 +353,10 @@ oauth-https-proxy/
 ├── src/                    # Source code (see src/CLAUDE.md)
 │   ├── api/               # FastAPI application and routers
 │   ├── certmanager/       # ACME certificate management
-│   ├── dispatcher/        # HTTP/HTTPS request dispatcher
+│   ├── dispatcher/        # Unified HTTP/HTTPS dispatcher with event handling
 │   ├── docker/            # Docker service management
 │   ├── logging/           # Advanced logging system
 │   ├── middleware/        # PROXY protocol and middleware
-│   ├── orchestration/     # Workflow orchestrator
 │   ├── ports/             # Port management
 │   ├── proxy/             # Reverse proxy implementation
 │   └── storage/           # Redis storage layer
