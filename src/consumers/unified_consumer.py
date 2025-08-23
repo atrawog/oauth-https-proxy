@@ -236,7 +236,7 @@ class UnifiedStreamConsumer(ABC):
                     await self._process_message(stream, msg_id, parsed_data)
                     await self.redis.xack(stream, self.group_name, msg_id)
                     
-                    log_info(f"Successfully processed pending message {msg_id}", component="stream_consumer")
+                    log_trace(f"Successfully processed pending message {msg_id}", component="stream_consumer")
                     self.messages_processed += 1
                     
                 except Exception as e:

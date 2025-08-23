@@ -11,7 +11,7 @@ from starlette.responses import Response, PlainTextResponse, JSONResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
-from .async_handler import EnhancedAsyncProxyHandler
+from .simple_async_handler import SimpleAsyncProxyHandler as EnhancedAsyncProxyHandler
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
@@ -172,9 +172,18 @@ class ProxyOnlyApp:
                 status_code=e.response.status_code
             )
         except Exception as e:
-            log_error(f"Proxy error: {e}", component="proxy_app")
+            # Handle exceptions that might contain async generators
+            try:
+                error_msg = str(e)
+            except TypeError as te:
+                if "'async_generator' object is not iterable" in str(te):
+                    error_msg = f"Backend connection failed: {type(e).__name__}"
+                else:
+                    error_msg = f"Error: {type(e).__name__}"
+            
+            log_error(f"Proxy error: {error_msg}", component="proxy_app")
             return PlainTextResponse(
-                f"Proxy error: {str(e)}",
+                f"Proxy error: {error_msg}",
                 status_code=502
             )
     

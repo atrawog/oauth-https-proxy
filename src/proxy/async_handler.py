@@ -71,6 +71,63 @@ class EnhancedAsyncProxyHandler:
         # Initialization logged via UnifiedAsyncLogger
     
     async def handle_request(self, request: Request) -> Response:
+        # Test: Make httpx request
+        try:
+            hostname = request.headers.get("host", "").split(":")[0]
+            target = await self.storage.get_proxy_target(hostname)
+            if not target:
+                return Response(
+                    content=f'{{"error": "No proxy target for {hostname}"}}'.encode(),
+                    status_code=404,
+                    headers={"Content-Type": "application/json"}
+                )
+            
+            # Build target URL
+            target_url = f"{target.target_url}{request.url.path}"
+            if request.url.query:
+                target_url += f"?{request.url.query}"
+            
+            # Test getting request body
+            request_body = await request.body()
+            
+            # Test using self.client.request() instead of .get()
+            try:
+                response = await self.client.request(
+                    method=request.method,
+                    url=target_url,
+                    headers=dict(request.headers),
+                    content=request_body,
+                    follow_redirects=False
+                )
+                body = await response.aread()
+            except Exception as client_error:
+                return Response(
+                    content=f'{{"error": "self.client failed: {type(client_error).__name__}"}}'.encode(),
+                    status_code=500,
+                    headers={"Content-Type": "application/json"}
+                )
+                
+            return Response(
+                content=f'{{"test": "full test", "status": {response.status_code}, "request_body_size": {len(request_body)}, "response_body_size": {len(body)}}}'.encode(),
+                status_code=200,
+                headers={"Content-Type": "application/json"}
+            )
+        except Exception as e:
+            # Try to get error message safely
+            error_msg = "Unknown error"
+            try:
+                error_msg = str(e)
+            except TypeError as te:
+                if "async_generator" in str(te):
+                    error_msg = f"FOUND IT! Error occurs when converting exception to string: {type(e).__name__}"
+                else:
+                    error_msg = f"String conversion error: {type(e).__name__}"
+            
+            return Response(
+                content=f'{{"error": "{error_msg}"}}'.encode(),
+                status_code=500,
+                headers={"Content-Type": "application/json"}
+            )
         """Handle incoming proxy request with full tracing.
         
         Args:
@@ -79,7 +136,11 @@ class EnhancedAsyncProxyHandler:
         Returns:
             Proxy response
         """
+        # Initialize variables at the very beginning to avoid UnboundLocalError in exception handlers
         start_time = time.time()
+        trace_id = None
+        proxy_hostname = None
+        client_ip = None
         
         # Extract client IP and resolve hostname
         client_ip = get_real_client_ip(request)
@@ -100,11 +161,10 @@ class EnhancedAsyncProxyHandler:
             proxy_hostname = request.headers.get("host", "").split(":")[0]
         
         # ALWAYS use trace_id from upstream - NEVER generate
-        trace_id = request.headers.get("X-Trace-Id") or request.state.get("trace_id")
+        trace_id = request.headers.get("X-Trace-Id") or getattr(request.state, "trace_id", None)
         
         if not trace_id:
             # This should never happen - log error and use fallback
-            import time
             trace_id = f"missing-trace-proxy-{int(time.time() * 1000)}"
             await self.logger.error(
                 "No trace_id found in proxy request - this should not happen!",
@@ -230,7 +290,7 @@ class EnhancedAsyncProxyHandler:
                 trace_id=trace_id,
                 proxy_hostname=proxy_hostname,
                 backend_url=backend_url,
-                response_size=len(response.content) if hasattr(response, 'content') else 0,
+                response_size=len(response.body) if hasattr(response, 'body') else 0,
                 # Include request context for complete log entry
                 client_ip=client_ip,
                 client_hostname=client_hostname,  # Include resolved hostname
@@ -265,6 +325,31 @@ class EnhancedAsyncProxyHandler:
         except Exception as e:
             duration_ms = (time.time() - start_time) * 1000
             
+            # Debug: log the type of exception
+            import traceback
+            error_type = type(e).__name__
+            
+            # Try to get a string representation of the error
+            try:
+                error_str = str(e)
+            except TypeError as te:
+                if "'async_generator' object is not iterable" in str(te):
+                    error_str = f"AsyncGenerator error in {error_type}"
+                else:
+                    error_str = f"String conversion failed: {error_type}"
+            
+            await self.logger.error(
+                f"Proxy exception caught: {error_type}: {error_str}",
+                trace_id=trace_id
+            )
+            
+            # Log full traceback for debugging
+            tb_str = traceback.format_exc()
+            await self.logger.debug(
+                f"Full traceback:\n{tb_str}",
+                trace_id=trace_id
+            )
+            
             # Log error
             await self.logger.log_error_exception(
                 error=e,
@@ -281,7 +366,7 @@ class EnhancedAsyncProxyHandler:
                 "proxy_request_failed",
                 {
                     "proxy_hostname": proxy_hostname,
-                    "error": str(e),
+                    "error": str(e) if not hasattr(e, '__aiter__') else "Backend connection failed",
                     "error_type": type(e).__name__,
                     "duration_ms": duration_ms,
                     "client_ip": client_ip
@@ -289,12 +374,17 @@ class EnhancedAsyncProxyHandler:
                 trace_id=trace_id
             )
             
-            await self.logger.end_trace(trace_id, "error", error=str(e))
+            await self.logger.end_trace(trace_id, "error", error=str(e) if not hasattr(e, '__aiter__') else "Backend connection failed")
             
             # Return error response
-            await self._log_response_error(trace_id, 502, start_time, str(e),
+            # Ensure we have a proper string representation of the error
+            try:
+                error_msg = str(e)
+            except TypeError:
+                error_msg = f"Backend connection failed ({error_type})"
+            await self._log_response_error(trace_id, 502, start_time, error_msg,
                                           request, client_ip, proxy_hostname)
-            raise HTTPException(502, f"Backend error: {str(e)}")
+            raise HTTPException(502, f"Backend error: {error_msg}")
     
     async def _check_routes(self, request: Request, target: ProxyTarget, 
                           trace_id: str) -> Optional[str]:
@@ -515,7 +605,14 @@ class EnhancedAsyncProxyHandler:
         headers["x-trace-id"] = trace_id
         
         # Get request body
-        body = await request.body()
+        try:
+            body = await request.body()
+        except Exception as body_error:
+            await self.logger.error(
+                f"Failed to read request body: {type(body_error).__name__}: {str(body_error)}",
+                trace_id=trace_id
+            )
+            body = b""
         
         await self.logger.debug(
             f"Proxying {request.method} request to {target_url}",
@@ -523,17 +620,105 @@ class EnhancedAsyncProxyHandler:
             body_size=len(body) if body else 0
         )
         
-        # Make backend request
-        backend_response = await self.client.request(
-            method=request.method,
-            url=target_url,
-            headers=headers,
-            content=body,
-            follow_redirects=False
-        )
+        # Make backend request using a fresh client to avoid any state issues
+        try:
+            # Create a new client for this request to ensure clean state
+            async with httpx.AsyncClient(
+                follow_redirects=False,
+                verify=False,
+                timeout=httpx.Timeout(
+                    connect=float(Config.PROXY_CONNECT_TIMEOUT),
+                    read=float(Config.PROXY_REQUEST_TIMEOUT),
+                    write=10.0,
+                    pool=None
+                )
+            ) as temp_client:
+                # Use the appropriate method
+                method = request.method.upper()
+                if method == "GET":
+                    backend_response = await temp_client.get(
+                        target_url,
+                        headers=headers,
+                        follow_redirects=False
+                    )
+                elif method == "POST":
+                    backend_response = await temp_client.post(
+                        target_url,
+                        headers=headers,
+                        content=body,
+                        follow_redirects=False
+                    )
+                elif method == "PUT":
+                    backend_response = await temp_client.put(
+                        target_url,
+                        headers=headers,
+                        content=body,
+                        follow_redirects=False
+                    )
+                elif method == "DELETE":
+                    backend_response = await temp_client.delete(
+                        target_url,
+                        headers=headers,
+                        follow_redirects=False
+                    )
+                elif method == "PATCH":
+                    backend_response = await temp_client.patch(
+                        target_url,
+                        headers=headers,
+                        content=body,
+                        follow_redirects=False
+                    )
+                elif method == "HEAD":
+                    backend_response = await temp_client.head(
+                        target_url,
+                        headers=headers,
+                        follow_redirects=False
+                    )
+                elif method == "OPTIONS":
+                    backend_response = await temp_client.options(
+                        target_url,
+                        headers=headers,
+                        follow_redirects=False
+                    )
+                else:
+                    # Fallback to generic request for other methods
+                    backend_response = await temp_client.request(
+                        method=request.method,
+                        url=target_url,
+                        headers=headers,
+                        content=body,
+                        follow_redirects=False
+                    )
+                
+                # Read the response body while still in the context manager
+                response_body = await backend_response.aread()
+                response_headers = dict(backend_response.headers)
+                response_status = backend_response.status_code
+        except Exception as req_error:
+            # Handle the case where the exception might contain an async generator
+            error_msg = "Request failed"
+            try:
+                error_msg = f"Request failed: {type(req_error).__name__}: {str(req_error)}"
+            except TypeError as te:
+                if "'async_generator' object is not iterable" in str(te):
+                    error_msg = f"Request failed: {type(req_error).__name__}: Backend connection error (async response)"
+                else:
+                    error_msg = f"Request failed: {type(req_error).__name__}: {type(te).__name__}"
+            
+            await self.logger.error(error_msg, trace_id=trace_id)
+            
+            # Create a clean exception without the async generator
+            raise Exception(f"Backend request failed: {type(req_error).__name__}")
         
-        # Prepare response headers
-        response_headers = dict(backend_response.headers)
+        # Response body and headers were already read in the context manager above
+        # No need to read them again
+        
+        # Define hop-by-hop headers to remove
+        hop_by_hop = [
+            "connection", "keep-alive", "proxy-authenticate",
+            "proxy-authorization", "te", "trailers",
+            "transfer-encoding", "upgrade"
+        ]
         
         # Remove hop-by-hop headers from response
         for header in hop_by_hop:
@@ -544,14 +729,14 @@ class EnhancedAsyncProxyHandler:
             response_headers.update(target.custom_response_headers)
         
         await self.logger.debug(
-            f"Backend responded with status {backend_response.status_code}",
+            f"Backend responded with status {response_status}",
             trace_id=trace_id
         )
         
-        # Return response
+        # Return response with the already-read body
         return Response(
-            content=backend_response.content,
-            status_code=backend_response.status_code,
+            content=response_body,
+            status_code=response_status,
             headers=response_headers
         )
     
@@ -645,7 +830,7 @@ class EnhancedAsyncProxyHandler:
                 f"WebSocket proxy error: {str(e)}",
                 trace_id=trace_id
             )
-            await self.logger.end_trace(trace_id, "error", error=str(e))
+            await self.logger.end_trace(trace_id, "error", error=str(e) if not hasattr(e, '__aiter__') else "Backend connection failed")
             
             try:
                 await websocket.close(code=1011, reason="Proxy error")

@@ -812,7 +812,6 @@ class UnifiedDispatcher:
             
         except Exception as e:
             log_error(f"Error handling HTTP connection: {e}", component="api_server", error=e)
-            log_error(f"Error handling HTTP connection: {e}", component="dispatcher")
             import traceback
             traceback.print_exc()
         finally:
@@ -1071,11 +1070,9 @@ class UnifiedDispatcher:
         # Start HTTP dispatcher on port 80
         http_port_str = os.getenv('HTTP_PORT')
         log_trace(f"HTTP_PORT environment variable: {http_port_str}", component="dispatcher")
-        log_info(f"HTTP_PORT environment variable: {http_port_str}", component="dispatcher")
         if not http_port_str:
             raise ValueError("HTTP_PORT not set in environment - required for server configuration")
         http_port = int(http_port_str)
-        log_debug(f"Creating HTTP server on {self.host}:{http_port}", component="dispatcher")
         log_info(f"Creating HTTP server on {self.host}:{http_port}", component="dispatcher")
         try:
             self.http_server = await asyncio.start_server(
@@ -1084,10 +1081,8 @@ class UnifiedDispatcher:
                 http_port
             )
             log_info(f"HTTP Dispatcher listening on {self.host}:{http_port}", component="dispatcher")
-            log_info(f"HTTP Dispatcher listening on {self.host}:{http_port}", component="dispatcher")
         except Exception as e:
             log_error(f"Failed to create HTTP server: {e}", component="dispatcher", error=e)
-            log_error(f"Failed to create HTTP server: {e}", component="dispatcher")
             raise
         
         # Start HTTPS dispatcher on port 443
@@ -1096,7 +1091,6 @@ class UnifiedDispatcher:
         if not https_port_str:
             raise ValueError("HTTPS_PORT not set in environment - required for server configuration")
         https_port = int(https_port_str)
-        log_debug(f"Creating HTTPS server on {self.host}:{https_port}", component="dispatcher")
         log_info(f"Creating HTTPS server on {self.host}:{https_port}", component="dispatcher")
         try:
             self.https_server = await asyncio.start_server(
@@ -1105,10 +1099,8 @@ class UnifiedDispatcher:
                 https_port
             )
             log_info(f"HTTPS Dispatcher listening on {self.host}:{https_port}", component="dispatcher")
-            log_info(f"HTTPS Dispatcher listening on {self.host}:{https_port}", component="dispatcher")
         except Exception as e:
             log_error(f"Failed to create HTTPS server: {e}", component="dispatcher", error=e)
-            log_error(f"Failed to create HTTPS server: {e}", component="dispatcher")
             raise
         
         # Create tasks for the servers but don't await them
@@ -1118,7 +1110,6 @@ class UnifiedDispatcher:
             asyncio.create_task(self.http_server.serve_forever()),
             asyncio.create_task(self.https_server.serve_forever())
         ]
-        log_debug("Dispatcher servers started in background", component="dispatcher")
         log_info("Dispatcher servers started in background", component="dispatcher")
     
     async def wait_forever(self):
@@ -1141,8 +1132,7 @@ class UnifiedMultiInstanceServer:
     """Main server that manages domain instances with unified dispatching."""
     
     def __init__(self, https_server_instance, app=None, host='0.0.0.0', async_components=None):
-        log_trace(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", component="dispatcher")
-        log_info(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", component="dispatcher")
+        log_debug(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", component="dispatcher")
         self.https_server = https_server_instance
         self.app = app  # Not used anymore - each instance creates its own proxy app
         self.host = host
@@ -1554,10 +1544,8 @@ class UnifiedMultiInstanceServer:
         # The workflow orchestrator will handle ALL instance creation dynamically
         
         # Start the dispatcher (non-blocking now!)
-        log_trace("About to call dispatcher.start()", component="dispatcher")
-        log_info("About to call dispatcher.start()", component="dispatcher")
+        log_debug("About to call dispatcher.start()", component="dispatcher")
         await self.dispatcher.start()
-        log_trace("dispatcher.start() completed", component="dispatcher")
         log_info("dispatcher.start() completed", component="dispatcher")
         
         # The dispatcher is now running in background

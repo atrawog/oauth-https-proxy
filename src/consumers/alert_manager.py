@@ -43,6 +43,7 @@ class AlertManager(UnifiedStreamConsumer):
         self.register_handler("certificate_expiring", self.alert_cert_expiry)
         self.register_handler("certificate_failed", self.alert_cert_failure)
         self.register_handler("http_", self.check_response_time)
+        self.register_handler("log", self.ignore_regular_logs)  # Silently ignore regular logs
         
         # Alert thresholds
         self.error_rate_threshold = 10  # errors per 5 minutes
@@ -348,6 +349,19 @@ class AlertManager(UnifiedStreamConsumer):
         """
         # This would use httpx or similar to POST to webhook
         # Implementation depends on webhook format requirements
+        pass
+    
+    async def ignore_regular_logs(self, stream: str, msg_id: str, data: dict):
+        """Silently ignore regular log entries.
+        
+        Regular logs in the streams are for persistence/querying, not alerts.
+        
+        Args:
+            stream: Stream the message came from
+            msg_id: Message ID
+            data: Log entry data
+        """
+        # Do nothing - these are regular logs, not alert-worthy events
         pass
     
     async def handle_unknown(self, stream: str, msg_id: str, data: dict):
