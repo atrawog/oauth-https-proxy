@@ -488,7 +488,19 @@ service-register-oauth token=env_var_or_default("OAUTH_ACCESS_TOKEN", ""):
 
 # Login via OAuth Device Flow (for SSH/remote sessions)
 oauth-login:
-    @pixi run python scripts/oauth-device-flow.py
+    @pixi run proxy-client oauth login --no-browser
+
+# Check OAuth token status
+oauth-status:
+    @pixi run proxy-client oauth status
+
+# Refresh OAuth token
+oauth-refresh:
+    @pixi run proxy-client oauth refresh
+
+# Ensure valid OAuth token (helper for other commands)
+_ensure_valid_token:
+    @pixi run proxy-client oauth status --quiet || pixi run proxy-client oauth refresh --quiet
 
 # Register OAuth client
 oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="read write" token=env_var_or_default("OAUTH_ACCESS_TOKEN", ""):

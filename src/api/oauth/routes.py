@@ -508,8 +508,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 json.dumps(token_data)
             )
             
+            # Generate refresh token for device flow
+            refresh_token_value = await auth_manager.create_refresh_token(
+                {
+                    "user_id": str(user_info.get("id")),
+                    "username": github_user,
+                    "client_id": "device_flow_client",
+                    "scope": " ".join(assigned_scopes),
+                    "resources": ["http://localhost:9000"]  # Default resource for device flow
+                },
+                redis_client
+            )
+            
             log_info(
-                "Device Flow: Token generated",
+                "Device Flow: Token generated with refresh token",
                 ip=client_ip,
                 github_user=github_user,
                 scopes=assigned_scopes,
@@ -520,7 +532,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 "access_token": access_token,
                 "token_type": "Bearer",
                 "scope": " ".join(assigned_scopes),
-                "expires_in": settings.access_token_lifetime
+                "expires_in": settings.access_token_lifetime,
+                "refresh_token": refresh_token_value
             }
         
         # Return GitHub's response as-is (error or pending) with appropriate status

@@ -44,8 +44,12 @@ def create_core_router(storage, cert_manager):
         """Create a new proxy target with optional certificate generation."""
         # Get auth info from headers (set by proxy)
         auth_user = req.headers.get("X-Auth-User", "system")
-        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        auth_scopes_header = req.headers.get("X-Auth-Scopes", "")
+        auth_scopes = auth_scopes_header.split() if auth_scopes_header else []
         is_admin = "admin" in auth_scopes
+        
+        # Debug logging
+        logger.info(f"Auth check - User: {auth_user}, Scopes header: '{auth_scopes_header}', Parsed scopes: {auth_scopes}, Is admin: {is_admin}")
         
         # Check permissions - admin scope required for create
         if not is_admin:
@@ -69,7 +73,6 @@ def create_core_router(storage, cert_manager):
             proxy_hostname = request.proxy_hostname,
             target_url=request.target_url,
             cert_name=None,  # Will be set later if cert exists or created
-            owner_token_hash=None,  # No token ownership
             created_by=auth_user,
             created_at=datetime.now(timezone.utc),
             enabled=True,
@@ -130,7 +133,6 @@ def create_core_router(storage, cert_manager):
                         email=email,
                         acme_directory_url=acme_url,
                         status="pending",
-                        owner_token_hash=None,  # No token ownership
                         created_by=auth_user
                     )
                     await async_storage.store_certificate(cert_name, cert)

@@ -103,7 +103,6 @@ class Certificate(BaseModel):
     fingerprint: Optional[str] = None
     fullchain_pem: Optional[str] = None
     private_key_pem: Optional[str] = None
-    owner_token_hash: Optional[str] = None
     created_by: Optional[str] = None
     
     @field_validator('domains', mode='before')

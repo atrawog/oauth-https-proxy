@@ -1605,10 +1605,6 @@ class UnifiedMultiInstanceServer:
                 try:
                     proxy_hostname = proxy.proxy_hostname if hasattr(proxy, 'proxy_hostname') else proxy.get('proxy_hostname')
                     
-                    # Skip localhost and system proxies
-                    if proxy_hostname in ['localhost', '127.0.0.1']:
-                        continue
-                    
                     # Ensure instance exists
                     if proxy_hostname not in self.instances:
                         await self._ensure_instance_exists(proxy_hostname)
@@ -1905,7 +1901,7 @@ class UnifiedMultiInstanceServer:
         
         # 3. Register API service
         self.dispatcher.register_named_service('api', 10001, 'http://api:9000')
-        self.dispatcher.register_domain(['localhost', '127.0.0.1'], 10001, 10001, enable_http=True, enable_https=False)
+        # Note: localhost will get its own proxy instance during reconciliation
         
         # 4. Start dispatcher
         await self.dispatcher.start()

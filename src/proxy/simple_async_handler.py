@@ -300,9 +300,11 @@ class SimpleAsyncProxyHandler:
         log_info(f"OAuth authentication successful for {token_info.get('sub')} with scopes: {token_scopes}", component="proxy_handler")
         
         # Store auth info in request state for forwarding
-        request.state.auth_user = token_info.get('sub', 'anonymous')
+        request.state.auth_user = token_info.get('username', token_info.get('sub', 'anonymous'))
         request.state.auth_scopes = ' '.join(token_scopes)
         request.state.auth_email = token_info.get('email', '')
+        
+        log_info(f"Stored auth state - User: {request.state.auth_user}, Scopes: {request.state.auth_scopes}", component="proxy_handler", **log_ctx)
         
         return None  # Authentication successful
     
@@ -523,6 +525,7 @@ class SimpleAsyncProxyHandler:
             custom_headers["X-Auth-User"] = request.state.auth_user
             custom_headers["X-Auth-Scopes"] = request.state.auth_scopes
             custom_headers["X-Auth-Email"] = request.state.auth_email
+            log_info(f"Adding auth headers to proxy request - User: {custom_headers.get('X-Auth-User')}, Scopes: {custom_headers.get('X-Auth-Scopes')}", component="proxy_handler")
         
         # Forward using common logic with preserve_host from decision
         return await self._make_backend_request(
@@ -568,6 +571,12 @@ class SimpleAsyncProxyHandler:
             # Add custom headers
             if custom_headers:
                 headers.update(custom_headers)
+                log_info(f"Added custom headers: {custom_headers}", component="proxy_handler")
+            
+            # Log auth headers being sent to backend
+            auth_headers = {k: v for k, v in headers.items() if k.startswith('X-Auth-')}
+            if auth_headers:
+                log_info(f"Sending auth headers to backend: {auth_headers}", component="proxy_handler")
             
             # Read request body
             body = await request.body()

@@ -20,8 +20,7 @@ class ServicePort(BaseModel):
     require_token: bool = Field(False, description="Whether token is required for access")
     
     # Metadata
-    owner_token_hash: str = Field(..., description="Hash of token that created this port")
-    created_by: Optional[str] = Field(None, description="Name of token that created this port")
+    created_by: Optional[str] = Field(None, description="User that created this port")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     description: Optional[str] = Field(None, description="Description of what this port is for")
     

@@ -54,7 +54,6 @@ def create_router(storage, cert_manager):
                 email=cert_request.email,
                 acme_directory_url=cert_request.acme_directory_url,
                 status="pending",
-                owner_token_hash=None,  # No more token ownership
                 created_by=auth_user
             )
             
@@ -129,7 +128,6 @@ def create_router(storage, cert_manager):
                 email=cert_request.email,
                 acme_directory_url=cert_request.acme_directory_url,
                 status="pending",
-                owner_token_hash=None,  # No more token ownership
                 created_by=auth_user
             )
             

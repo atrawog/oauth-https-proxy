@@ -358,108 +358,6 @@ class RedisStorage:
             logger.error(f"Failed to delete API token by name: {e}")
             return False
     
-    def delete_api_token_cascade(self, token_hash: str) -> dict:
-        """Delete API token and all resources owned by it.
-        
-        Returns dict with deletion statistics.
-        """
-        try:
-            stats = {
-                'token_deleted': False,
-                'certificates_deleted': 0,
-                'proxy_targets_deleted': 0,
-                'errors': []
-            }
-            
-            # Delete all certificates owned by this token
-            cert_cursor = 0
-            while True:
-                cert_cursor, cert_keys = self.redis_client.scan(
-                    cert_cursor, match="cert:*", count=100
-                )
-                for cert_key in cert_keys:
-                    # Skip domain mappings (cert:domain:*)
-                    if cert_key.startswith("cert:domain:"):
-                        continue
-                    cert_json = self.redis_client.get(cert_key)
-                    if cert_json:
-                        cert = json.loads(cert_json)
-                        if cert.get('owner_token_hash') == token_hash:
-                            if self.redis_client.delete(cert_key):
-                                stats['certificates_deleted'] += 1
-                            else:
-                                stats['errors'].append(f"Failed to delete certificate: {cert_key}")
-                if cert_cursor == 0:
-                    break
-            
-            # Delete all proxy targets owned by this token
-            proxy_cursor = 0
-            while True:
-                proxy_cursor, proxy_keys = self.redis_client.scan(
-                    proxy_cursor, match="proxy:*", count=100
-                )
-                for proxy_key in proxy_keys:
-                    proxy_json = self.redis_client.get(proxy_key)
-                    if proxy_json:
-                        proxy = json.loads(proxy_json)
-                        if proxy.get('owner_token_hash') == token_hash:
-                            if self.redis_client.delete(proxy_key):
-                                stats['proxy_targets_deleted'] += 1
-                            else:
-                                stats['errors'].append(f"Failed to delete proxy: {proxy_key}")
-                if proxy_cursor == 0:
-                    break
-            
-            # Delete the token itself
-            stats['token_deleted'] = self.delete_api_token(token_hash)
-            if not stats['token_deleted']:
-                stats['errors'].append("Failed to delete token")
-            
-            return stats
-            
-        except Exception as e:
-            logger.error(f"Failed to cascade delete token: {e}")
-            return {
-                'token_deleted': False,
-                'certificates_deleted': 0,
-                'proxy_targets_deleted': 0,
-                'errors': [str(e)]
-            }
-    
-    def delete_api_token_cascade_by_name(self, name: str) -> dict:
-        """Delete API token by name and all resources owned by it."""
-        try:
-            # Get token hash from name
-            name_key = f"token:{name}"
-            token_data = self.redis_client.hgetall(name_key)
-            
-            if not token_data:
-                return {
-                    'token_deleted': False,
-                    'certificates_deleted': 0,
-                    'proxy_targets_deleted': 0,
-                    'errors': ['Token not found']
-                }
-            
-            token_hash = token_data.get('hash')
-            if token_hash:
-                return self.delete_api_token_cascade(token_hash)
-            
-            return {
-                'token_deleted': False,
-                'certificates_deleted': 0,
-                'proxy_targets_deleted': 0,
-                'errors': ['Token hash not found']
-            }
-            
-        except Exception as e:
-            logger.error(f"Failed to cascade delete token by name: {e}")
-            return {
-                'token_deleted': False,
-                'certificates_deleted': 0,
-                'proxy_targets_deleted': 0,
-                'errors': [str(e)]
-            }
     
     def update_api_token_email(self, token_hash: str, cert_email: str) -> bool:
         """Update the certificate email for an API token."""
@@ -541,17 +439,6 @@ class RedisStorage:
             logger.error(f"Failed to delete proxy target: {e}")
             return False
     
-    def get_targets_by_owner(self, token_hash: str) -> List[ProxyTarget]:
-        """Get all proxy targets owned by a specific token."""
-        try:
-            targets = []
-            for target in self.list_proxy_targets():
-                if target.owner_token_hash == token_hash:
-                    targets.append(target)
-            return targets
-        except Exception as e:
-            logger.error(f"Failed to get targets by owner: {e}")
-            return []
     
     def update_proxy_target(self, proxy_hostname: str, updates) -> bool:
         """Update proxy target with partial data."""
@@ -768,68 +655,6 @@ class RedisStorage:
         except Exception as e:
             logger.error(f"Failed to initialize default proxies: {e}")
     
-    def count_certificates_by_owner(self, owner_token_hash: str) -> int:
-        """Count certificates owned by a specific token."""
-        try:
-            count = 0
-            for key in self.redis_client.scan_iter(match="cert:*"):
-                # Skip domain mappings (cert:domain:*)
-                if key.startswith("cert:domain:"):
-                    continue
-                cert_data = self.redis_client.get(key)
-                if cert_data:
-                    cert_dict = json.loads(cert_data)
-                    if cert_dict.get('owner_token_hash') == owner_token_hash:
-                        count += 1
-            return count
-        except Exception as e:
-            logger.error(f"Failed to count certificates by owner: {e}")
-            return 0
     
-    def count_proxies_by_owner(self, owner_token_hash: str) -> int:
-        """Count proxy targets owned by a specific token."""
-        try:
-            count = 0
-            for key in self.redis_client.scan_iter(match="proxy:*"):
-                proxy_data = self.redis_client.get(key)
-                if proxy_data:
-                    proxy_dict = json.loads(proxy_data)
-                    if proxy_dict.get('owner_token_hash') == owner_token_hash:
-                        count += 1
-            return count
-        except Exception as e:
-            logger.error(f"Failed to count proxies by owner: {e}")
-            return 0
     
-    def list_certificate_names_by_owner(self, owner_token_hash: str) -> List[str]:
-        """List certificate names owned by a specific token."""
-        try:
-            names = []
-            for key in self.redis_client.scan_iter(match="cert:*"):
-                # Skip domain mappings (cert:domain:*)
-                if key.startswith("cert:domain:"):
-                    continue
-                cert_data = self.redis_client.get(key)
-                if cert_data:
-                    cert_dict = json.loads(cert_data)
-                    if cert_dict.get('owner_token_hash') == owner_token_hash:
-                        names.append(cert_dict.get('cert_name', ''))
-            return names
-        except Exception as e:
-            logger.error(f"Failed to list certificate names by owner: {e}")
-            return []
     
-    def list_proxy_names_by_owner(self, owner_token_hash: str) -> List[str]:
-        """List proxy proxy_hostnames owned by a specific token."""
-        try:
-            names = []
-            for key in self.redis_client.scan_iter(match="proxy:*"):
-                proxy_data = self.redis_client.get(key)
-                if proxy_data:
-                    proxy_dict = json.loads(proxy_data)
-                    if proxy_dict.get('owner_token_hash') == owner_token_hash:
-                        names.append(proxy_dict.get('proxy_hostname', ''))
-            return names
-        except Exception as e:
-            logger.error(f"Failed to list proxy names by owner: {e}")
-            return []

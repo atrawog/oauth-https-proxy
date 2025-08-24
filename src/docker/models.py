@@ -159,7 +159,7 @@ class DockerServiceInfo(DockerServiceConfig):
     status: str = Field(..., description="Service status (running, stopped, etc.)")
     container_id: Optional[str] = Field(None, description="Container ID")
     created_at: datetime = Field(..., description="Creation timestamp")
-    owner_token_hash: str = Field(..., description="Hash of the token that created this service")
+    created_by: Optional[str] = Field(None, description="User that created this service")
     allocated_port: int = Field(..., description="Allocated external port")  # Deprecated, kept for backward compatibility
     health_status: Optional[str] = Field(None, description="Health check status")
     exposed_ports: List[Dict[str, Any]] = Field(default_factory=list, description="List of exposed ports")
@@ -311,8 +311,7 @@ class UnifiedServiceInfo(BaseModel):
     description: str = Field("", description="Service description")
     routing_enabled: bool = Field(True, description="Whether routing is enabled")
     created_at: datetime = Field(default_factory=lambda: datetime.now(), description="Creation timestamp")
-    owner_token_hash: Optional[str] = Field(None, description="Hash of token that owns this service")
-    created_by: Optional[str] = Field(None, description="Token name that created this service")
+    created_by: Optional[str] = Field(None, description="User that created this service")
     
     @validator('docker_info')
     def validate_docker_info(cls, v, values):

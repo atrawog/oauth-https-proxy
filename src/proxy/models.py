@@ -10,7 +10,6 @@ class ProxyTarget(BaseModel):
     proxy_hostname: str
     target_url: str
     cert_name: Optional[str] = None
-    owner_token_hash: str
     created_by: Optional[str] = None
     created_at: datetime
     enabled: bool = True
