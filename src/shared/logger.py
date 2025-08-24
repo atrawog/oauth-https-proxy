@@ -131,19 +131,19 @@ def log_trace(message: str, component: Optional[str] = None, **kwargs):
 
 # Specialized logging helpers
 
-def log_request(method: str, path: str, ip: str, proxy_hostname: str, trace_id: Optional[str] = None, **kwargs):
+def log_request(method: str, path: str, client_ip: str, proxy_hostname: str, trace_id: Optional[str] = None, **kwargs):
     """Fire-and-forget HTTP request log.
     
     Args:
         method: HTTP method
         path: Request path
-        ip: Client IP
+        client_ip: Client IP address
         proxy_hostname: Target hostname being accessed
         trace_id: Request trace ID
         **kwargs: Additional request data
     """
     if _logger:
-        asyncio.create_task(_logger.log_request(method, path, ip, proxy_hostname, trace_id=trace_id, **kwargs))
+        asyncio.create_task(_logger.log_request(method, path, client_ip, proxy_hostname, trace_id=trace_id, **kwargs))
 
 
 def log_response(status: int, duration_ms: float, trace_id: Optional[str] = None, **kwargs):

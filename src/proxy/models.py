@@ -69,6 +69,13 @@ class ProxyTarget(BaseModel):
     oauth_user_users: Optional[List[str]] = None   # GitHub users who get user scope (* = all)
     oauth_mcp_users: Optional[List[str]] = None    # GitHub users who get mcp scope
     
+    # WWW-Authenticate configuration (per-proxy)
+    auth_realm: Optional[str] = None  # Custom realm (defaults to auth_proxy)
+    auth_include_metadata_urls: bool = True  # Include as_uri and resource_uri
+    auth_error_description: Optional[str] = None  # Custom error description
+    auth_scope_required: Optional[str] = None  # Required scope hint
+    auth_additional_params: Optional[Dict[str, str]] = None  # Extra WWW-Authenticate params
+    
     @field_validator('auth_mode')
     @classmethod
     def validate_auth_mode(cls, v):

@@ -30,7 +30,7 @@ class RequestLogger:
         
     async def log_request(
         self,
-        ip: str,
+        client_ip: str,
         proxy_hostname: str,
         method: str,
         path: str,
@@ -44,12 +44,12 @@ class RequestLogger:
         timestamp = time.time()
         
         # Perform reverse DNS lookup for client IP
-        client_fqdn = await resolve_ip_to_fqdn(ip)
+        client_fqdn = await resolve_ip_to_fqdn(client_ip)
         
         # Create request data with proper serialization for Redis
         request_data = {
             "timestamp": str(timestamp),
-            "client_ip": str(ip),
+            "client_ip": str(client_ip),
             "client_hostname": str(client_fqdn),  # Client reverse DNS
             "proxy_hostname": str(hostname),
             "method": str(method),
@@ -74,14 +74,14 @@ class RequestLogger:
         
         # Generate unique key using IP and timestamp
         sequence = int((timestamp * 1000) % 1000000)
-        request_key = f"req:{ip}:{int(timestamp)}:{sequence}"
+        request_key = f"req:{client_ip}:{int(timestamp)}:{sequence}"
         await self.redis.hset(request_key, mapping=request_data)
         await self.redis.expire(request_key, self.ttl_seconds)
         
         # Create multiple indexes for querying
         # Index by IP
-        await self.redis.zadd(f"idx:req:ip:{ip}", {request_key: timestamp})
-        await self.redis.expire(f"idx:req:ip:{ip}", self.ttl_seconds)
+        await self.redis.zadd(f"idx:req:ip:{client_ip}", {request_key: timestamp})
+        await self.redis.expire(f"idx:req:ip:{client_ip}", self.ttl_seconds)
         
         # Index by client FQDN
         await self.redis.zadd(f"idx:req:fqdn:{client_fqdn}", {request_key: timestamp})
@@ -121,7 +121,7 @@ class RequestLogger:
         await self.redis.xadd(
             "stream:requests",
             {
-                "client_ip": ip,
+                "client_ip": client_ip,
                 "proxy_hostname": hostname,
                 "method": method,
                 "path": path,
@@ -136,15 +136,15 @@ class RequestLogger:
         await self.redis.expire(f"stats:requests:{date_hour}", 3600 * 48)  # Keep 48 hours
         
         # Track unique IPs
-        await self.redis.pfadd(f"stats:unique_ips:{date_hour}", ip)
-        await self.redis.pfadd(f"stats:unique_ips:{proxy_hostname}:{date_hour}", ip)
+        await self.redis.pfadd(f"stats:unique_ips:{date_hour}", client_ip)
+        await self.redis.pfadd(f"stats:unique_ips:{proxy_hostname}:{date_hour}", client_ip)
         
         # Return the request key for linking with response
         return request_key
         
     async def log_response(
         self,
-        ip: str,
+        client_ip: str,
         status: int,
         duration_ms: float,
         response_size: Optional[int] = None,
@@ -165,7 +165,7 @@ class RequestLogger:
         else:
             # Fallback for cases where request_key isn't available
             sequence = int((timestamp * 1000) % 1000000)
-            entry_key = f"req:{ip}:{int(timestamp)}:{sequence}"
+            entry_key = f"req:{client_ip}:{int(timestamp)}:{sequence}"
         
         # Create response data with proper Redis serialization
         response_data = {
@@ -177,7 +177,7 @@ class RequestLogger:
         # If updating existing entry, don't overwrite type
         if not request_key:
             response_data["timestamp"] = str(timestamp)
-            response_data["ip"] = str(ip)
+            response_data["client_ip"] = str(client_ip)
             response_data["type"] = "request"  # Unified entry type
         
         # Add extra fields with proper Redis serialization
@@ -246,13 +246,13 @@ class RequestLogger:
         await self.redis.zremrangebyscore(window_key, 0, timestamp - 300)
         await self.redis.expire(window_key, 600)
     
-    async def query_by_ip(self, ip: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
+    async def query_by_ip(self, client_ip: str, hours: int = 24, limit: int = 100) -> List[Dict[str, Any]]:
         """Query requests by IP address (includes response data in unified entries)."""
         min_timestamp = time.time() - (hours * 3600)
         
         # Get request keys from index (now includes response data)
         request_keys = await self.redis.zrangebyscore(
-            f"idx:req:ip:{ip}",
+            f"idx:req:ip:{client_ip}",
             min_timestamp,
             "+inf",
             start=0,

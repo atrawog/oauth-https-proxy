@@ -68,10 +68,14 @@ Each proxy can have its own GitHub OAuth App credentials:
 
 ### OAuth Authorization Flow with Per-Proxy Users
 1. Proxy redirects to `/authorize` with `proxy_hostname` parameter
-2. OAuth callback checks proxy-specific `auth_required_users`:
-   - If proxy has `auth_required_users` set, use that list
-   - Otherwise, fall back to global `OAUTH_ALLOWED_GITHUB_USERS`
-3. GitHub users are validated during OAuth callback, not just at proxy access
+2. OAuth callback checks two levels of user configuration:
+   - **Access Control**: `auth_required_users` determines who can access the proxy
+   - **Scope Assignment**: `oauth_admin_users`, `oauth_user_users`, `oauth_mcp_users` determine which scopes each user gets
+3. GitHub users are validated during OAuth callback and scope assignment happens based on proxy configuration
+4. For localhost proxy, scope assignment can be configured via environment variables:
+   - `OAUTH_LOCALHOST_ADMIN_USERS` - Users who get admin scope
+   - `OAUTH_LOCALHOST_USER_USERS` - Users who get user scope (* = all)
+   - `OAUTH_LOCALHOST_MCP_USERS` - Users who get mcp scope
 
 ## MCP Specification Compliance
 
@@ -128,17 +132,16 @@ Each proxy can have its own GitHub OAuth App credentials:
 
 ## OAuth Routes Configuration
 
-**CRITICAL**: Must run `just oauth-routes-setup` to create routes:
-```
-/authorize → auth.{domain} (priority: 95)
-/token → auth.{domain} (priority: 95)
-/callback → auth.{domain} (priority: 95)
-/verify → auth.{domain} (priority: 95)
-/.well-known/oauth-authorization-server → auth.{domain} (priority: 95)
-/jwks → auth.{domain} (priority: 95)
-/revoke → auth.{domain} (priority: 95)
-/introspect → auth.{domain} (priority: 95)
-```
+OAuth routes are automatically handled by the auth proxy domain. The OAuth server runs integrated with the proxy service, so no manual route setup is required. When you create an auth proxy (e.g., `auth.yourdomain.com`), it automatically handles all OAuth endpoints:
+
+- `/authorize` - OAuth authorization endpoint
+- `/token` - Token exchange endpoint  
+- `/callback` - OAuth callback handler
+- `/verify` - Token verification endpoint
+- `/.well-known/oauth-authorization-server` - Server metadata
+- `/jwks` - JSON Web Key Set endpoint
+- `/revoke` - Token revocation endpoint
+- `/introspect` - Token introspection endpoint
 
 ## MCP Authorization Flow
 
@@ -215,24 +218,18 @@ Response:
 ## OAuth Admin API Endpoints
 
 - `GET /oauth/clients` - List OAuth clients
-- `GET /oauth/clients/{client_id}` - Client details
-- `GET /oauth/clients/{client_id}/tokens` - Client's tokens
-- `GET /oauth/tokens` - Token statistics
-- `GET /oauth/tokens/{jti}` - Token details
 - `GET /oauth/sessions` - Active sessions
-- `GET /oauth/sessions/{session_id}` - Session details
-- `DELETE /oauth/sessions/{session_id}` - Revoke session
-- `GET /oauth/metrics` - System metrics
-- `GET /oauth/health` - Integration health
-- `GET /oauth/proxies` - OAuth status for proxies
-- `GET /oauth/proxies/{hostname}/sessions` - Proxy sessions
+- `POST /oauth/admin/setup-routes` - Setup OAuth routes (admin scope required)
+- `GET /oauth/admin/setup-status` - Check OAuth route setup status
 
 ## OAuth Status API Endpoints
 
 - `GET /oauth/status` - Overall OAuth system status
 - `GET /oauth/status/clients` - Client statistics
-- `GET /oauth/status/tokens` - Token statistics
+- `GET /oauth/status/tokens` - Token statistics  
 - `GET /oauth/status/sessions` - Session statistics
+
+Note: Some endpoints listed in documentation may not be fully implemented yet.
 
 ## Protected Resource Management API Endpoints
 
@@ -283,21 +280,26 @@ just route-update mcp-route auth_type oauth
 ## OAuth Commands
 
 ```bash
-# OAuth setup and management
-just oauth-key-generate [token]                   # Generate RSA key
-just oauth-routes-setup <domain> [token]          # Setup OAuth routes (CRITICAL!)
-just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client for testing
+# OAuth authentication
+just oauth-login                                  # Login via GitHub Device Flow
+just oauth-status                                 # Check OAuth token status
+just oauth-refresh                                # Refresh OAuth token
 
-# OAuth status and monitoring
-just oauth-clients-list [active-only] [token]     # List OAuth clients
-just oauth-sessions-list [token]                  # List active sessions
-just oauth-test-tokens <server-url> [token]       # Generate test OAuth tokens for MCP client
+# OAuth setup and management
+just oauth-key-generate                           # Generate RSA key for JWT signing
+just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client
+
+# OAuth monitoring
+just oauth-clients-list [active-only] [page] [per-page]  # List OAuth clients
+just oauth-token-list [token-type] [client-id] [username] [page] [per-page] [include-expired]  # List OAuth tokens
+just oauth-sessions-list                          # List active sessions
+just oauth-test-tokens <server-url>               # Test OAuth configuration
 
 # Per-proxy GitHub OAuth configuration
-just proxy-github-oauth-set <hostname> <client-id> <client-secret> [token]  # Set GitHub OAuth credentials
-just proxy-github-oauth-show <hostname> [token]   # Show GitHub OAuth config (without secret)
-just proxy-github-oauth-clear <hostname> [token]  # Clear GitHub OAuth config (use env vars)
-just proxy-github-oauth-list [token]              # List proxies with custom GitHub OAuth
+just proxy-github-oauth-set <hostname> <client-id> <client-secret>  # Set GitHub OAuth credentials
+just proxy-github-oauth-show <hostname>           # Show GitHub OAuth config (without secret)
+just proxy-github-oauth-clear <hostname>          # Clear GitHub OAuth config (use env vars)
+just proxy-github-oauth-list                      # List proxies with custom GitHub OAuth
 ```
 
 ## Protected Resource Configuration

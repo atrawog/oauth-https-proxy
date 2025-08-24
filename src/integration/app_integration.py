@@ -14,7 +14,7 @@ from ..storage.redis_clients import RedisClients
 from ..storage.async_redis_storage import AsyncRedisStorage
 from ..docker.async_manager import AsyncDockerManager
 from ..certmanager.async_manager import AsyncCertificateManager
-from ..proxy.async_handler import EnhancedAsyncProxyHandler
+from ..proxy.unified_handler import UnifiedProxyHandler
 from ..ports.async_manager import AsyncPortManager
 from ..shared.unified_logger import UnifiedAsyncLogger
 
@@ -89,7 +89,7 @@ class AppIntegration:
         return self.orchestrator.cert_manager
     
     @property
-    def proxy_handler(self) -> EnhancedAsyncProxyHandler:
+    def proxy_handler(self) -> UnifiedProxyHandler:
         """Get proxy handler."""
         return self.orchestrator.proxy_handler
     
@@ -164,7 +164,7 @@ async def get_cert_manager(
 
 async def get_proxy_handler(
     integration: AppIntegration = Depends(get_integration)
-) -> EnhancedAsyncProxyHandler:
+) -> UnifiedProxyHandler:
     """Dependency to get proxy handler.
     
     Args:

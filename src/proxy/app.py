@@ -11,7 +11,7 @@ from starlette.responses import Response, PlainTextResponse, JSONResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
-from .simple_async_handler import SimpleAsyncProxyHandler
+from .unified_handler import UnifiedProxyHandler
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, set_global_logger
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
@@ -141,7 +141,7 @@ class ProxyOnlyApp:
                 
                 # Create the proxy handler with hostname for route filtering
                 proxy_hostname = self.domains[0] if self.domains else None
-                self.proxy_handler = SimpleAsyncProxyHandler(
+                self.proxy_handler = UnifiedProxyHandler(
                     self.handler_storage, 
                     self.redis_clients,
                     proxy_hostname=proxy_hostname

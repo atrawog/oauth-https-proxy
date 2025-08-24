@@ -10,6 +10,7 @@ This creates a TCP server that:
 import asyncio
 import json
 import ipaddress
+import time
 from typing import Optional, Tuple
 import redis.asyncio as redis
 from ..shared.dns_resolver import get_dns_resolver
@@ -226,16 +227,21 @@ class ProxyProtocolHandler:
             return
             
         try:
+            # Resolve client hostname
+            client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
+            
             # Key includes backend port and local port for uniqueness
             key = f"proxy:client:{backend_port}:{local_port}"
             value = json.dumps({
                 "client_ip": client_ip,
-                "client_port": client_port
+                "client_port": client_port,
+                "client_hostname": client_hostname,
+                "timestamp": time.time()
             })
             # Set with 60 second TTL - connections shouldn't last longer
             # The redis client should be async (redis.asyncio.Redis)
             await self.redis_client.setex(key, 60, value)
-            log_trace(f"Stored client info in Redis: {key} -> {client_ip}:{client_port}", component="proxy_protocol")
+            log_trace(f"Stored client info in Redis: {key} -> {client_ip}:{client_port} ({client_hostname})", component="proxy_protocol")
         except Exception as e:
             log_error(f"Failed to store client info in Redis: {e}", component="proxy_protocol", error=e)
             

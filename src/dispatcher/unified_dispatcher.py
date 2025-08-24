@@ -642,7 +642,7 @@ class UnifiedDispatcher:
         
         log_debug(
             "New HTTP connection",
-            ip=client_ip
+            client_ip=client_ip
         )
         
         try:
@@ -661,7 +661,7 @@ class UnifiedDispatcher:
                 log_trace("No hostname found in request", component="api_server")
                 log_warning(
                     "No hostname found in HTTP request",
-                    ip=client_ip
+                    client_ip=client_ip
                 )
                 writer.close()
                 await writer.wait_closed()
@@ -669,7 +669,7 @@ class UnifiedDispatcher:
             
             log_trace(
                 "HTTP hostname extracted",
-                ip=client_ip, proxy_hostname=proxy_hostname
+                client_ip=client_ip, proxy_hostname=proxy_hostname
             )
             
             # Get proxy configuration to determine route filtering  
@@ -745,7 +745,7 @@ class UnifiedDispatcher:
                 # Fallback to old logging
                 log_debug(
                     "HTTP request details",
-                    ip=client_ip, proxy_hostname=proxy_hostname,
+                    client_ip=client_ip, proxy_hostname=proxy_hostname,
                     method=method,
                     path=request_path
                 )
@@ -829,7 +829,7 @@ class UnifiedDispatcher:
         
         log_debug(
             "New HTTPS connection",
-            ip=client_ip
+            client_ip=client_ip
         )
         
         try:
@@ -838,13 +838,13 @@ class UnifiedDispatcher:
             if not data:
                 log_warning(
                     "No data received in HTTPS connection",
-                    ip=client_ip
+                    client_ip=client_ip
                 )
                 return
             
             log_debug(
                 "HTTPS data received",
-                ip=client_ip,
+                client_ip=client_ip,
                 data_len=len(data)
             )
             
@@ -853,7 +853,7 @@ class UnifiedDispatcher:
             if not proxy_hostname:
                 log_warning(
                     "No SNI hostname found in connection",
-                    ip=client_ip
+                    client_ip=client_ip
                 )
                 writer.close()
                 await writer.wait_closed()
@@ -988,46 +988,13 @@ class UnifiedDispatcher:
                 if not client_port:
                     client_port = 0
                 
-                # Store trace_id and metadata in Redis BEFORE sending PROXY protocol
-                # This allows the proxy handler to retrieve it
-                if trace_id and (self.storage or self.async_storage):
-                    try:
-                        # Use same key format as ProxyProtocolHandler expects
-                        key = f"proxy:client:{target_port}:{backend_local_port}"
-                        
-                        # Resolve client hostname if not already done
-                        client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
-                        
-                        # Store comprehensive metadata
-                        value = {
-                            "client_ip": client_ip,
-                            "client_port": client_port,
-                            "client_hostname": client_hostname,
-                            "proxy_hostname": proxy_hostname or "",
-                            "trace_id": trace_id,
-                            "service_name": service_name or "",
-                            "timestamp": time.time()
-                        }
-                        
-                        if self.async_storage and self.async_storage.redis_client:
-                            await self.async_storage.redis_client.setex(key, 60, json.dumps(value))
-                        elif self.storage:
-                            await self.storage.set(key, json.dumps(value), ex=60)
-                        else:
-                            log_debug("No storage available for trace metadata", component="dispatcher")
-                        
-                        log_trace(f"Stored trace metadata in Redis: {key} -> trace_id={trace_id}", component="dispatcher")
-                    except Exception as e:
-                        # Don't log as error - this is non-critical
-                        log_debug(f"Could not store trace metadata: {str(e)}", component="dispatcher")
-                
                 # Enhanced logging with hostname and instance
                 service_info = f" (service: {service_name})" if service_name else ""
                 log_debug(
                     f"Forwarding connection - Client: {client_ip}:{client_port} -> "
                     f"Hostname: {proxy_hostname or 'unknown'} -> "
                     f"Target: {target_host}:{target_port}{service_info} "
-                    f"[PROXY protocol: {'enabled' if use_proxy_protocol else 'disabled'}]"
+                    f"[PROXY protocol: enabled]"
                 )
                 await self._send_proxy_protocol_header(target_writer, client_ip, client_port, target_port)
             

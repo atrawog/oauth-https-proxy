@@ -542,31 +542,7 @@ oauth-test-tokens server-url:
     @echo "Testing OAuth configuration..."
     pixi run proxy-client oauth health
 
-# OAuth Token Management Commands
-# ============================================
-
-# Login via OAuth (device flow for SSH/terminal sessions)
-oauth-login:
-    @echo "Starting OAuth login (device flow)..."
-    @pixi run proxy-client oauth login --no-browser
-
-# Check OAuth token status
-oauth-status:
-    @pixi run proxy-client oauth status
-
-# Refresh OAuth token
-oauth-refresh:
-    @echo "Refreshing OAuth token..."
-    @pixi run proxy-client oauth refresh
-
-# Logout and clear stored tokens
-oauth-logout:
-    @echo "Clearing OAuth tokens..."
-    @pixi run proxy-client oauth logout
-
-# Display detailed token information
-oauth-info:
-    @pixi run proxy-client oauth status --detailed
+# Additional OAuth commands are defined above (lines 489-503)
 
 # ============================================================================
 # LOG MANAGEMENT (Migrated to proxy-client)

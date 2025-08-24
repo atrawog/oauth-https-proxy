@@ -16,7 +16,7 @@ from ..storage.async_redis_storage import AsyncRedisStorage
 from ..ports.async_manager import AsyncPortManager
 from ..docker.async_manager import AsyncDockerManager
 from ..certmanager.async_manager import AsyncCertificateManager
-from ..proxy.async_handler import EnhancedAsyncProxyHandler
+from ..proxy.unified_handler import UnifiedProxyHandler
 from ..consumers.metrics_processor import MetricsProcessor
 from ..consumers.alert_manager import AlertManager
 from ..shared.unified_logger import UnifiedAsyncLogger
@@ -38,7 +38,7 @@ class MainOrchestrator:
         self.port_manager: Optional[AsyncPortManager] = None
         self.docker_manager: Optional[AsyncDockerManager] = None
         self.cert_manager: Optional[AsyncCertificateManager] = None
-        self.proxy_handler: Optional[EnhancedAsyncProxyHandler] = None
+        self.proxy_handler: Optional[UnifiedProxyHandler] = None
         
         # Consumers
         self.metrics_processor: Optional[MetricsProcessor] = None
@@ -150,7 +150,7 @@ class MainOrchestrator:
         
         # Initialize proxy handler
         await self.logger.debug("Initializing proxy handler...", trace_id=trace_id)
-        self.proxy_handler = EnhancedAsyncProxyHandler(self.async_storage, self.redis_clients)
+        self.proxy_handler = UnifiedProxyHandler(self.async_storage, self.redis_clients)
         
         await self.logger.info(
             "All managers initialized",

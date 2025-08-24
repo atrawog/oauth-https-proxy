@@ -24,10 +24,10 @@ docker_service:{name}       # Docker service configuration JSON
 services:external           # Set of external service names
 ```
 
-### Token Keys
+### OAuth Token Keys (JWT-based, no storage of bearer tokens)
 ```
-token:{name}                # Token data by name
-token:hash:{hash}           # Token hash to name mapping
+# OAuth tokens are JWT-based and validated cryptographically
+# No bearer tokens (`acm_*`) are stored anymore
 ```
 
 ### Certificate Keys

@@ -47,22 +47,30 @@ api/
 
 All API endpoints are mounted at the root level with clean URLs: `/{resource}`. This provides a simple, consistent API structure.
 
-## OAuth Token Management
+## OAuth-Only Authentication System
 
-### OAuth Authentication
-- All authentication via OAuth 2.1 with GitHub integration
-- JWT tokens with RS256 signature
-- Scopes: `admin`, `user`, `mcp`
-- Token lifetime: 30 minutes (configurable)
-- Refresh tokens supported
+### How It Works
+- **Single Auth Layer**: Proxy validates OAuth JWT tokens
+- **Trust Headers**: API reads `X-Auth-User`, `X-Auth-Scopes`, `X-Auth-Email` from proxy
+- **No Validation in API**: Complete trust of proxy-provided headers
+- **Three Scopes**: `admin` (write), `user` (read), `mcp` (protocol)
 
-### OAuth Token Commands
-Use the justfile commands for OAuth token management:
-- `just oauth-login` - Login via device flow
-- `just oauth-status` - Check token status
+### Header-Based Authentication in API
+```python
+# Every API endpoint now uses this pattern:
+auth_user = request.headers.get("X-Auth-User", "system")
+auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+is_admin = "admin" in auth_scopes
+
+# Check permissions for mutations
+if not is_admin:
+    raise HTTPException(403, "Admin scope required")
+```
+
+### OAuth Commands
+- `just oauth-login` - Login via GitHub Device Flow
+- `just oauth-status` - Check token status  
 - `just oauth-refresh` - Refresh access token
-- `just oauth-logout` - Clear stored tokens
-- `just oauth-info` - Display detailed token info
 
 ## Route Management API
 
@@ -86,7 +94,11 @@ Use the justfile commands for OAuth token management:
   "methods": ["GET", "POST"],
   "enabled": true,
   "scope": "global",  // global|proxy - defines route applicability
-  "proxy_hostnames": []  // List of proxies when scope=proxy
+  "proxy_hostnames": [],  // List of proxies when scope=proxy
+  "auth_config": {  // Optional: Override proxy auth settings
+    "auth_type": "none",  // Make specific route public
+    "override_proxy_auth": true
+  }
 }
 ```
 
@@ -135,87 +147,54 @@ The API includes a web-based management interface accessible at the root path (`
 
 ## Authentication
 
-### Flexible Authentication System
+### Simplified Authentication Architecture
 
-The API uses a flexible authentication system that supports multiple auth types:
+The API now uses a trust-based model with OAuth validation at the proxy layer only:
 
-#### Authentication Types
-- **none** - Public access, no authentication required
-- **oauth** - OAuth 2.1 with GitHub integration (default for all protected endpoints)
-- **admin** - Admin-only operations (OAuth token with admin scope)
+#### No Authentication in API
+- **Removed AuthDep**: All `AuthDep` dependencies removed from routers
+- **Trust Headers**: API reads authentication info from proxy headers
+- **No Token Validation**: API never validates OAuth tokens
+- **90% Code Reduction**: Removed ~80KB of auth code
 
-#### Using AuthDep in Routes
+#### Reading Auth Headers in Routes
 
-All API endpoints use the `AuthDep` dependency for authentication:
+All API endpoints now read headers directly:
 
 ```python
-from src.auth import AuthDep, AuthResult
-
-# Public endpoint
-@router.get("/health")
-async def health():
-    return {"status": "ok"}
-
-# OAuth token required (default)
-@router.get("/data")
-async def get_data(auth: AuthResult = Depends(AuthDep())):
-    return {"user": auth.principal}
-
-# Admin only
-@router.delete("/tokens/{name}")
-async def delete_token(name: str, auth: AuthResult = Depends(AuthDep(admin=True))):
-    return {"deleted": name}
-
-# OAuth with specific requirements
-@router.post("/services")
-async def create_service(
-    auth: AuthResult = Depends(AuthDep(
-        auth_type="oauth",
-        required_scopes=["service:write"],
-        allowed_users=["alice", "bob"]
-    ))
+# Standard pattern for all endpoints
+@router.post("/proxy/targets/")
+async def create_proxy(
+    request: Request,
+    proxy_data: ProxyCreateRequest
 ):
-    return {"created_by": auth.principal}
-
-# OAuth with ownership check
-@router.delete("/certificates/{cert_name}")
-async def delete_cert(
-    cert_name: str,
-    auth: AuthResult = Depends(AuthDep(check_owner=True))
-):
-    return {"deleted": cert_name}
+    # Get auth info from headers (set by proxy)
+    auth_user = request.headers.get("X-Auth-User", "system")
+    auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+    is_admin = "admin" in auth_scopes
+    
+    # Check permissions - admin scope required for mutations
+    if not is_admin:
+        raise HTTPException(403, "Admin scope required")
+    
+    # Process request...
 ```
 
-#### Request Format
+#### Headers Set by Proxy
 
-For endpoints requiring authentication:
-```
-Authorization: Bearer <oauth_jwt_token>
-```
-
-#### Dynamic Configuration
-
-Authentication can be configured at runtime via the API:
-
-```bash
-# Configure endpoint authentication
-POST /auth/endpoints
-{
-  "path_pattern": "/admin/*",
-  "methods": ["*"],
-  "auth_type": "admin",
-  "priority": 100
-}
-
-# Configure route authentication
-PUT /routes/{route_id}/auth
-{
-  "auth_type": "oauth",
-  "oauth_scopes": ["route:access"]
-}
+```http
+X-Auth-User: alice              # GitHub username
+X-Auth-Scopes: admin user       # Space-separated scopes
+X-Auth-Email: alice@example.com # GitHub email
+X-Auth-Client-Id: oauth_12345   # OAuth client ID
 ```
 
-Tokens are validated via Redis with caching for optimal performance.
+#### Scope Requirements
+
+- **admin**: Required for all POST, PUT, DELETE, PATCH operations
+- **user**: Required for all GET, HEAD, OPTIONS operations  
+- **mcp**: Required for /mcp endpoints
+- **Public**: /health and /.well-known/* require no auth
 
 ## Error Handling
 

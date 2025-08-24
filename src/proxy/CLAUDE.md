@@ -128,13 +128,13 @@ This allows fine-grained auth control where specific routes can have different a
 
 ## Authentication Integration
 
-### Flexible Authentication System
+### OAuth-Only Authentication
 
-Proxies support the flexible authentication system with four auth types:
-- **none** - Public access, no authentication required
-- **bearer** - API token authentication 
-- **admin** - Admin-only access
-- **oauth** - OAuth 2.1 with GitHub integration
+Proxies now use OAuth-only authentication:
+- **OAuth Validation**: Proxy validates JWT tokens at the edge
+- **Header Forwarding**: Proxy adds `X-Auth-User`, `X-Auth-Scopes`, `X-Auth-Email`
+- **No Bearer Tokens**: Removed all `acm_*` token support
+- **Trust Model**: API trusts headers from proxy completely
 
 ### OAuth Configuration
 

@@ -456,7 +456,7 @@ class AsyncLogStorage:
         """Get OAuth activity for an IP."""
         # Search for OAuth-related paths
         result = await self.search_logs(
-            ip=ip,
+            client_ip=ip,
             hours=hours,
             limit=limit
         )

@@ -135,7 +135,7 @@ class OAuthMetadataHandler:
         
         log_info(
             "OAuth authorization server metadata requested",
-            ip=client_ip, proxy_hostname=hostname,
+            client_ip=client_ip, proxy_hostname=hostname,
             issuer=metadata.get("issuer")
         )
         

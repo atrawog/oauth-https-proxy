@@ -60,7 +60,7 @@ class RequestNormalizer:
         
         Args:
             raw_data: Raw HTTP request bytes
-            client_info: Dictionary with 'ip' and 'port' keys
+            client_info: Dictionary with 'client_ip' and 'client_port' keys
             
         Returns:
             Normalized request object
@@ -105,8 +105,8 @@ class RequestNormalizer:
                 path=path,
                 method=method,
                 headers=headers,
-                client_ip=client_info.get('ip', '127.0.0.1'),
-                client_port=client_info.get('port', 0),
+                client_ip=client_info.get('client_ip', '127.0.0.1'),
+                client_port=client_info.get('client_port', 0),
                 body=body,
                 trace_id=trace_id,
                 timestamp=time.time()
@@ -122,8 +122,8 @@ class RequestNormalizer:
                 path='/',
                 method='GET',
                 headers={},
-                client_ip=client_info.get('ip', '127.0.0.1'),
-                client_port=client_info.get('port', 0),
+                client_ip=client_info.get('client_ip', '127.0.0.1'),
+                client_port=client_info.get('client_port', 0),
                 body=b'',
                 trace_id=str(uuid.uuid4()),
                 timestamp=time.time()
@@ -134,7 +134,7 @@ class RequestNormalizer:
         
         Args:
             request: FastAPI/Starlette Request object
-            client_info: Dictionary with 'ip' and 'port' keys
+            client_info: Dictionary with 'client_ip' and 'client_port' keys
             
         Returns:
             Normalized request object

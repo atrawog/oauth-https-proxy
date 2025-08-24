@@ -52,8 +52,12 @@ async def initialize_components(config: Config) -> tuple:
     # Initialize scheduler
     scheduler = CertificateScheduler(manager)
     
-    # Initialize proxy handler
-    proxy_handler = ProxyHandler(storage)
+    # Initialize proxy handler with async components
+    # Note: UnifiedProxyHandler needs async storage and redis clients
+    proxy_handler = ProxyHandler(
+        async_components.async_storage,
+        async_components.redis_clients
+    )
     
     # Initialize default routes
     storage.initialize_default_routes()

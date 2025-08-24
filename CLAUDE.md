@@ -86,7 +86,7 @@ This documentation is organized into modular component-specific files:
 - **[Development Guidelines](src/CLAUDE.md)** - General development practices, environment setup, async architecture
 - **[Just Commands Reference](justfile.md)** - Complete reference for all `just` commands
 - **[Python CLI Client](oauth-https-proxy-client/CLAUDE.md)** - Enhanced CLI with smart formatting
-- **[Flexible Authentication](src/auth/CLAUDE.md)** - Unified auth system with multiple auth types and configuration layers
+- **[OAuth Implementation Summary](OAUTH_IMPLEMENTATION_SUMMARY.md)** - Complete OAuth-only system documentation
 
 ### Component Documentation
 
@@ -110,22 +110,23 @@ This documentation is organized into modular component-specific files:
 
 ## Key Features
 
-### Flexible Authentication System
-- **Four Authentication Types**: `none` (public), `bearer` (API token), `admin` (admin-only), `oauth` (OAuth 2.1)
-- **Three Configuration Layers**: API endpoints, routes, and proxies - each with independent auth settings
-- **Pattern-Based Matching**: Wildcard patterns with priority-based resolution
-- **Dynamic Configuration**: Configure auth per endpoint/route/proxy via API or Redis
-- **Resource Ownership**: Automatic ownership validation for bearer tokens
-- **OAuth Integration**: Full OAuth 2.1 with scope, audience, and user allowlist support
-- **Performance Optimized**: Built-in caching with configurable TTL
-- **Backward Compatible**: Existing auth patterns continue to work
+### OAuth-Only Authentication System
+- **Pure OAuth 2.1**: No bearer tokens (`acm_*`), only OAuth JWT tokens
+- **Single Authentication Layer**: Proxy validates OAuth, API trusts headers
+- **Three Simple Scopes**: `admin` (write access), `user` (read access), `mcp` (Model Context Protocol)
+- **GitHub Integration**: OAuth via GitHub with device flow support
+- **Per-Proxy User Allowlists**: Fine-grained access control per domain via `auth_required_users`
+- **Per-Proxy Scope Assignment**: Configure which GitHub users get which scopes via `oauth_admin_users`, `oauth_user_users`, `oauth_mcp_users`
+- **Trust Headers**: API reads `X-Auth-User`, `X-Auth-Scopes`, `X-Auth-Email` from proxy
+- **90% Code Reduction**: Removed ~80KB of authentication complexity
 
-### Token Management
-- Bearer token authentication with flexible configuration
-- Ownership tracking - tokens own certificates and proxies
-- Cascade deletion - removing token removes owned resources
-- Certificate email configuration per token
-- Admin token for privileged operations
+### OAuth Token Management
+- **GitHub Device Flow**: CLI-friendly authentication without localhost callbacks
+- **JWT Tokens**: RS256 signed with configurable lifetime (30 min default)
+- **Refresh Tokens**: Long-lived tokens for session persistence (1 year default)
+- **Scope-Based Access**: Tokens include scopes that determine permissions
+- **Audience Validation**: Tokens validated for specific resource URIs
+- **No Token Storage**: Stateless JWT validation, no token database
 
 ### Certificate Management
 - ACME v2 protocol with HTTP-01 challenges
@@ -161,6 +162,11 @@ This documentation is organized into modular component-specific files:
 - **Secure Storage**: Client secrets are stored securely in Redis (never exposed in API responses)
 - **Multi-Tenancy Support**: Different proxies can authenticate with different GitHub organizations
 - **Zero Downtime**: Update credentials without restarting services
+- **Per-Proxy User Access Control**:
+  - `auth_required_users`: Which GitHub users can access the proxy (allowlist)
+  - `oauth_admin_users`: Which GitHub users get admin scope
+  - `oauth_user_users`: Which GitHub users get user scope (* = all)
+  - `oauth_mcp_users`: Which GitHub users get mcp scope
 
 ### Unified Async Logging Architecture
 - **Fire-and-Forget Pattern**: All logging operations are non-blocking using `asyncio.create_task()`
@@ -190,7 +196,6 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 - `create_proxy` - Create new proxy configurations
 - `delete_proxy` - Remove proxy configurations
 - `list_certificates` - View SSL certificates
-- `list_tokens` - Manage API tokens
 - `list_services` - Docker service management
 - `get_logs` - Access system logs
 - `run_command` - Execute system commands (admin only)
@@ -212,22 +217,22 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 
 ## Key Implementation Insights
 
-1. **Fully Async Architecture**: All components use async/await for non-blocking operations
-2. **Zero-Restart Design**: Unified dispatcher enables dynamic updates without restarts
-3. **Simplified Event System**: Just 3 event types (proxy_created, proxy_deleted, certificate_ready) vs 15+ previously
-4. **Direct Event Handling**: Dispatcher directly handles all events without intermediate orchestrator
-5. **Non-Blocking Reconciliation**: Uses `asyncio.create_task()` for background proxy reconciliation
-6. **Unified Dispatcher**: Single entry point for all HTTP/HTTPS traffic and event processing
-7. **Redis-Only Storage**: All configuration and state in Redis, no filesystem dependencies
-8. **Smart Certificate Handling**: Automatic detection and creation of certificates
-9. **Per-Proxy User Allowlists**: Granular GitHub user access control per proxy
-10. **Per-Proxy GitHub OAuth Apps**: Each proxy can have its own GitHub OAuth credentials with environment fallback
-11. **PROXY Protocol Support**: Preserves real client IPs through load balancers
-12. **Enhanced CLI Client**: Smart table formatting with context-aware display
-13. **Exactly-Once Processing**: Redis Streams with single consumer group ensure reliability
-14. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
-15. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes, and real-time analytics
-16. **Robust Error Handling**: Comprehensive null checks and graceful degradation throughout
+1. **OAuth-Only Authentication**: Complete removal of bearer token system, pure OAuth 2.1
+2. **Single Auth Layer**: Proxy validates OAuth, API trusts headers - no dual validation
+3. **90% Code Reduction**: Removed ~80KB auth code, 35+ files, 15+ storage methods
+4. **Simplified Mental Model**: Three scopes, one auth layer, one trust boundary
+5. **Zero-Restart Design**: Unified dispatcher enables dynamic updates without restarts
+6. **Simplified Event System**: Just 3 event types (proxy_created, proxy_deleted, certificate_ready)
+7. **Direct Event Handling**: Dispatcher directly handles all events without intermediate orchestrator
+8. **Non-Blocking Reconciliation**: Uses `asyncio.create_task()` for background proxy reconciliation
+9. **Unified Dispatcher**: Single entry point for all HTTP/HTTPS traffic and event processing
+10. **Redis-Only Storage**: All configuration and state in Redis, no filesystem dependencies
+11. **Smart Certificate Handling**: Automatic detection and creation of certificates
+12. **Per-Proxy User Allowlists**: Granular GitHub user access control per proxy
+13. **Per-Proxy GitHub OAuth Apps**: Each proxy can have its own GitHub OAuth credentials
+14. **PROXY Protocol Support**: Preserves real client IPs through load balancers
+15. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes
+16. **Trust-Based API**: API endpoints read auth headers without validation
 
 ## Environment Configuration
 
@@ -240,14 +245,17 @@ BASE_DOMAIN=example.com            # Base domain for services
 LOG_LEVEL=INFO                     # Logging level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
 
 # OAuth Configuration  
-GITHUB_CLIENT_ID=<github-app-id>
-GITHUB_CLIENT_SECRET=<github-secret>
-OAUTH_JWT_PRIVATE_KEY_B64=<base64-key>
+GITHUB_CLIENT_ID=<github-app-id>          # Global default, can be overridden per-proxy
+GITHUB_CLIENT_SECRET=<github-secret>      # Global default, can be overridden per-proxy
+OAUTH_JWT_PRIVATE_KEY_B64=<base64-key>    # RSA private key for JWT signing
+OAUTH_ALLOWED_GITHUB_USERS=*              # Global default (* = all users)
+OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope for localhost proxy
+OAUTH_LOCALHOST_USER_USERS=*              # User scope for localhost proxy
+OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope for localhost proxy
 
 # Testing
 TEST_DOMAIN=test.example.com
 TEST_EMAIL=test@example.com
-ADMIN_TOKEN=acm_admin_token_here
 ```
 
 ## Docker Services
@@ -339,8 +347,8 @@ just test-docker        # Docker service tests
 TEST_DOMAIN=test.example.com
 TEST_EMAIL=test@example.com
 TEST_PROXY_TARGET_URL=https://example.com
-TEST_TOKEN=acm_test_token_here
-ADMIN_TOKEN=acm_admin_token_here
+# OAuth tokens are obtained via just oauth-login
+# No bearer tokens (acm_*) or admin tokens anymore - pure OAuth JWT only
 ```
 
 ### Debugging Tests

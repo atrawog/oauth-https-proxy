@@ -25,6 +25,7 @@ from .rfc7592 import DynamicClientConfigurationEndpoint
 from ...shared.logger import log_debug, log_info, log_warning, log_error, log_trace, log_request, log_response
 from ...shared.config import Config
 from ...shared.client_ip import get_real_client_ip
+from ...shared.dns_resolver import get_dns_resolver
 
 # Set up logging
 
@@ -172,7 +173,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "OAuth client registration request",
-            ip=client_ip,
+            client_ip=client_ip,
             client_name=registration.client_name,
             software_id=registration.software_id,
             redirect_uris=registration.redirect_uris,
@@ -316,7 +317,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         log_info(
             "OAuth client registered successfully",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             client_name=registration.client_name,
             redirect_uris=registration.redirect_uris,
@@ -346,11 +347,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Get the proxy hostname from request to use as default resource
             host = request.headers.get("host", "localhost")
             resource = f"http://{host}" if host == "localhost" else f"https://{host}"
-            log_info(f"Device Flow: No resource specified, defaulting to {resource}", ip=client_ip)
+            log_info(f"Device Flow: No resource specified, defaulting to {resource}", client_ip=client_ip)
         
         log_info(
             "Device Flow: Code request",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             scope=scope,
             resource=resource
@@ -388,7 +389,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "Device Flow: Code generated",
-            ip=client_ip,
+            client_ip=client_ip,
             device_code=result.get("device_code", "")[:8] + "..." if result.get("device_code") else None,
             user_code=result.get("user_code"),
             resource=resource
@@ -417,7 +418,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if grant_type != "urn:ietf:params:oauth:grant-type:device_code":
             log_warning(
                 f"Invalid grant_type: {grant_type}",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id
             )
             return JSONResponse(
@@ -427,7 +428,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_debug(
             "Device Flow: Token exchange attempt",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             has_device_code=bool(device_code)
         )
@@ -462,7 +463,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             github_user = user_info.get("login")
             log_info(
                 "Device Flow: GitHub user authenticated",
-                ip=client_ip,
+                client_ip=client_ip,
                 github_user=github_user,
                 github_email=user_info.get("email")
             )
@@ -493,7 +494,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             if not assigned_scopes:
                 log_info(
                     f"Device Flow: No scopes configured for {github_user}, defaulting to 'user'",
-                    ip=client_ip,
+                    client_ip=client_ip,
                     github_user=github_user
                 )
                 assigned_scopes = ["user"]
@@ -508,7 +509,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             else:
                 # Fallback if no stored data (shouldn't happen)
                 resource = "http://localhost"
-                log_warning(f"Device Flow: No stored resource for device code, using default", ip=client_ip)
+                log_warning(f"Device Flow: No stored resource for device code, using default", client_ip=client_ip)
             
             # Generate our JWT with assigned scopes
             jti = f"device_{secrets.token_urlsafe(16)}"
@@ -522,7 +523,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             log_info(
                 f"Device Flow: Generating token",
-                ip=client_ip,
+                client_ip=client_ip,
                 github_user=github_user,
                 resource=resource,
                 audience=audience_url,
@@ -579,7 +580,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             log_info(
                 "Device Flow: Token generated with refresh token",
-                ip=client_ip,
+                client_ip=client_ip,
                 github_user=github_user,
                 scopes=assigned_scopes,
                 jti=jti
@@ -615,12 +616,19 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """Portal to authentication realm - initiates GitHub OAuth flow"""
-        # Get client IP
+        # Get client IP and hostname
         client_ip = get_real_client_ip(request)
+        dns_resolver = get_dns_resolver()
+        client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        
+        # Get proxy hostname from headers
+        proxy_hostname_from_header = request.headers.get('x-forwarded-host', request.headers.get('host', 'unknown'))
         
         log_info(
             "OAuth authorization request - DETAILED WITH RESOURCES",
-            ip=client_ip,
+            proxy_hostname=proxy_hostname_from_header,
+            client_ip=client_ip,
+            client_hostname=client_hostname,
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
@@ -659,7 +667,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not client:
             log_warning(
                 "OAuth authorization rejected - invalid client",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 oauth_rejection_reason="client_not_found",
                 requested_redirect_uri=redirect_uri,
@@ -753,7 +761,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Log successful client validation
         log_info(
             "OAuth client validated",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             client_name=getattr(client, 'client_name', 'Unknown'),
             registered_redirect_uris=getattr(client, 'redirect_uris', [])
@@ -766,7 +774,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not client.check_redirect_uri(redirect_uri):
             log_warning(
                 "OAuth authorization rejected - invalid redirect URI",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 oauth_rejection_reason="redirect_uri_not_registered",
                 requested_redirect_uri=redirect_uri,
@@ -795,7 +803,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not client.check_response_type(response_type):
             log_warning(
                 "OAuth authorization rejected - unsupported response type",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 oauth_rejection_reason="unsupported_response_type",
                 requested_response_type=response_type,
@@ -820,7 +828,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if code_challenge and code_challenge_method != "S256":
             log_warning(
                 "OAuth authorization rejected - invalid PKCE method",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 oauth_rejection_reason="invalid_pkce_method",
                 requested_pkce_method=code_challenge_method,
@@ -852,7 +860,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 if not res.startswith(("http://", "https://")):
                     log_warning(
                         "OAuth authorization rejected - invalid resource URI",
-                        ip=client_ip,
+                        client_ip=client_ip,
                         client_id=client_id,
                         oauth_rejection_reason="invalid_resource_uri",
                         invalid_resource=res,
@@ -874,7 +882,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     )
             log_info(
                 "OAuth authorization accepted - all validations passed",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 resources=resource,
                 scope=scope,
@@ -931,7 +939,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not github_client:
             log_error(
                 "No GitHub OAuth credentials available",
-                ip=client_ip,
+                client_ip=client_ip,
                 proxy_hostname=proxy_hostname
             )
             return HTMLResponse(
@@ -992,7 +1000,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Log the redirect destination
         log_info(
             "OAuth authorize redirecting to GitHub",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             redirect_to=github_url,
             auth_state=auth_state,
@@ -1053,7 +1061,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "OAuth callback received from GitHub",
-            ip=client_ip,
+            client_ip=client_ip,
             state=state,
             code_preview=f"{code[:8]}..." if code else "no code",
             host_header=request.headers.get("host"),
@@ -1066,7 +1074,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         log_request(
             method=request.method,
             path=str(request.url.path),
-            ip=client_ip,
+            client_ip=client_ip,
             proxy_hostname=request.headers.get("host", ""),
             oauth_action="callback",
             oauth_state=state,
@@ -1080,7 +1088,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not auth_data_str:
             log_warning(
                 "OAuth callback with invalid or expired state",
-                    ip=client_ip,
+                    client_ip=client_ip,
                 state=state
             )
             # Check if any similar states exist (for debugging)
@@ -1131,7 +1139,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         except Exception as e:
             log_error(
                 f"Exception during GitHub code exchange: {e}",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=auth_data.get('client_id'),
                 error_type=type(e).__name__,
                 component="oauth_callback"
@@ -1143,7 +1151,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not user_info:
             log_error(
                 "Failed to exchange GitHub code",
-                    ip=client_ip,
+                    client_ip=client_ip,
                 client_id=auth_data.get('client_id')
             )
             return RedirectResponse(
@@ -1152,7 +1160,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         log_info(
             "GitHub code exchanged successfully",
-            ip=client_ip,
+            client_ip=client_ip,
             github_user_id=user_info.get("id"),
             github_username=user_info.get("login"),
             github_email=user_info.get("email")
@@ -1183,7 +1191,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 allowed_users = proxy_target.auth_required_users
                 log_info(
                     "Using proxy-specific required users for GitHub authentication",
-                    ip=client_ip,
+                    client_ip=client_ip,
                     proxy_hostname=proxy_hostname,
                     allowed_users=allowed_users
                 )
@@ -1194,7 +1202,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 )
                 log_info(
                     "Using global GitHub allowed users (no proxy-specific required users)",
-                    ip=client_ip,
+                    client_ip=client_ip,
                     proxy_hostname=proxy_hostname,
                     allowed_users=allowed_users
                 )
@@ -1205,7 +1213,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
             log_info(
                 "Using global GitHub allowed users (no proxy specified)",
-                ip=client_ip,
+                client_ip=client_ip,
                 allowed_users=allowed_users
             )
         
@@ -1213,7 +1221,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if allowed_users and "*" not in allowed_users and user_info["login"] not in allowed_users:
             log_warning(
                 "GitHub user not in allowed list",
-                    ip=client_ip,
+                    client_ip=client_ip,
                 client_id=auth_data.get('client_id'),
                 github_username=user_info.get("login"),
                 allowed_users=allowed_users,
@@ -1251,7 +1259,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not assigned_scopes:
             log_info(
                 f"No scopes configured for user {github_user} on {proxy_hostname}, defaulting to 'user' scope",
-                ip=client_ip,
+                client_ip=client_ip,
                 github_user=github_user,
                 proxy_hostname=proxy_hostname
             )
@@ -1262,7 +1270,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             f"OAuth scopes assigned based on GitHub user",
-            ip=client_ip,
+            client_ip=client_ip,
             github_user=github_user,
             assigned_scopes=assigned_scopes,
             proxy_hostname=proxy_hostname
@@ -1291,7 +1299,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "OAuth authorization code generated",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=auth_data.get('client_id'),
             user_id=str(user_info.get("id", "unknown")),
             username=user_info.get("login", "unknown"),
@@ -1329,7 +1337,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "OAuth callback completed, redirecting to client",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=auth_data.get('client_id'),
             redirect_uri=auth_data["redirect_uri"],
             redirect_to=final_redirect_url,
@@ -1378,15 +1386,22 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         redis_client: redis.Redis = Depends(get_redis),
     ):
         """The transmutation chamber - exchanges codes for tokens"""
-        # Get client IP
+        # Get client IP and hostname
         client_ip = get_real_client_ip(request)
+        dns_resolver = get_dns_resolver()
+        client_hostname = await dns_resolver.resolve_ptr(client_ip)
+        
+        # Get proxy hostname from headers
+        proxy_hostname_from_header = request.headers.get('x-forwarded-host', request.headers.get('host', 'unknown'))
         
         # DEBUG: Add print to verify execution
         log_debug(f"Token exchange request from {client_ip}: grant_type={grant_type}, client_id={client_id}, resource={resource}", component="oauth")
         
         log_info(
             "OAuth token exchange request",
-            ip=client_ip,
+            proxy_hostname=proxy_hostname_from_header,
+            client_ip=client_ip,
+            client_hostname=client_hostname,
             client_id=client_id,
             grant_type=grant_type,
             has_code=bool(code),
@@ -1409,7 +1424,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         log_request(
             method=request.method,
             path=str(request.url.path),
-            ip=client_ip,
+            client_ip=client_ip,
             proxy_hostname=request.headers.get("host", ""),
             oauth_action="token_exchange",
             oauth_client_id=client_id,
@@ -1423,7 +1438,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             client = None
             log_debug(
                 "Using public device_flow_client for token exchange",
-                ip=client_ip,
+                client_ip=client_ip,
                 grant_type=grant_type
             )
         else:
@@ -1432,7 +1447,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             if not client:
                 log_warning(
                     "OAuth token request with invalid client",
-                        ip=client_ip,
+                        client_ip=client_ip,
                     client_id=client_id,
                     grant_type=grant_type
                 )
@@ -1449,7 +1464,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             if client_secret and not client.check_client_secret(client_secret):
                 log_warning(
                     "OAuth token request with invalid client secret",
-                        ip=client_ip,
+                        client_ip=client_ip,
                     client_id=client_id,
                     grant_type=grant_type
                 )
@@ -1553,7 +1568,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Log detailed token creation context before generation
             log_info(
                 "Creating OAuth access token",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 user_id=code_data["user_id"],
                 username=code_data["username"],
@@ -1600,7 +1615,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             log_info(
                 "OAuth token generated - DETAILED TOKEN INFO",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 user_id=code_data["user_id"],
                 username=code_data["username"],
@@ -1620,7 +1635,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Log complete token payload (without signature verification)
             log_info(
                 "OAuth token issued via authorization code - COMPLETE TOKEN DETAILS",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 user_id=code_data["user_id"],
                 username=code_data["username"],
@@ -1737,7 +1752,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Log refresh token context
             log_info(
                 "Refreshing OAuth access token",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 user_id=refresh_data["user_id"],
                 username=refresh_data["username"],
@@ -1763,13 +1778,13 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     resource = "http://localhost"  # Last resort fallback
                     log_warning(
                         f"Refresh token missing resource, using default",
-                        ip=client_ip,
+                        client_ip=client_ip,
                         refresh_token_preview=refresh_token[:10] if refresh_token else "N/A"
                     )
             
             log_info(
                 f"Refreshing token with resource",
-                ip=client_ip,
+                client_ip=client_ip,
                 resource=resource,
                 username=refresh_data.get("username")
             )
@@ -1791,7 +1806,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             log_info(
                 "OAuth token refreshed successfully - COMPLETE TOKEN DETAILS",
-                ip=client_ip,
+                client_ip=client_ip,
                 client_id=client_id,
                 user_id=refresh_data["user_id"],
                 username=refresh_data["username"],
@@ -1856,7 +1871,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             log_debug(
                 "OAuth token verification request",
-                ip=forwarded_ip,
+                client_ip=forwarded_ip,
                 resource=resource,
                 path=forwarded_path,
                 method=forwarded_method
@@ -1887,7 +1902,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 if not any(scope in allowed_scopes for scope in token_scopes):
                     log_warning(
                         "OAuth token validation failed - scope not allowed",
-                        ip=forwarded_ip,
+                        client_ip=forwarded_ip,
                         resource=resource,
                         token_scopes=token_scopes,
                         allowed_scopes=allowed_scopes
@@ -1911,7 +1926,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 if not any(aud in allowed_audiences for aud in token_audiences):
                     log_warning(
                         "OAuth token validation failed - audience not allowed",
-                        ip=forwarded_ip,
+                        client_ip=forwarded_ip,
                         resource=resource,
                         token_audiences=token_audiences,
                         allowed_audiences=allowed_audiences
@@ -1926,7 +1941,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             log_info(
                 "OAuth token verified successfully",
-                ip=forwarded_ip,
+                client_ip=forwarded_ip,
                 resource=resource,
                 user_id=token.get("sub"),
                 username=token.get("username"),
@@ -1949,7 +1964,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Log specific HTTP exceptions (401, 403, etc.)
             log_warning(
                 "OAuth token verification failed",
-                ip=forwarded_ip,
+                client_ip=forwarded_ip,
                 resource=resource,
                 status_code=e.status_code,
                 error=e.detail
@@ -1958,7 +1973,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         except Exception as e:
             log_error(
                 "OAuth token verification error",
-                ip=forwarded_ip,
+                client_ip=forwarded_ip,
                 resource=resource,
                 error_type=type(e).__name__,
                 error_message=str(e),
@@ -1983,7 +1998,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "OAuth token revocation request",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             token_type_hint=token_type_hint
         )
@@ -1994,7 +2009,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # RFC 7009 - invalid client should still return 200
             log_debug(
                 "Token revocation with invalid client (returning 200 per RFC 7009)",
-                    ip=client_ip,
+                    client_ip=client_ip,
                 client_id=client_id
             )
             return Response(status_code=200)
@@ -2002,7 +2017,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if client_secret and not client.check_client_secret(client_secret):
             log_debug(
                 "Token revocation with invalid client secret (returning 200 per RFC 7009)",
-                    ip=client_ip,
+                    client_ip=client_ip,
                 client_id=client_id
             )
             return Response(status_code=200)
@@ -2012,7 +2027,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         log_info(
             "OAuth token revoked successfully",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id
         )
 
@@ -2035,7 +2050,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         log_info(
             "OAuth token introspection request",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             token_type_hint=token_type_hint
         )
@@ -2044,7 +2059,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         log_request(
             method=request.method,
             path=str(request.url.path),
-            ip=client_ip,
+            client_ip=client_ip,
             proxy_hostname=request.headers.get("host", ""),
             oauth_action="introspect",
             oauth_client_id=client_id,
@@ -2056,7 +2071,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if not client or (client_secret and not client.check_client_secret(client_secret)):
             log_debug(
                 "Token introspection with invalid client credentials",
-                    ip=client_ip,
+                    client_ip=client_ip,
                 client_id=client_id
             )
             return {"active": False}
@@ -2069,7 +2084,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         log_info(
             "OAuth token introspection completed",
-            ip=client_ip,
+            client_ip=client_ip,
             client_id=client_id,
             token_active=introspection_result.get("active", False),
             token_sub=introspection_result.get("sub") if introspection_result.get("active") else None,

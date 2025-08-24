@@ -92,7 +92,7 @@ class AsyncResourceProtector:
         
         log_debug(
             "Starting token validation - DETAILED CONTEXT",
-            ip=client_ip,
+            client_ip=client_ip,
             resource=resource,
             token_preview=token_string[:20] + "..." if len(token_string) > 20 else token_string,
             jwt_algorithm=self.settings.jwt_algorithm,
@@ -106,7 +106,7 @@ class AsyncResourceProtector:
         if not token_data:
             log_warning(
                 "Token validation FAILED - invalid or expired token",
-                ip=client_ip,
+                client_ip=client_ip,
                 resource=resource,
                 token_preview=token_string[:20] + "..." if len(token_string) > 20 else token_string,
                 jwt_algorithm=self.settings.jwt_algorithm,
@@ -130,7 +130,7 @@ class AsyncResourceProtector:
         else:
             log_info(
                 "Token validation SUCCESSFUL - token is valid",
-                ip=client_ip,
+                client_ip=client_ip,
                 resource=resource,
                 token_jti=token_data.get("jti"),
                 token_sub=token_data.get("sub"),
@@ -158,7 +158,7 @@ class AsyncResourceProtector:
             
             log_info(
                 "Starting token audience validation - DETAILED CONTEXT",
-                ip=client_ip,
+                client_ip=client_ip,
                 requested_resource=resource,
                 token_aud=aud,
                 token_aud_type=type(aud).__name__,
@@ -191,7 +191,7 @@ class AsyncResourceProtector:
             if not resource_in_aud and not allowed_aud_match:
                 log_error(
                     "Token audience validation FAILED - CRITICAL: 403 invalid_audience error",
-                    ip=client_ip,
+                    client_ip=client_ip,
                     requested_resource=resource,
                     token_aud=aud,
                     token_aud_type=type(aud).__name__,
@@ -247,7 +247,7 @@ class AsyncResourceProtector:
             else:
                 log_info(
                     "Token audience validation SUCCESSFUL",
-                    ip=client_ip,
+                    client_ip=client_ip,
                     requested_resource=resource,
                     token_aud=aud,
                     allowed_audiences=allowed_audiences,

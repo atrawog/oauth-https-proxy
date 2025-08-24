@@ -118,7 +118,7 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
             log_request(
                 method=method,
                 path=path,
-                ip=client_ip,
+                client_ip=client_ip,
                 proxy_hostname=proxy_hostname or "unknown",
                 trace_id=trace_id,
                 client_hostname=client_hostname,
