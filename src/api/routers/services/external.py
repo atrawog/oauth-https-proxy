@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.docker.models import (
     ServiceType,
     ExternalServiceConfig,
@@ -37,12 +37,19 @@ def create_external_router(async_storage) -> APIRouter:
     async def register_external_service(
         request: Request,
         config: ExternalServiceConfig,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Register an external service (replaces instance registration).
         
         This creates a named service that routes to an external URL.
         """
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for create
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         try:
             # Get async storage from app state
             async_storage = request.app.state.async_storage
@@ -64,8 +71,8 @@ def create_external_router(async_storage) -> APIRouter:
                 description=config.description,
                 routing_enabled=config.routing_enabled,
                 created_at=datetime.now(timezone.utc),
-                owner_token_hash=auth.token_hash if auth.token_hash else "unknown",
-                created_by=auth.principal if auth.principal else "unknown"
+                owner_token_hash=None,  # No token ownership
+                created_by=auth_user
             )
             
             # Store in Redis (new format)
@@ -85,9 +92,12 @@ def create_external_router(async_storage) -> APIRouter:
     @router.get("/external", response_model=List[UnifiedServiceInfo])
     async def list_external_services(
         request: Request,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """List all external services."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         try:
             services = []
             
@@ -125,9 +135,12 @@ def create_external_router(async_storage) -> APIRouter:
     async def delete_external_service(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Delete an external service registration."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         try:
             # Get async storage from app state
             async_storage = request.app.state.async_storage
@@ -140,11 +153,9 @@ def create_external_router(async_storage) -> APIRouter:
             # Parse service info
             service_info = UnifiedServiceInfo.parse_raw(service_data)
             
-            # Check ownership
-            is_owner = service_info.owner_token_hash == auth.token_hash
-            is_admin = auth.is_admin
-            if not (is_owner or is_admin):
-                raise HTTPException(403, "Not authorized to delete this service")
+            # Check permissions - admin scope required for delete
+            if not is_admin:
+                raise HTTPException(403, "Admin scope required to delete service")
             
             # Delete all related keys
             await async_storage.redis_client.delete(f"service:external:{service_name}")
@@ -163,9 +174,12 @@ def create_external_router(async_storage) -> APIRouter:
     async def get_external_service(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Get details of a specific external service."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         try:
             async_storage = request.app.state.async_storage
             
@@ -201,9 +215,12 @@ def create_external_router(async_storage) -> APIRouter:
     async def list_all_services(
         request: Request,
         service_type: Optional[ServiceType] = None,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """List all services (Docker and external)."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         try:
             all_services = []
             
@@ -228,7 +245,7 @@ def create_external_router(async_storage) -> APIRouter:
             
             # Get external services
             if not service_type or service_type == ServiceType.EXTERNAL:
-                external_services = await list_external_services(request, auth)
+                external_services = await list_external_services(request)
                 all_services.extend(external_services)
             
             # Count by type

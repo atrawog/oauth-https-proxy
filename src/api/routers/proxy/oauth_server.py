@@ -6,7 +6,7 @@ This module handles OAuth authorization server metadata configuration for proxie
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.models import ProxyOAuthServerConfig
 
 logger = logging.getLogger(__name__)
@@ -29,10 +29,18 @@ def create_oauth_server_router(async_storage):
     async def configure_oauth_server(
         req: Request,
         proxy_hostname: str,
-        config: ProxyOAuthServerConfig,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
+        config: ProxyOAuthServerConfig
     ):
-        """Configure OAuth authorization server metadata for a proxy - owner only."""
+        """Configure OAuth authorization server metadata for a proxy."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -117,10 +125,18 @@ def create_oauth_server_router(async_storage):
     @router.delete("/{proxy_hostname}/oauth-server")
     async def clear_oauth_server_config(
         req: Request,
-        proxy_hostname: str,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
+        proxy_hostname: str
     ):
-        """Clear OAuth authorization server configuration for a proxy - owner only."""
+        """Clear OAuth authorization server configuration for a proxy."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         

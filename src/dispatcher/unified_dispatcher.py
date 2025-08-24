@@ -14,7 +14,7 @@ import json
 import time
 import httpx
 from typing import Dict, Optional, List, Tuple, Set, Union
-from datetime import datetime
+from datetime import datetime, timezone
 
 from hypercorn.asyncio import serve
 from hypercorn.config import Config as HypercornConfig
@@ -1475,6 +1475,111 @@ class UnifiedMultiInstanceServer:
                     )
                     log_info(f"✅ [UNIFIED] HTTPS enabled for {proxy_hostname}", component="dispatcher")
     
+    async def _ensure_localhost_proxy(self):
+        """Ensure localhost proxy exists with OAuth configuration if not manually configured."""
+        try:
+            localhost = None
+            
+            # Get existing localhost proxy
+            if self.dispatcher.async_storage:
+                localhost = await self.dispatcher.async_storage.get_proxy_target("localhost")
+            elif self.storage:
+                localhost = self.storage.get_proxy_target("localhost")
+            
+            needs_update = False
+            
+            if not localhost:
+                # Create new localhost proxy
+                log_info("Creating localhost proxy with OAuth configuration", component="dispatcher")
+                localhost = ProxyTarget(
+                    proxy_hostname="localhost",
+                    target_url="http://127.0.0.1:9000",
+                    cert_name=None,  # No certificate for localhost
+                    owner_token_hash="system",
+                    created_by="system",
+                    created_at=datetime.now(timezone.utc),
+                    enabled=True,
+                    enable_http=True,
+                    enable_https=False,  # No HTTPS for localhost
+                    preserve_host_header=True,
+                    custom_headers=None,
+                    custom_response_headers=None,
+                    
+                    # OAuth will be configured below
+                    auth_enabled=True,
+                    auth_proxy="localhost",  # Self-referential for OAuth
+                    auth_mode="redirect",  # Redirect to OAuth for auth
+                    auth_required_users=None,
+                    auth_required_emails=None,
+                    auth_required_groups=None,
+                    auth_allowed_scopes=None,
+                    auth_allowed_audiences=None,
+                    auth_pass_headers=True,
+                    auth_cookie_name="oauth_token",
+                    auth_header_prefix="X-Auth-",
+                    auth_excluded_paths=[
+                        "/health",
+                        "/device/code",     # Must be accessible for Device Flow
+                        "/device/token",    # Must be accessible for Device Flow
+                    ],
+                    
+                    # Route control
+                    route_mode="all",
+                    enabled_routes=[],
+                    disabled_routes=[],
+                )
+                needs_update = True
+            
+            # Only update OAuth users if ALL are None/empty
+            if (localhost.oauth_admin_users is None and 
+                localhost.oauth_user_users is None and 
+                localhost.oauth_mcp_users is None):
+                
+                # Get from environment
+                admin_users_env = os.getenv("OAUTH_LOCALHOST_ADMIN_USERS", "")
+                user_users_env = os.getenv("OAUTH_LOCALHOST_USER_USERS", "*")
+                mcp_users_env = os.getenv("OAUTH_LOCALHOST_MCP_USERS", "")
+                
+                admin_users = [u.strip() for u in admin_users_env.split(",") if u.strip()]
+                user_users = [u.strip() for u in user_users_env.split(",") if u.strip()]
+                mcp_users = [u.strip() for u in mcp_users_env.split(",") if u.strip()]
+                
+                localhost.oauth_admin_users = admin_users if admin_users else None
+                localhost.oauth_user_users = user_users if user_users else None
+                localhost.oauth_mcp_users = mcp_users if mcp_users else None
+                
+                # Also ensure auth is enabled if we're setting users
+                if not localhost.auth_enabled:
+                    localhost.auth_enabled = True
+                    localhost.auth_proxy = "localhost"  # Self-referential
+                    localhost.auth_mode = "redirect"
+                    localhost.auth_excluded_paths = [
+                        "/health",
+                        "/device/code",     # Must be accessible for Device Flow
+                        "/device/token",    # Must be accessible for Device Flow
+                    ]
+                
+                needs_update = True
+                log_info(
+                    "Configured localhost proxy OAuth users from environment",
+                    component="dispatcher",
+                    admin_users=admin_users,
+                    user_users=user_users,
+                    mcp_users=mcp_users
+                )
+            
+            if needs_update:
+                # Store the proxy
+                if self.dispatcher.async_storage:
+                    await self.dispatcher.async_storage.store_proxy_target("localhost", localhost)
+                    log_info("Stored localhost proxy configuration", component="dispatcher")
+                elif self.storage:
+                    self.storage.store_proxy_target("localhost", localhost)
+                    log_info("Stored localhost proxy configuration", component="dispatcher")
+                    
+        except Exception as e:
+            log_error(f"Error ensuring localhost proxy: {e}", component="dispatcher")
+    
     async def _reconcile_all_proxies(self):
         """Reconcile ALL proxies in background without blocking."""
         try:
@@ -1482,6 +1587,9 @@ class UnifiedMultiInstanceServer:
             await asyncio.sleep(2)
             
             log_info("[UNIFIED] Starting background reconciliation", component="dispatcher")
+            
+            # Ensure localhost proxy exists with OAuth configuration
+            await self._ensure_localhost_proxy()
             
             # Get all proxy targets
             all_proxies = []

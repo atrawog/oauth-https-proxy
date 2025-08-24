@@ -20,7 +20,6 @@ from .session_interceptor import MCPSessionInterceptor
 
 # Import all tool modules
 from .tools import (
-    TokenTools,
     CertificateTools,
     ProxyTools,
     ServiceTools,
@@ -152,7 +151,6 @@ class IntegratedMCPServer:
             (ProxyTools, "Proxy Management"),  # 9 tools
             (LogTools, "Log Management"),  # 5 tools  
             (ServiceTools, "Service Management"),  # 7 tools
-            (TokenTools, "Token Management"),  # 7 tools
             (CertificateTools, "Certificate Management"),  # 5 tools
             (RouteTools, "Route Management"),  # 5 tools
             # (OAuthTools, "OAuth Management"),  # 5 tools

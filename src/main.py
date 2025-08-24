@@ -117,26 +117,8 @@ def create_asgi_app():
         # The middleware will access it via app.state.async_storage
         log_info("Using AsyncLogStorage for request logging via Redis Streams", component="main")
         
-        # Initialize auth service
-        from src.auth import FlexibleAuthService
-        from src.auth.defaults import initialize_auth_system
-        oauth_components = getattr(app.state, 'oauth_components', None)
-        app.state.auth_service = FlexibleAuthService(
-            storage=async_components.async_storage,
-            oauth_components=oauth_components
-        )
-        
-        # Initialize auth in background
-        try:
-            await app.state.auth_service.initialize()
-            await initialize_auth_system(
-                async_components.async_storage,
-                load_defaults=True,
-                migrate=True
-            )
-            log_info("✓ Flexible auth system initialized", component="main")
-        except Exception as e:
-            log_error(f"Failed to initialize auth: {e}", component="main")
+        # Auth system removed - OAuth only authentication at proxy layer
+        log_info("✓ OAuth-only authentication (auth handled at proxy layer)", component="main")
         
         # Register all routers using unified registry
         log_info("Registering all routers with Unified Router Registry...", component="main")
@@ -206,28 +188,8 @@ async def run_server(config: Config) -> None:
     # The middleware will access it via app.state.async_storage
     log_info("Using AsyncLogStorage for request logging via Redis Streams", component="main")
     
-    # Initialize auth service SYNCHRONOUSLY before router registration
-    from src.auth import FlexibleAuthService
-    from src.auth.defaults import initialize_auth_system
-    oauth_components = getattr(app.state, 'oauth_components', None)
-    app.state.auth_service = FlexibleAuthService(
-        storage=async_components.async_storage,
-        oauth_components=oauth_components
-    )
-    
-    # Initialize auth SYNCHRONOUSLY - must complete before routers are registered
-    try:
-        await app.state.auth_service.initialize()
-        await initialize_auth_system(
-            async_components.async_storage,
-            load_defaults=True,
-            migrate=True
-        )
-        log_info("✓ Flexible auth system initialized BEFORE router registration", component="main")
-    except Exception as e:
-        log_error(f"Failed to initialize auth: {e}", component="main")
-        # Don't continue if auth fails to initialize
-        raise RuntimeError(f"Auth initialization failed: {e}")
+    # Auth system removed - OAuth only authentication at proxy layer
+    log_info("✓ OAuth-only authentication system (auth handled at proxy layer)", component="main")
     
     log_info("✓ All components attached to app state", component="main")
     

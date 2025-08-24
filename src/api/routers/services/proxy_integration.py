@@ -7,7 +7,7 @@ import logging
 from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.docker.manager import DockerManager
 from src.proxy.models import ProxyTarget
 from src.shared.config import Config
@@ -53,20 +53,23 @@ def create_proxy_integration_router(storage) -> APIRouter:
         service_name: str,
         hostname: Optional[str] = None,
         enable_https: bool = Query(False, description="Enable HTTPS (requires certificate)"),
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Create a proxy configuration for the service."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.metadata.get('is_admin', False)
-        if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to create proxy for this service")
+        # No ownership check - admin scope already validated
         
         # Determine hostname
         if not hostname:
@@ -101,9 +104,9 @@ def create_proxy_integration_router(storage) -> APIRouter:
                 enabled=True,
                 enable_http=True,
                 enable_https=enable_https,
-                owner_token_hash=auth.token_hash,
+                owner_token_hash=None,  # No token ownership
                 preserve_host_header=True,
-                created_by=auth.principal
+                created_by=auth_user
             )
             
             # Store proxy configuration

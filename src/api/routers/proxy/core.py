@@ -14,7 +14,7 @@ import csv
 import io
 from tabulate import tabulate
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
 
@@ -40,11 +40,19 @@ def create_core_router(storage, cert_manager):
         req: Request,
         request: ProxyTargetRequest,
         background_tasks: BackgroundTasks,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
         """Create a new proxy target with optional certificate generation."""
-        # Get cert_email from auth or request
-        cert_email = getattr(auth, 'cert_email', None) or request.cert_email
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for create
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
+        # Get cert_email from request
+        cert_email = request.cert_email
         
         # Get async components
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
@@ -61,8 +69,8 @@ def create_core_router(storage, cert_manager):
             proxy_hostname = request.proxy_hostname,
             target_url=request.target_url,
             cert_name=None,  # Will be set later if cert exists or created
-            owner_token_hash=auth.token_hash,
-            created_by=auth.principal,
+            owner_token_hash=None,  # No token ownership
+            created_by=auth_user,
             created_at=datetime.now(timezone.utc),
             enabled=True,
             enable_http=request.enable_http,
@@ -122,8 +130,8 @@ def create_core_router(storage, cert_manager):
                         email=email,
                         acme_directory_url=acme_url,
                         status="pending",
-                        owner_token_hash=auth.token_hash,
-                        created_by=auth.principal
+                        owner_token_hash=None,  # No token ownership
+                        created_by=auth_user
                     )
                     await async_storage.store_certificate(cert_name, cert)
                     # Trigger async certificate generation with event publishing
@@ -135,8 +143,8 @@ def create_core_router(storage, cert_manager):
                             async_cert_manager,
                             cert_request,
                             None,  # https_server will be imported inside the task
-                            auth.token_hash,
-                            auth.principal
+                            None,  # No token ownership
+                            auth_user
                         )
                     )
                     cert_status = "Certificate generation started"
@@ -204,35 +212,35 @@ def create_core_router(storage, cert_manager):
     @router.get("/")
     async def list_proxy_targets(
         request: Request,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
-        """List proxy targets - filtered by ownership or all for admin."""
+        """List all proxy targets."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
         import logging
         logger = logging.getLogger(__name__)
         
         async_storage = request.app.state.async_storage
         all_targets = await async_storage.list_proxy_targets()
         
-        logger.info(f"list_proxy_targets: auth.principal={auth.principal}, token_hash={auth.token_hash}, found {len(all_targets)} total targets")
+        logger.info(f"list_proxy_targets: user={auth_user}, scopes={auth_scopes}, found {len(all_targets)} total targets")
         
-        # Admin sees all proxy targets
-        if auth.principal == "ADMIN":
-            logger.info(f"Returning all {len(all_targets)} targets for ADMIN")
-            return all_targets
-        
-        # Regular users see only their own targets
-        filtered = [target for target in all_targets if target.owner_token_hash == auth.token_hash]
-        logger.info(f"Filtered to {len(filtered)} targets for non-admin user")
-        return filtered
+        # Return all targets (no ownership filtering anymore)
+        return all_targets
     
     
     @router.get("/formatted")
     async def list_proxy_targets_formatted(
         request: Request,
         format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
     ):
         """List proxy targets with formatted output."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         from fastapi.responses import PlainTextResponse
         import csv
         import io
@@ -301,9 +309,13 @@ def create_core_router(storage, cert_manager):
         request: Request,
         proxy_hostname: str,
         updates: ProxyTargetUpdate,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
-        """Update proxy target configuration - owner only."""
+        """Update proxy target configuration - admin only."""
+        # Authentication is handled by proxy, API trusts headers
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        if "admin" not in auth_scopes:
+            raise HTTPException(403, "Admin scope required for proxy updates")
+        
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
         target = await async_storage.get_proxy_target(proxy_hostname)
@@ -338,9 +350,16 @@ def create_core_router(storage, cert_manager):
         request: Request,
         proxy_hostname: str,
         delete_certificate: bool = False,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
-        """Delete proxy target and optionally its certificate - owner only."""
+        """Delete proxy target and optionally its certificate."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
         target = await async_storage.get_proxy_target(proxy_hostname)

@@ -2,13 +2,13 @@
 
 import logging
 from typing import List, Optional, Dict, Any, Tuple
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, HTTPException, Depends, Request
 from pydantic import BaseModel, Field, field_validator
 from authlib.jose import JsonWebToken
 from authlib.jose.errors import JoseError
 import redis
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.api.oauth.config import Settings as OAuthSettings
 from src.api.oauth.keys import RSAKeyManager
 
@@ -52,9 +52,13 @@ def create_router(storage):
     
     @router.get("/", response_model=List[ProtectedResource])
     async def list_resources(
-        auth: AuthResult = Depends(AuthDep())
+        request: Request
     ):
         """List all registered Protected Resources."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         # Get all resources from Redis using SCAN for production safety
         resources = []
         cursor = 0
@@ -77,10 +81,19 @@ def create_router(storage):
     
     @router.post("/", response_model=ProtectedResource)
     async def register_resource(
-        resource: ProtectedResource,
-        auth: AuthResult = Depends(AuthDep())
+        request: Request,
+        resource: ProtectedResource
     ):
         """Register a new Protected Resource."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
         # Check if resource already exists
         resource_key = f"resource:{resource.uri}"
         if storage.redis_client.exists(resource_key):
@@ -99,10 +112,14 @@ def create_router(storage):
     
     @router.get("/{uri:path}", response_model=ProtectedResource)
     async def get_resource(
-        uri: str,
-        auth: AuthResult = Depends(AuthDep())
+        request: Request,
+        uri: str
     ):
         """Get details of a specific Protected Resource."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         # Reconstruct full URI
         full_uri = f"https://{uri}" if not uri.startswith(('http://', 'https://')) else uri
         resource_key = f"resource:{full_uri}"
@@ -120,11 +137,19 @@ def create_router(storage):
     
     @router.put("/{uri:path}", response_model=ProtectedResource)
     async def update_resource(
+        request: Request,
         uri: str,
-        resource: ProtectedResource,
-        auth: AuthResult = Depends(AuthDep())
+        resource: ProtectedResource
     ):
         """Update an existing Protected Resource."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Reconstruct full URI
         full_uri = f"https://{uri}" if not uri.startswith(('http://', 'https://')) else uri
         resource_key = f"resource:{full_uri}"
@@ -145,10 +170,18 @@ def create_router(storage):
     
     @router.delete("/{uri:path}")
     async def delete_resource(
-        uri: str,
-        auth: AuthResult = Depends(AuthDep())
+        request: Request,
+        uri: str
     ):
         """Delete a Protected Resource."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Reconstruct full URI
         full_uri = f"https://{uri}" if not uri.startswith(('http://', 'https://')) else uri
         resource_key = f"resource:{full_uri}"
@@ -163,9 +196,9 @@ def create_router(storage):
     
     @router.post("/{uri:path}/validate-token", response_model=TokenValidationResponse)
     async def validate_token_for_resource(
+        request: Request,
         uri: str,
-        request: TokenValidationRequest,
-        auth: AuthResult = Depends(AuthDep())
+        token_request: TokenValidationRequest
     ):
         """Validate a token for a specific resource."""
         # Reconstruct full URI
@@ -197,7 +230,7 @@ def create_router(storage):
             if oauth_settings.jwt_algorithm == "RS256":
                 # Use RSA public key for RS256 verification
                 claims = jwt.decode(
-                    request.token,
+                    token_request.token,
                     key_manager.public_key,
                     claims_options={
                         "iss": {"essential": True},
@@ -208,7 +241,7 @@ def create_router(storage):
             else:
                 # HS256 fallback
                 claims = jwt.decode(
-                    request.token,
+                    token_request.token,
                     oauth_settings.jwt_secret,
                     claims_options={
                         "iss": {"essential": True},
@@ -261,8 +294,8 @@ def create_router(storage):
             
             # Check requested scopes are included in token
             token_scopes = claims.get("scope", "").split()
-            if request.scopes:
-                missing_scopes = [s for s in request.scopes if s not in token_scopes]
+            if token_request.scopes:
+                missing_scopes = [s for s in token_request.scopes if s not in token_scopes]
                 if missing_scopes:
                     logger.warning(f"Token missing required scopes: {missing_scopes}")
                     return TokenValidationResponse(
@@ -293,7 +326,7 @@ def create_router(storage):
     
     @router.post("/auto-register")
     async def auto_register_proxy_resources(
-        auth: AuthResult = Depends(AuthDep(admin=True))
+        request: Request
     ):
         """Auto-register Protected Resources from proxy configurations."""
         # Get all proxy targets
@@ -333,7 +366,3 @@ def create_router(storage):
         }
     
     return router
-
-
-# Import json at the top
-import json

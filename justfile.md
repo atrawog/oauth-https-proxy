@@ -78,6 +78,14 @@ just proxy-oauth-server-clear <hostname> [token]
 just proxy-oauth-server-show <hostname> [token]
 ```
 
+### GitHub OAuth Credentials (Per-Proxy)
+```bash
+just proxy-github-oauth-set <hostname> <client-id> <client-secret> [token]  # Set GitHub OAuth credentials
+just proxy-github-oauth-show <hostname> [token]                            # Show config (without secret)
+just proxy-github-oauth-clear <hostname> [token]                           # Clear config (use env vars)
+just proxy-github-oauth-list [token]                                       # List proxies with custom GitHub OAuth
+```
+
 ## Route Management
 
 ### Basic Route Operations

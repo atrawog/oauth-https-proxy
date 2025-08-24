@@ -5,7 +5,7 @@ import uuid
 from typing import Optional, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Query, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.routes import Route, RouteCreateRequest, RouteUpdateRequest
 
 logger = logging.getLogger(__name__)
@@ -18,10 +18,17 @@ def create_router(async_storage):
     @router.post("/")
     async def create_route(
         request: Request,
-        route_request: RouteCreateRequest,
-        auth: AuthResult = Depends(AuthDep())
+        route_request: RouteCreateRequest
     ):
         """Create a new routing rule."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         async_storage = request.app.state.async_storage
         
         # Generate unique route ID
@@ -40,8 +47,8 @@ def create_router(async_storage):
             enabled=route_request.enabled,
             scope=route_request.scope,
             proxy_hostnames=route_request.proxy_hostnames,
-            owner_token_hash=auth.token_hash,
-            created_by=auth.principal
+            owner_token_hash=None,  # No token ownership
+            created_by=auth_user
         )
         
         # Store in Redis - storage layer will check for duplicates
@@ -147,10 +154,17 @@ def create_router(async_storage):
     async def update_route(
         request: Request,
         route_id: str,
-        route_request: RouteUpdateRequest,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="route_id"))
+        route_request: RouteUpdateRequest
     ):
         """Update an existing route."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         async_storage = request.app.state.async_storage
         
         # Get existing route
@@ -185,10 +199,17 @@ def create_router(async_storage):
     @router.delete("/{route_id}")
     async def delete_route(
         request: Request,
-        route_id: str,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="route_id"))
+        route_id: str
     ):
         """Delete a route."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         async_storage = request.app.state.async_storage
         
         route = await async_storage.get_route(route_id)

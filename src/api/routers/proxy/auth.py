@@ -7,7 +7,7 @@ import logging
 from typing import Optional
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.models import ProxyAuthConfig
 
 logger = logging.getLogger(__name__)
@@ -31,9 +31,16 @@ def create_auth_router(async_storage):
         req: Request,
         proxy_hostname: str,
         config: ProxyAuthConfig,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
-        """Configure unified auth for a proxy target - owner only."""
+        """Configure unified auth for a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -71,7 +78,7 @@ def create_auth_router(async_storage):
             # Create a route to forward OAuth metadata requests to the auth instance
             from src.proxy.routes import Route, RouteTargetType
             
-            route_id = f"oauth-metadata-{hostname.replace('.', '-')}"
+            route_id = f"oauth-metadata-{proxy_hostname.replace('.', '-')}"
             oauth_route = Route(
                 route_id=route_id,
                 path_pattern="/.well-known/oauth-authorization-server",
@@ -106,9 +113,16 @@ def create_auth_router(async_storage):
     async def remove_proxy_auth(
         req: Request,
         proxy_hostname: str,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
-        """Disable auth protection for a proxy target - owner only."""
+        """Disable auth protection for a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -129,7 +143,7 @@ def create_auth_router(async_storage):
             raise HTTPException(500, "Failed to update proxy target")
         
         # Remove OAuth metadata route when disabling auth
-        route_id = f"oauth-metadata-{hostname.replace('.', '-')}"
+        route_id = f"oauth-metadata-{proxy_hostname.replace('.', '-')}"
         route = await async_storage.get_route(route_id)
         if route:
             await async_storage.delete_route(route_id)

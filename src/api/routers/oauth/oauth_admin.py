@@ -3,10 +3,10 @@
 import logging
 from typing import List, Optional
 from datetime import datetime, timezone
-from fastapi import APIRouter, HTTPException, Depends, Query
+from fastapi import APIRouter, HTTPException, Depends, Query, Request
 from pydantic import BaseModel
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.routes import Route, RouteCreateRequest
 
 logger = logging.getLogger(__name__)
@@ -33,10 +33,18 @@ def create_router(storage):
     
     @router.post("/setup-routes", response_model=OAuthSetupResponse)
     async def setup_oauth_routes(
+        req: Request,
         request: OAuthSetupRequest,
-        auth: AuthResult = Depends(AuthDep(admin=True))  # Admin only
     ):
         """Automatically configure all required OAuth routes."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         
         # Define OAuth routes to create
         # ONLY the .well-known endpoints are needed as routes

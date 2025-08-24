@@ -8,10 +8,14 @@ DEFAULT_AUTH_EXCLUSIONS = [
     # JWKS endpoint for token verification
     "/jwks",
     
-    # OAuth endpoints that may need pre-auth access
+    # OAuth endpoints that MUST be accessible for OAuth flow to work
     "/authorize",  # Initial authorization request
+    "/callback",   # OAuth callback - CRITICAL for OAuth flow completion
     "/token",      # Token endpoint (for client credentials flow)
     "/register",   # Dynamic client registration
+    "/verify",     # Token verification endpoint
+    "/introspect", # Token introspection endpoint
+    "/revoke",     # Token revocation endpoint
     
     # Health and status endpoints
     "/health",

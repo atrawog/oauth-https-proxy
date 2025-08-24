@@ -12,10 +12,10 @@ from typing import Dict, List, Optional, Any, Tuple
 from collections import defaultdict
 import hashlib
 
-from fastapi import APIRouter, Query, HTTPException, Depends
+from fastapi import APIRouter, Query, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.storage.redis_storage import RedisStorage
 
 logger = logging.getLogger(__name__)
@@ -657,10 +657,18 @@ class OAuthStatusRouter:
     
     async def revoke_session(
         self,
-        session_id: str,
-        auth: AuthResult = Depends(AuthDep())
+        request: Request,
+        session_id: str
     ):
         """Revoke a session and all associated tokens."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Session ID in our context is the username or user ID
         # We'll revoke all tokens associated with that user
         

@@ -9,6 +9,8 @@ from pydantic import BaseModel, ConfigDict
 class ClientRegistration(BaseModel):
     model_config = ConfigDict(arbitrary_types_allowed=True)
 
+    # RFC 7591 Section 2 - Client can suggest a client_id
+    client_id: Optional[str] = None
     redirect_uris: Optional[list[str]] = None
     client_name: Optional[str] = None
     client_uri: Optional[str] = None
@@ -21,6 +23,10 @@ class ClientRegistration(BaseModel):
     jwks: Optional[dict[str, Any]] = None
     software_id: Optional[str] = None
     software_version: Optional[str] = None
+    # RFC 7591 - Additional registration parameters
+    grant_types: Optional[list[str]] = None
+    response_types: Optional[list[str]] = None
+    token_endpoint_auth_method: Optional[str] = None
 
 
 # Token Response Model

@@ -10,6 +10,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Dynamic Reverse Proxy**: Route traffic to multiple backend services
 - **Automatic HTTPS**: Obtain and renew Let's Encrypt certificates via ACME
 - **OAuth 2.1 Integration**: Built-in OAuth server with GitHub authentication
+- **Per-Proxy GitHub OAuth Apps**: Each proxy can have its own GitHub OAuth credentials with environment fallback
 - **WebSocket Support**: Proxy WebSocket and Server-Sent Events (SSE) connections
 - **Route Management**: Priority-based path routing with regex support
 - **External Service Management**: Named service registration for external URLs
@@ -19,8 +20,8 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Non-Blocking Operations**: All operations use async/await for maximum performance
 
 ### Security Features
-- **Flexible Authentication System**: Configure different auth types (none/bearer/admin/oauth) per endpoint, route, or proxy
-- **Token-Based API**: Bearer tokens with ownership tracking and resource validation
+- **OAuth-Only Authentication**: Pure OAuth 2.1 with GitHub integration, no bearer tokens
+- **GitHub Device Flow**: CLI-friendly authentication without localhost callbacks
 - **OAuth Protection**: Full OAuth 2.1 server with GitHub integration
 - **Fine-Grained Access Control**: Pattern-based auth rules with priorities
 - **Per-Proxy User Allowlists**: Each proxy can specify its own GitHub user allowlist
@@ -37,13 +38,56 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Health Monitoring**: Service health checks and metrics
 - **Hot Reload**: Update certificates and routes without downtime
 
+## OAuth-Only Architecture
+
+This system uses **pure OAuth 2.1** authentication - no bearer tokens, no API keys, just OAuth:
+
+### How It Works
+
+1. **Auto-Bootstrap on Startup**
+   - System automatically creates a `localhost` proxy with OAuth enabled
+   - No manual setup required - just configure environment variables
+
+2. **GitHub Device Flow Authentication**
+   - Use `just oauth-login` to authenticate via GitHub
+   - No localhost callbacks needed - perfect for CLI/server use
+   - Token saved locally for reuse
+
+3. **Scope-Based Access Control**
+   - **admin**: Full system access (create/delete proxies, manage certificates)
+   - **user**: Read access and basic operations
+   - **mcp**: Access to MCP (Model Context Protocol) endpoints
+   - GitHub usernames mapped to scopes via environment variables
+
+4. **Per-Proxy User Allowlists**
+   - Each proxy can specify which GitHub users are allowed
+   - Fine-grained access control per domain
+   - Environment variable fallback for defaults
+
+### Bootstrap Configuration
+
+Configure which GitHub users get which scopes on the localhost proxy:
+
+```bash
+# In your .env file:
+OAUTH_LOCALHOST_ADMIN_USERS=alice,bob    # Admin scope for specific users
+OAUTH_LOCALHOST_USER_USERS=*             # User scope for all GitHub users
+OAUTH_LOCALHOST_MCP_USERS=charlie        # MCP scope for specific users
+```
+
 ## Quick Start
 
 ### Prerequisites
 - Docker and Docker Compose
 - A domain pointing to your server (for HTTPS)
-- GitHub OAuth App (for authentication)
+- GitHub OAuth App with Device Flow enabled (for authentication)
 - Docker socket access (for container management features)
+
+**Important**: Your GitHub OAuth App MUST have Device Flow enabled:
+1. Go to GitHub Settings → Developer Settings → OAuth Apps
+2. Edit your OAuth App
+3. Check "Enable Device Flow"
+4. Save changes
 
 ### 1. Clone and Configure
 
@@ -74,9 +118,11 @@ base64 -w 0 private.pem
 # Start all services (api and redis)
 just up
 
-# Generate an admin token
-just token-admin
-# Save this token - you'll need it for all admin operations!
+# The system automatically creates a localhost proxy with OAuth enabled
+# Configure which GitHub users get admin access via environment variables:
+# OAUTH_LOCALHOST_ADMIN_USERS=alice,bob  # Specific users
+# OAUTH_LOCALHOST_USER_USERS=*           # All users get user scope
+# OAUTH_LOCALHOST_MCP_USERS=charlie      # Specific users for MCP
 ```
 
 ### 4. Access the Web UI
@@ -123,7 +169,7 @@ RENEWAL_CHECK_INTERVAL=86400
 RENEWAL_THRESHOLD_DAYS=30
 CERT_GEN_MAX_WORKERS=5
 
-# GitHub OAuth Configuration
+# GitHub OAuth Configuration (Global defaults - can be overridden per-proxy)
 GITHUB_CLIENT_ID=your_github_client_id
 GITHUB_CLIENT_SECRET=your_github_client_secret
 
@@ -157,30 +203,33 @@ docker-compose up -d
 # Wait for services to be healthy
 just health
 
-# Generate admin token (save this!)
-ADMIN_TOKEN=$(just token-admin | grep "acm_" | awk '{print $NF}')
-echo "ADMIN_TOKEN=$ADMIN_TOKEN" >> .env
-echo "Admin token saved to .env: $ADMIN_TOKEN"
+# Login via OAuth Device Flow to get access token
+just oauth-login
+# Follow the instructions to authenticate with GitHub
+# The token will be saved to ~/.oauth-https-proxy-tokens.json
+
+# Export the token for use in commands
+export OAUTH_ACCESS_TOKEN=$(cat ~/.oauth-https-proxy-tokens.json | jq -r .access_token)
 ```
 
 ### Step 3: Setup OAuth Server
 
 ```bash
-# Source the .env to get ADMIN_TOKEN
-source .env
+# Source the OAuth token
+export OAUTH_ACCESS_TOKEN=$(cat ~/.oauth-https-proxy-tokens.json | jq -r .access_token)
 
 # Create OAuth server proxy with staging certificate (for testing)
-just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" true true true true "$ADMIN_EMAIL" "$ADMIN_TOKEN"
+just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" true true true true "$ADMIN_EMAIL" "$OAUTH_ACCESS_TOKEN"
 
 # Setup OAuth routes
-just oauth-routes-setup yourdomain.com "$ADMIN_TOKEN"
+just oauth-routes-setup yourdomain.com "$OAUTH_ACCESS_TOKEN"
 
 # Configure OAuth server metadata
-just proxy-oauth-server-set auth.yourdomain.com "https://auth.yourdomain.com" "" "" "" "" "" "" "" "" "$ADMIN_TOKEN"
+just proxy-oauth-server-set auth.yourdomain.com "https://auth.yourdomain.com" "" "" "" "" "" "" "" "" "$OAUTH_ACCESS_TOKEN"
 
 # Once verified working, recreate with production certificate
-just proxy-delete auth.yourdomain.com "$ADMIN_TOKEN"
-just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" false true true true "$ADMIN_EMAIL" "$ADMIN_TOKEN"
+just proxy-delete auth.yourdomain.com "$OAUTH_ACCESS_TOKEN"
+just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" false true true true "$ADMIN_EMAIL" "$OAUTH_ACCESS_TOKEN"
 ```
 
 ### Step 4: Create Main Website Proxy
@@ -213,6 +262,9 @@ just proxy-create service.yourdomain.com "http://my-service:3000" --staging
 
 # Enable OAuth protection
 just proxy-auth-enable service.yourdomain.com auth.yourdomain.com redirect
+
+# Optional: Configure custom GitHub OAuth App for this proxy
+# just proxy-github-oauth-set service.yourdomain.com <client-id> <client-secret>
 
 # Once verified, switch to production certificate
 just cert-delete proxy-service-yourdomain-com
@@ -281,84 +333,86 @@ just logs-oauth <ip>
 
 ### Security Considerations
 
-1. **Token Security**: Store admin tokens securely, rotate regularly
-2. **GitHub Users**: Configure `OAUTH_ALLOWED_GITHUB_USERS` to restrict access
+1. **OAuth Security**: Use GitHub Device Flow for secure authentication
+2. **GitHub Users**: Configure per-proxy user allowlists for fine-grained access control
 3. **Certificate Email**: Use a valid email for Let's Encrypt notifications
 4. **Redis Password**: Use a strong, randomly generated password
 5. **Network Isolation**: Use Docker networks to isolate services
 
 ## Basic Usage
 
-### Flexible Authentication
+### OAuth-Only Authentication
 
-The system supports configurable authentication at three levels:
+The system uses pure OAuth 2.1 authentication with GitHub:
 
-#### Authentication Types
-- `none` - Public access, no authentication required
-- `bearer` - API token authentication (acm_* tokens)
-- `admin` - Admin token only (ADMIN_TOKEN environment variable)
-- `oauth` - OAuth 2.1 with GitHub integration
+#### Authentication Flow
+1. **Bootstrap**: System auto-creates localhost proxy with OAuth enabled on startup
+2. **Device Flow**: Use `just oauth-login` to authenticate via GitHub Device Flow
+3. **Scope Assignment**: GitHub users are mapped to scopes (admin/user/mcp) based on configuration
+4. **Token Usage**: Use OAuth access tokens for all API operations
 
-#### Configure Endpoint Authentication
+#### Getting an OAuth Token
 ```bash
-# Make health endpoint public
-curl -X POST http://localhost:9000/auth/endpoints \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{
-    "path_pattern": "/health",
-    "methods": ["GET"],
-    "auth_type": "none",
-    "priority": 100
-  }'
+# Login via Device Flow
+just oauth-login
+# This will:
+# 1. Show a device code and URL
+# 2. Open your browser automatically (or show URL to visit)
+# 3. Wait for GitHub authorization
+# 4. Save token to ~/.oauth-https-proxy-tokens.json
 
-# Require admin for token management
-curl -X POST http://localhost:9000/auth/endpoints \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
-  -d '{
-    "path_pattern": "/tokens/*",
-    "methods": ["*"],
-    "auth_type": "admin",
-    "priority": 90
-  }'
+# Export token for use in commands
+export OAUTH_ACCESS_TOKEN=$(cat ~/.oauth-https-proxy-tokens.json | jq -r .access_token)
+```
 
-# OAuth with specific users for services
-curl -X POST http://localhost:9000/auth/endpoints \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
+#### Using OAuth Tokens
+```bash
+# All API operations now use OAuth tokens
+curl -X GET http://localhost/proxies/ \
+  -H "Authorization: Bearer $OAUTH_ACCESS_TOKEN"
+
+# Create a new proxy
+curl -X POST http://localhost/proxy/targets/ \
+  -H "Authorization: Bearer $OAUTH_ACCESS_TOKEN" \
+  -H "Content-Type: application/json" \
   -d '{
-    "path_pattern": "/services/*",
-    "methods": ["POST", "PUT", "DELETE"],
-    "auth_type": "oauth",
-    "oauth_scopes": ["service:write"],
-    "oauth_allowed_users": ["alice", "bob"],
-    "priority": 80
+    "proxy_hostname": "api.example.com",
+    "target_url": "http://backend:3000"
   }'
 ```
 
-#### Configure Route Authentication
+#### Configure Scope-Based Access
 ```bash
-# Set auth for a specific route
-curl -X PUT http://localhost:9000/routes/metrics/auth \
-  -H "Authorization: Bearer $ADMIN_TOKEN" \
+# Configure which GitHub users get which scopes on localhost proxy
+# Set in .env before starting services:
+OAUTH_LOCALHOST_ADMIN_USERS=alice,bob   # Admin scope for specific users
+OAUTH_LOCALHOST_USER_USERS=*            # User scope for all users
+OAUTH_LOCALHOST_MCP_USERS=charlie,dave  # MCP scope for specific users
+
+# Or configure per-proxy after creation
+curl -X PUT http://localhost/proxy/targets/api.example.com \
+  -H "Authorization: Bearer $OAUTH_ACCESS_TOKEN" \
   -d '{
-    "auth_type": "admin",
-    "override_proxy_auth": true
+    "oauth_admin_users": ["alice"],
+    "oauth_user_users": ["*"],
+    "oauth_mcp_users": ["bob"]
   }'
 ```
 
 #### Configure Proxy Authentication
 ```bash
 # Enable OAuth on a proxy
-just proxy-auth-enable api.yourdomain.com $TOKEN auth.yourdomain.com
+just proxy-auth-enable api.yourdomain.com $OAUTH_ACCESS_TOKEN auth.yourdomain.com
 
 # Or configure programmatically
-curl -X POST http://localhost:9000/proxy/targets/api.yourdomain.com/auth \
-  -H "Authorization: Bearer $TOKEN" \
+curl -X POST http://localhost/proxy/targets/api.yourdomain.com/auth \
+  -H "Authorization: Bearer $OAUTH_ACCESS_TOKEN" \
   -d '{
-    "auth_type": "oauth",
+    "enabled": true,
     "auth_proxy": "auth.yourdomain.com",
-    "auth_mode": "redirect",
-    "auth_required_users": ["alice", "bob"],
-    "oauth_scopes": ["api:read", "api:write"]
+    "mode": "redirect",
+    "required_users": ["alice", "bob"],
+    "allowed_scopes": ["api:read", "api:write"]
   }'
 ```
 
@@ -366,7 +420,7 @@ curl -X POST http://localhost:9000/proxy/targets/api.yourdomain.com/auth \
 
 ```bash
 # Create proxy with automatic certificate handling
-just proxy-create api.yourdomain.com http://backend:8080 [token]
+just proxy-create api.yourdomain.com http://backend:8080 $OAUTH_ACCESS_TOKEN
 
 # The proxy will automatically:
 # - Check for existing certificates and use them
@@ -375,7 +429,7 @@ just proxy-create api.yourdomain.com http://backend:8080 [token]
 # - Handle certificate generation asynchronously
 
 # For staging/testing (creates staging certificate)
-just proxy-create api.yourdomain.com http://backend:8080 true [token]
+just proxy-create api.yourdomain.com http://backend:8080 true $OAUTH_ACCESS_TOKEN
 
 # Common scenarios:
 # 1. First-time proxy with production cert
@@ -529,13 +583,16 @@ API_URL=http://localhost:9000       # Base URL for API endpoints
 
 # Security
 REDIS_PASSWORD=<strong-password>    # Redis password (required)
-ADMIN_TOKEN=<your-admin-token>      # Admin API token
 
-# OAuth
-GITHUB_CLIENT_ID=<github-client-id>
-GITHUB_CLIENT_SECRET=<github-client-secret>
-OAUTH_JWT_PRIVATE_KEY_B64=<base64-encoded-private-key>
-OAUTH_ALLOWED_GITHUB_USERS=*        # Or comma-separated list
+# OAuth Configuration
+GITHUB_CLIENT_ID=<github-client-id>         # GitHub OAuth App Client ID
+GITHUB_CLIENT_SECRET=<github-client-secret> # GitHub OAuth App Client Secret
+OAUTH_JWT_PRIVATE_KEY_B64=<base64-key>      # RSA key for JWT signing
+
+# OAuth Bootstrap Users (configure which GitHub users get which scopes)
+OAUTH_LOCALHOST_ADMIN_USERS=     # Admin scope users (e.g., "alice,bob")
+OAUTH_LOCALHOST_USER_USERS=*     # User scope (* = all users)
+OAUTH_LOCALHOST_MCP_USERS=       # MCP scope users
 
 # Docker Management
 DOCKER_GID=999                      # Docker group GID (varies by OS)
@@ -693,7 +750,7 @@ just app-logs-test
 - Response time statistics
 - Unique visitor tracking with HyperLogLog
 
-**Log Query API** (requires admin token):
+**Log Query API** (requires OAuth token with admin scope):
 - `GET /logs/ip/{ip}` - Query by client IP
 - `GET /logs/client/{client_id}` - Query by OAuth client
 - `GET /logs/correlation/{id}` - Complete request flow
@@ -708,23 +765,23 @@ All API endpoints are served at the root level with clean URLs (e.g., `/tokens/`
 **Note**: When accessing the API directly, use port 9000 (e.g., `http://localhost:9000`). Port 80/443 is for proxied traffic only.
 
 ### Authentication
-The API uses a flexible authentication system with four types:
-- **none**: Public endpoints (no auth required)
-- **bearer**: API token authentication (default for most endpoints)
-- **admin**: Admin-only operations (requires ADMIN_TOKEN)
-- **oauth**: OAuth 2.1 protected endpoints
+The API uses OAuth 2.1 authentication with GitHub:
+- **OAuth Tokens**: All API operations require OAuth access tokens
+- **Scope-Based Access**: Users are assigned scopes (admin/user/mcp) based on GitHub username
+- **Device Flow**: CLI-friendly authentication without localhost callbacks
+- **Auto-Bootstrap**: System creates localhost proxy with OAuth on startup
 
-All write operations typically require authentication:
+All API operations require authentication:
 ```
-Authorization: Bearer your-admin-token
+Authorization: Bearer your-oauth-access-token
 ```
 
 ### Main API Categories
 
-#### Authentication Management (`/auth/*`)
-- Configure authentication per endpoint, route, or proxy
-- Pattern-based matching with priorities
-- Support for none/bearer/admin/oauth auth types
+#### OAuth Management (`/oauth/*`)
+- Device Flow authentication for CLI access
+- Session management and token introspection
+- Dynamic client registration (RFC 7591)
 - Key endpoints:
   - `GET /auth/endpoints` - List endpoint auth configs
   - `POST /auth/endpoints` - Create endpoint auth config
@@ -744,10 +801,14 @@ Authorization: Bearer your-admin-token
 - OAuth authentication settings per proxy
 - Protected resource metadata configuration (RFC 9728)
 - OAuth authorization server metadata per proxy
+- Per-proxy GitHub OAuth credentials configuration
 - Route filtering configuration
 - Key endpoints:
   - `POST /proxy/targets/{hostname}/resource` - Configure protected resource metadata
   - `POST /proxy/targets/{hostname}/oauth-server` - Configure OAuth server metadata
+  - `POST /proxy/targets/{hostname}/github-oauth` - Configure GitHub OAuth credentials
+  - `GET /proxy/targets/{hostname}/github-oauth` - Get GitHub OAuth config (without secret)
+  - `DELETE /proxy/targets/{hostname}/github-oauth` - Clear GitHub OAuth config
   - `POST /proxy/targets/{hostname}/auth` - Configure authentication
 
 #### Token Management (`/tokens/*`)

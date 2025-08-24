@@ -12,11 +12,11 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
 from .simple_async_handler import SimpleAsyncProxyHandler
-from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, set_global_logger
+from ..shared.unified_logger import UnifiedAsyncLogger
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
 from ..api.oauth.config import Settings
-from ..auth import FlexibleAuthService
 
 
 class ProxyOnlyApp:
@@ -82,6 +82,15 @@ class ProxyOnlyApp:
     
     async def startup(self):
         """Minimal startup - no lifespan complexity."""
+        # Initialize Redis clients first for logging
+        if not self.redis_clients_initialized:
+            await self.redis_clients.initialize()
+            self.redis_clients_initialized = True
+            
+        # Set up unified logger for proxy instance
+        self.unified_logger = UnifiedAsyncLogger(self.redis_clients, component="proxy_app")
+        set_global_logger(self.unified_logger)
+        
         log_info("Proxy-only instance starting", component="proxy_app")
         
         # Initialize components eagerly if called
@@ -130,23 +139,14 @@ class ProxyOnlyApp:
                     await self.handler_storage.initialize()
                     log_info("Async storage initialized on first request", component="proxy_app")
                 
-                # Create auth service for the proxy handler
-                auth_service = FlexibleAuthService(
-                    storage=self.handler_storage,
-                    oauth_components=None  # OAuth components will be set if needed
-                )
-                await auth_service.initialize()
-                log_info("Auth service initialized for proxy", component="proxy_app")
-                
-                # Create the proxy handler with hostname for route filtering and auth service
+                # Create the proxy handler with hostname for route filtering
                 proxy_hostname = self.domains[0] if self.domains else None
                 self.proxy_handler = SimpleAsyncProxyHandler(
                     self.handler_storage, 
                     self.redis_clients,
-                    proxy_hostname=proxy_hostname,
-                    auth_service=auth_service
+                    proxy_hostname=proxy_hostname
                 )
-                log_info(f"Proxy handler created on first request for {proxy_hostname} with auth", component="proxy_app")
+                log_info(f"Proxy handler created on first request for {proxy_hostname}", component="proxy_app")
             except Exception as e:
                 log_error(f"Failed to initialize proxy handler: {e}", component="proxy_app")
                 import traceback

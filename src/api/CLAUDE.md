@@ -28,7 +28,13 @@ api/
 │   ├── logs/       # /logs/*
 │   ├── mcp/        # /mcp - Model Context Protocol server
 │   ├── oauth/      # /oauth/*
-│   ├── proxy/      # /proxy/targets/*
+│   ├── proxy/      # /proxy/targets/* - includes sub-modules:
+│   │   ├── core.py     # Basic proxy CRUD operations
+│   │   ├── auth.py     # Proxy authentication configuration
+│   │   ├── routes.py   # Proxy route management
+│   │   ├── resources.py # Protected resource metadata
+│   │   ├── oauth_server.py # OAuth server metadata
+│   │   └── github_oauth.py # GitHub OAuth credentials
 │   ├── resources/  # /resources/*
 │   ├── routes/     # /routes/*
 │   ├── services/   # /services/*

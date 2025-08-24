@@ -1,5 +1,10 @@
-"""Simplified async proxy handler with unified routing support."""
+"""Simplified async proxy handler with unified routing support and OAuth scopes."""
+import json
 import httpx
+import jwt
+import re
+import socket
+from typing import Optional, List, Dict, Any
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse
 from urllib.parse import quote
@@ -11,37 +16,49 @@ from ..proxy.unified_routing import (
     UnifiedRoutingEngine, 
     RoutingDecisionType
 )
-from ..shared.logger import log_debug, log_info, log_warning
+from ..shared.logger import log_debug, log_info, log_warning, log_error
 from ..proxy.auth_exclusions import merge_exclusions
-from ..auth import FlexibleAuthService
 
 
 class SimpleAsyncProxyHandler:
-    """Simplified proxy handler with unified routing."""
+    """Simplified proxy handler with unified routing and OAuth scopes."""
     
-    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients, oauth_components=None, proxy_hostname=None, auth_service=None):
-        """Initialize simple proxy handler with routing support.
+    # OAuth scope requirements mapping
+    # Format: (method_pattern, path_pattern): [required_scopes]
+    SCOPE_REQUIREMENTS = [
+        # Admin scope - all create/update/delete operations
+        (r"POST|PUT|DELETE|PATCH", r"/tokens/.*", ["admin"]),
+        (r"POST|PUT|DELETE|PATCH", r"/certificates/.*", ["admin"]),
+        (r"POST|PUT|DELETE|PATCH", r"/services/.*", ["admin"]),
+        (r"POST|PUT|DELETE|PATCH", r"/proxy/targets.*", ["admin"]),
+        (r"POST|PUT|DELETE|PATCH", r"/routes/.*", ["admin"]),
+        (r"POST|PUT|DELETE|PATCH", r"/resources/.*", ["admin"]),
+        (r"POST|PUT|DELETE|PATCH", r"/auth/.*", ["admin"]),
+        
+        # MCP scope - protocol endpoints
+        (r".*", r"/mcp.*", ["mcp"]),
+        
+        # User scope - all read operations (default for GET)
+        (r"GET|HEAD|OPTIONS", r"/.*", ["user"]),
+        
+        # Public endpoints - no auth required
+        (r".*", r"/health", None),
+        (r".*", r"/.well-known/.*", None),
+    ]
+    
+    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients, oauth_components=None, proxy_hostname=None):
+        """Initialize simple proxy handler with OAuth scopes.
         
         Args:
             storage: Async storage instance
             redis_clients: Redis clients for operations
             oauth_components: OAuth components (optional)
             proxy_hostname: Hostname this handler is serving (for route filtering)
-            auth_service: FlexibleAuthService instance for authentication
         """
         self.storage = storage
         self.redis_clients = redis_clients
         self.proxy_hostname = proxy_hostname
         self.oauth_components = oauth_components
-        
-        # Initialize auth service if not provided
-        if auth_service:
-            self.auth_service = auth_service
-        else:
-            self.auth_service = FlexibleAuthService(
-                storage=storage,
-                oauth_components=oauth_components
-            )
         
         # Initialize unified routing components
         self.normalizer = RequestNormalizer()
@@ -60,169 +77,383 @@ class SimpleAsyncProxyHandler:
             limits=httpx.Limits(max_keepalive_connections=100)
         )
     
-    async def _check_auth(self, request: Request, proxy_hostname: str) -> Response:
-        """Check authentication for the request.
+    def extract_bearer_token(self, request: Request) -> Optional[str]:
+        """Extract bearer token from Authorization header."""
+        auth_header = request.headers.get('authorization', '')
+        if auth_header.startswith('Bearer '):
+            return auth_header[7:]
+        return None
+    
+    async def validate_oauth_jwt(self, token: str) -> Optional[Dict[str, Any]]:
+        """Validate OAuth JWT token and return payload."""
+        try:
+            # Get OAuth public key from storage or config
+            if self.oauth_components and hasattr(self.oauth_components, 'public_key'):
+                public_key = self.oauth_components.public_key
+            else:
+                # Try to get from storage
+                public_key_data = await self.storage.get("oauth:public_key")
+                if not public_key_data:
+                    log_warning("No OAuth public key available for JWT validation", component="proxy_handler")
+                    return None
+                public_key = public_key_data
+            
+            # Decode and validate JWT
+            payload = jwt.decode(
+                token,
+                public_key,
+                algorithms=["RS256", "HS256"],
+                options={"verify_signature": True, "verify_exp": True}
+            )
+            
+            log_debug(f"JWT validated successfully for user: {payload.get('sub')}", component="proxy_handler")
+            return payload
+            
+        except jwt.ExpiredSignatureError:
+            log_warning("JWT token expired", component="proxy_handler")
+            return None
+        except jwt.InvalidTokenError as e:
+            log_warning(f"Invalid JWT token: {e}", component="proxy_handler")
+            return None
+        except Exception as e:
+            log_error(f"Error validating JWT: {e}", component="proxy_handler")
+            return None
+    
+    def get_required_scopes(self, method: str, path: str) -> Optional[List[str]]:
+        """Get required scopes for the given method and path."""
+        for method_pattern, path_pattern, required_scopes in self.SCOPE_REQUIREMENTS:
+            if re.match(method_pattern, method, re.IGNORECASE):
+                if re.match(path_pattern, path):
+                    return required_scopes
+        # Default to user scope for unmatched patterns
+        return ["user"]
+    
+    def validate_scopes(self, token_scopes: List[str], required_scopes: List[str]) -> bool:
+        """Check if token has required scopes."""
+        if not required_scopes:
+            return True  # No scopes required (public endpoint)
+        
+        # Check if user has at least one required scope
+        return any(scope in token_scopes for scope in required_scopes)
+    
+    def get_auth_config(self, route: Any, proxy_config: Dict[str, Any]) -> Dict[str, Any]:
+        """Get auth config from route or proxy."""
+        # Check route-level auth override first
+        if route and hasattr(route, 'override_proxy_auth') and route.override_proxy_auth:
+            if hasattr(route, 'auth_config') and route.auth_config:
+                return route.auth_config
+        
+        # Fall back to proxy-level auth config
+        return proxy_config.get('auth_config', {'auth_type': 'oauth'})
+    
+    def validate_user_access(self, token_info: Dict[str, Any], auth_config: Dict[str, Any]) -> bool:
+        """Validate user access based on allowed users/orgs/emails."""
+        username = token_info.get('sub', '')
+        
+        # Check allowed users
+        allowed_users = auth_config.get('allowed_users', [])
+        if allowed_users and allowed_users != ['*']:
+            if username not in allowed_users:
+                log_info(f"User {username} not in allowed users", component="proxy_handler")
+                return False
+        
+        # Check allowed organizations
+        user_orgs = token_info.get('orgs', [])
+        allowed_orgs = auth_config.get('allowed_orgs', [])
+        if allowed_orgs:
+            if not any(org in allowed_orgs for org in user_orgs):
+                log_info(f"User not in allowed organizations", component="proxy_handler")
+                return False
+        
+        # Check allowed emails
+        user_email = token_info.get('email', '')
+        allowed_emails = auth_config.get('allowed_emails', [])
+        if allowed_emails:
+            email_allowed = False
+            for pattern in allowed_emails:
+                if '*' in pattern:
+                    # Simple wildcard matching
+                    regex_pattern = pattern.replace('*', '.*')
+                    if re.match(regex_pattern, user_email):
+                        email_allowed = True
+                        break
+                elif user_email == pattern:
+                    email_allowed = True
+                    break
+            
+            if not email_allowed:
+                log_info(f"User email {user_email} not in allowed emails", component="proxy_handler")
+                return False
+        
+        return True
+    
+    async def _check_auth(self, request: Request, proxy_hostname: str, decision=None, log_ctx=None) -> Response:
+        """Check OAuth authentication with scope validation.
+        
+        Args:
+            request: The incoming request
+            proxy_hostname: The proxy hostname
+            decision: Optional routing decision with route info
+            log_ctx: Optional logging context with client info
         
         Returns:
             None if authenticated, Response object if auth failed/redirect needed
         """
-        log_info(f"_check_auth called for {proxy_hostname}", component="simple_proxy_handler")
+        if log_ctx is None:
+            log_ctx = {}
+        log_info(f"OAuth auth check for {proxy_hostname}{request.url.path}", component="proxy_handler", **log_ctx)
         
-        # Get proxy target configuration
+        # Get proxy configuration
         try:
             proxy_target = await self.storage.get_proxy_target(proxy_hostname)
-            log_info(f"Got proxy target for {proxy_hostname}: {proxy_target is not None}, auth_enabled: {proxy_target.auth_enabled if proxy_target else 'N/A'}", component="simple_proxy_handler")
-        except Exception as e:
-            log_warning(f"Error getting proxy target: {e}", component="simple_proxy_handler")
-            return None
+            if not proxy_target:
+                log_warning(f"No proxy target found for {proxy_hostname}", component="proxy_handler", **log_ctx)
+                return None
             
-        if not proxy_target:
-            log_warning(f"No proxy target found for {proxy_hostname}", component="simple_proxy_handler")
-            return None  # No proxy configured
+            proxy_config = {
+                'auth_enabled': proxy_target.auth_enabled,
+                'auth_type': 'oauth' if proxy_target.auth_proxy else 'none',
+                'auth_proxy': proxy_target.auth_proxy,
+                'auth_mode': proxy_target.auth_mode,
+                'auth_excluded_paths': proxy_target.auth_excluded_paths,
+                'admin_users': proxy_target.oauth_admin_users or [],
+                'user_users': proxy_target.oauth_user_users or ['*'],
+                'mcp_users': proxy_target.oauth_mcp_users or [],
+            }
+        except Exception as e:
+            log_error(f"Error getting proxy config: {e}", component="proxy_handler", **log_ctx)
+            proxy_config = {'auth_type': 'oauth'}
         
-        if not proxy_target.auth_enabled:
-            log_info(f"Auth not enabled for {proxy_hostname}", component="simple_proxy_handler")
-            return None  # No auth required
+        # Get auth configuration (route overrides proxy)
+        route = decision.route if decision else None
+        auth_config = self.get_auth_config(route, proxy_config)
         
-        # Check if path is excluded from auth
+        # Check if auth is disabled
+        if auth_config.get('auth_type') == 'none':
+            log_info(f"Auth disabled for this request", component="proxy_handler", **log_ctx)
+            return None
+        
+        # Check excluded paths
         request_path = request.url.path
-        all_exclusions = merge_exclusions(proxy_target.auth_excluded_paths)
-        log_info(f"Checking path {request_path} against exclusions: {all_exclusions}", component="simple_proxy_handler")
-        
-        for excluded_path in all_exclusions:
+        excluded_paths = auth_config.get('auth_excluded_paths', []) or proxy_config.get('auth_excluded_paths', [])
+        for excluded_path in excluded_paths:
             if request_path.startswith(excluded_path):
-                log_info(f"Path {request_path} excluded from auth by rule: {excluded_path}", component="simple_proxy_handler")
-                return None  # Path is excluded
+                log_info(f"Path {request_path} excluded from auth", component="proxy_handler", **log_ctx)
+                return None
         
-        # Check authentication using auth service
-        log_info(f"Checking authentication for {proxy_hostname}{request_path}", component="simple_proxy_handler")
+        # Extract bearer token
+        token = self.extract_bearer_token(request)
+        if not token:
+            log_info("No bearer token found in request", component="proxy_handler", **log_ctx)
+            return await self._return_auth_error(request, proxy_config)
         
-        # Use FlexibleAuthService to check proxy auth
-        try:
-            log_info(f"Calling auth_service.check_proxy_auth...", component="simple_proxy_handler")
-            import asyncio
-            auth_result = await asyncio.wait_for(
-                self.auth_service.check_proxy_auth(
-                    request=request,
-                    proxy_hostname=proxy_hostname,
-                    path=request_path
-                ),
-                timeout=5.0
+        # Validate OAuth JWT
+        token_info = await self.validate_oauth_jwt(token)
+        if not token_info:
+            log_warning("Invalid or expired OAuth token", component="proxy_handler", **log_ctx)
+            return await self._return_auth_error(request, proxy_config)
+        
+        # Get required scopes for this request
+        method = request.method
+        path = request.url.path
+        
+        # Check if route has specific scope requirements
+        if route and hasattr(route, 'auth_config') and route.auth_config:
+            required_scopes = route.auth_config.get('required_scopes', [])
+            if not required_scopes:
+                # Fall back to method/path based scope detection
+                required_scopes = self.get_required_scopes(method, path)
+        else:
+            required_scopes = self.get_required_scopes(method, path)
+        
+        log_info(f"Required scopes for {method} {path}: {required_scopes}", component="proxy_handler")
+        
+        # Get user's scopes from token
+        token_scopes = token_info.get('scope', '').split()
+        log_info(f"User {token_info.get('sub')} has scopes: {token_scopes}", component="proxy_handler")
+        
+        # Validate scopes
+        if required_scopes and not self.validate_scopes(token_scopes, required_scopes):
+            log_warning(f"User lacks required scopes. Has: {token_scopes}, needs: {required_scopes}", component="proxy_handler")
+            return Response(
+                status_code=403,
+                content=json.dumps({
+                    "error": "insufficient_scope",
+                    "error_description": f"Missing required scopes. Need one of: {required_scopes}"
+                }),
+                headers={"Content-Type": "application/json"}
             )
-            log_info(f"Auth service returned: authenticated={auth_result.authenticated if hasattr(auth_result, 'authenticated') else 'N/A'}, auth_type={auth_result.auth_type if hasattr(auth_result, 'auth_type') else 'N/A'}, error={auth_result.error if hasattr(auth_result, 'error') else 'N/A'}", component="simple_proxy_handler")
-        except asyncio.TimeoutError:
-            log_warning(f"Auth service timeout after 5 seconds", component="simple_proxy_handler")
-            # Default to denying access on timeout
-            return Response(content="Authentication timeout", status_code=503)
-        except Exception as e:
-            log_warning(f"Auth service error: {e}", component="simple_proxy_handler")
-            import traceback
-            log_warning(f"Auth service traceback: {traceback.format_exc()}", component="simple_proxy_handler")
-            # For now, allow access on auth service error
-            return None
         
-        # Check if authentication passed
-        if hasattr(auth_result, 'authenticated'):
-            if auth_result.authenticated:
-                log_info(f"Authentication successful for user: {auth_result.principal if hasattr(auth_result, 'principal') else 'unknown'}", component="simple_proxy_handler")
-                return None  # Authenticated, continue to proxy
-            else:
-                log_warning(f"Authentication failed for {proxy_hostname}: {auth_result.error if hasattr(auth_result, 'error') else 'unknown error'}", component="simple_proxy_handler")
-                # Authentication failed, determine response based on mode
-        else:
-            log_warning(f"Unexpected auth_result type: {type(auth_result)}", component="simple_proxy_handler")
+        # Validate user access (allowed users/orgs/emails)
+        if not self.validate_user_access(token_info, auth_config):
+            log_warning(f"User {token_info.get('sub')} not in allowed users/orgs/emails", component="proxy_handler")
+            return Response(
+                status_code=403,
+                content=json.dumps({
+                    "error": "access_denied",
+                    "error_description": "User not authorized for this resource"
+                }),
+                headers={"Content-Type": "application/json"}
+            )
         
-        # Handle authentication failure based on mode
-        if proxy_target.auth_mode == "redirect":
-            # Redirect to OAuth login
-            return_url = str(request.url)
-            auth_login_url = f"https://{proxy_target.auth_proxy}/login?return_url={quote(return_url)}&proxy_hostname={quote(proxy_hostname)}"
-            log_info(f"Redirecting to auth login: {auth_login_url}", component="simple_proxy_handler")
-            return RedirectResponse(url=auth_login_url, status_code=302)
-        else:
-            # Return 401 with MCP-compliant headers
-            host = request.headers.get("host", proxy_hostname)
-            proto = request.headers.get("x-forwarded-proto", "https")
-            resource_metadata_url = f"{proto}://{host}/.well-known/oauth-protected-resource"
-            auth_metadata_url = f"https://{proxy_target.auth_proxy}/.well-known/oauth-authorization-server"
-            
-            www_auth_params = [
-                'Bearer',
-                f'realm="{proxy_target.auth_proxy}"',
-                f'as_uri="{auth_metadata_url}"',
-                f'resource_uri="{resource_metadata_url}"'
-            ]
-            
-            www_authenticate = ', '.join(www_auth_params)
+        # Authentication successful - will forward with trust headers
+        log_info(f"OAuth authentication successful for {token_info.get('sub')} with scopes: {token_scopes}", component="proxy_handler")
+        
+        # Store auth info in request state for forwarding
+        request.state.auth_user = token_info.get('sub', 'anonymous')
+        request.state.auth_scopes = ' '.join(token_scopes)
+        request.state.auth_email = token_info.get('email', '')
+        
+        return None  # Authentication successful
+    
+    async def _return_auth_error(self, request: Request, proxy_config: Dict[str, Any]) -> Response:
+        """Return appropriate auth error response (401 with WWW-Authenticate or redirect)."""
+        # Check if this is a browser request
+        accept = request.headers.get("accept", "")
+        user_agent = request.headers.get("user-agent", "").lower()
+        is_browser = "text/html" in accept or any(x in user_agent for x in ["mozilla", "chrome", "safari", "firefox"])
+        
+        # Special handling for MCP endpoint
+        is_mcp = request.url.path.startswith("/mcp")
+        
+        # Get auth proxy for OAuth redirect
+        auth_proxy = proxy_config.get('auth_proxy', '')
+        auth_mode = proxy_config.get('auth_mode', 'redirect')
+        
+        # API requests and MCP always get 401
+        if not is_browser or is_mcp or auth_mode != 'redirect':
+            # Build WWW-Authenticate header
+            www_auth = 'Bearer'
+            if auth_proxy:
+                www_auth += f' realm="{auth_proxy}"'
             
             return Response(
-                content="Authentication required",
                 status_code=401,
-                headers={"WWW-Authenticate": www_authenticate}
+                content=json.dumps({
+                    "error": "unauthorized",
+                    "error_description": "OAuth authentication required"
+                }),
+                headers={
+                    "WWW-Authenticate": www_auth,
+                    "Content-Type": "application/json"
+                }
             )
+        
+        # Browser requests get redirect to OAuth
+        if auth_proxy:
+            from secrets import token_urlsafe
+            state = token_urlsafe(32)
+            
+            # Get GitHub client ID
+            github_client_id = proxy_config.get('github_client_id')
+            if not github_client_id:
+                from ..shared.config import Config
+                github_client_id = Config.GITHUB_CLIENT_ID
+            
+            if not github_client_id:
+                return Response(content="OAuth not configured", status_code=500)
+            
+            # Build OAuth authorize URL
+            from urllib.parse import urlencode
+            auth_params = {
+                'response_type': 'code',
+                'client_id': github_client_id,
+                'redirect_uri': f'https://{request.headers.get("host")}/callback',
+                'state': state,
+                'scope': 'openid profile email'
+            }
+            
+            auth_url = f"https://{auth_proxy}/authorize?{urlencode(auth_params)}"
+            return RedirectResponse(url=auth_url, status_code=302)
+        
+        # No auth proxy configured
+        return Response(
+            status_code=401,
+            content="Authentication required but not configured",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
     
     async def handle_request(self, request: Request) -> Response:
         """Handle request with unified routing logic."""
         try:
+            # Get proxy hostname from request
+            proxy_hostname = request.headers.get("host", "unknown").split(":")[0]
+            
             # Extract client info from headers (set by PROXY protocol handler)
             client_info = {
                 'ip': request.headers.get('x-real-ip', '127.0.0.1'),
                 'port': int(request.headers.get('x-client-port', '0'))
             }
             
+            # Get client hostname via reverse DNS
+            client_hostname = "unknown"
+            try:
+                client_hostname = socket.gethostbyaddr(client_info['ip'])[0]
+            except:
+                client_hostname = client_info['ip']  # Use IP if reverse DNS fails
+            
+            # Create log context for all logs in this request
+            log_ctx = {
+                'proxy_hostname': proxy_hostname,
+                'client_ip': client_info['ip'],
+                'client_hostname': client_hostname,
+                'request_path': str(request.url.path),
+                'request_method': request.method
+            }
+            
             # Normalize the HTTPS request
             try:
                 normalized = self.normalizer.normalize_https(request, client_info)
-                log_debug(f"Normalized request - hostname: {normalized.hostname}, path: {normalized.path}", component="simple_proxy_handler")
+                log_debug(f"Normalized request - hostname: {normalized.hostname}, path: {normalized.path}", component="proxy_handler", **log_ctx)
             except Exception as e:
-                log_warning(f"Failed to normalize request: {e}", component="simple_proxy_handler")
+                log_warning(f"Failed to normalize request: {e}", component="proxy_handler", **log_ctx)
                 raise HTTPException(400, f"Failed to normalize request: {e}")
             
-            # Check authentication first
+            # Process through unified routing engine FIRST to get route info
+            log_info(f"Processing routing for {normalized.hostname}{normalized.path}", component="proxy_handler", **log_ctx)
+            decision = await self.routing_engine.process_request(normalized)
+            
+            # Check authentication with routing decision context
             try:
-                auth_response = await self._check_auth(request, normalized.hostname)
+                auth_response = await self._check_auth(request, normalized.hostname, decision, log_ctx)
                 if auth_response:
                     return auth_response  # Return auth error or redirect
             except Exception as e:
-                log_warning(f"Auth check failed: {e}", component="simple_proxy_handler")
+                log_warning(f"Auth check failed: {e}", component="proxy_handler", **log_ctx)
                 import traceback
-                log_warning(f"Auth check traceback: {traceback.format_exc()}", component="simple_proxy_handler")
+                log_warning(f"Auth check traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
                 # Continue without auth on error for now to debug
                 pass
             
-            # Process through unified routing engine
-            log_info(f"Processing routing for {normalized.hostname}{normalized.path}", component="simple_proxy_handler")
-            decision = await self.routing_engine.process_request(normalized)
-            
             log_info(
                 f"Routing decision for {normalized.hostname}{normalized.path}: type={decision.type}, target={decision.target}, route_id={decision.route_id}",
-                component="simple_proxy_handler"
+                component="proxy_handler", **log_ctx
             )
             
             # Handle based on routing decision
             if decision.type == RoutingDecisionType.ROUTE:
                 # Route matched - forward to service
-                log_info(f"Forwarding to service via route {decision.route_id}: {decision.target}", component="simple_proxy_handler")
+                log_info(f"Forwarding to service via route {decision.route_id}: {decision.target}", component="proxy_handler", **log_ctx)
                 return await self._forward_to_service(request, decision, normalized)
             
             elif decision.type == RoutingDecisionType.PROXY:
                 # Proxy target found - forward to backend
-                log_info(f"Forwarding to proxy backend: {decision.target}", component="simple_proxy_handler")
+                log_info(f"Forwarding to proxy backend: {decision.target}", component="proxy_handler", **log_ctx)
                 return await self._forward_to_proxy(request, decision, normalized)
             
             else:
                 # No route or proxy found
-                log_error(f"NO ROUTE OR PROXY FOUND for {normalized.hostname}{normalized.path}", component="simple_proxy_handler")
+                log_error(f"NO ROUTE OR PROXY FOUND for {normalized.hostname}{normalized.path}", component="proxy_handler", **log_ctx)
                 raise HTTPException(404, f"No route or proxy target for {normalized.hostname}")
         
         except HTTPException as he:
-            log_warning(f"HTTPException in handle_request: status_code={he.status_code}, detail={he.detail}", component="simple_proxy_handler")
+            log_warning(f"HTTPException in handle_request: status_code={he.status_code}, detail={he.detail}", component="proxy_handler", **log_ctx)
             raise
         except Exception as e:
             import traceback
-            log_error(f"Unhandled exception in handle_request for {request.url}: {e}", component="simple_proxy_handler")
-            log_error(f"Exception type: {type(e).__name__}", component="simple_proxy_handler")
-            log_error(f"Full traceback: {traceback.format_exc()}", component="simple_proxy_handler")
+            log_error(f"Unhandled exception in handle_request for {request.url}: {e}", component="proxy_handler", **log_ctx)
+            log_error(f"Exception type: {type(e).__name__}", component="proxy_handler", **log_ctx)
+            log_error(f"Full traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
             raise HTTPException(500, "Internal server error")
     
     async def _forward_to_service(self, request: Request, decision, normalized):
@@ -248,11 +479,17 @@ class SimpleAsyncProxyHandler:
             component="proxy_handler"
         )
         
-        # Add X-Forwarded-Host header for service routing
+        # Add trust headers from auth
         custom_headers = {
             "X-Forwarded-Host": normalized.hostname,
             "X-Forwarded-Proto": "https"
         }
+        
+        # Add auth headers if available
+        if hasattr(request.state, 'auth_user'):
+            custom_headers["X-Auth-User"] = request.state.auth_user
+            custom_headers["X-Auth-Scopes"] = request.state.auth_scopes
+            custom_headers["X-Auth-Email"] = request.state.auth_email
         
         # Forward using common logic
         return await self._make_backend_request(request, target_url, preserve_host=False, custom_headers=custom_headers)
@@ -280,12 +517,19 @@ class SimpleAsyncProxyHandler:
             component="proxy_handler"
         )
         
+        # Add auth headers if available
+        custom_headers = decision.custom_headers or {}
+        if hasattr(request.state, 'auth_user'):
+            custom_headers["X-Auth-User"] = request.state.auth_user
+            custom_headers["X-Auth-Scopes"] = request.state.auth_scopes
+            custom_headers["X-Auth-Email"] = request.state.auth_email
+        
         # Forward using common logic with preserve_host from decision
         return await self._make_backend_request(
             request, 
             target_url, 
             preserve_host=decision.preserve_host,
-            custom_headers=decision.custom_headers
+            custom_headers=custom_headers
         )
     
     async def _make_backend_request(self, request: Request, target_url: str, 
@@ -325,111 +569,28 @@ class SimpleAsyncProxyHandler:
             if custom_headers:
                 headers.update(custom_headers)
             
-            # Get request body
-            try:
-                body = await request.body()
-            except Exception:
-                body = b""
+            # Read request body
+            body = await request.body()
             
-            # Make backend request
-            method = request.method.upper()
-            if method == "GET":
-                backend_response = await self.client.get(
-                    target_url,
-                    headers=headers,
-                    follow_redirects=False
-                )
-            elif method == "POST":
-                backend_response = await self.client.post(
-                    target_url,
-                    headers=headers,
-                    content=body,
-                    follow_redirects=False
-                )
-            elif method == "PUT":
-                backend_response = await self.client.put(
-                    target_url,
-                    headers=headers,
-                    content=body,
-                    follow_redirects=False
-                )
-            elif method == "DELETE":
-                backend_response = await self.client.delete(
-                    target_url,
-                    headers=headers,
-                    follow_redirects=False
-                )
-            elif method == "PATCH":
-                backend_response = await self.client.patch(
-                    target_url,
-                    headers=headers,
-                    content=body,
-                    follow_redirects=False
-                )
-            elif method == "HEAD":
-                backend_response = await self.client.head(
-                    target_url,
-                    headers=headers,
-                    follow_redirects=False
-                )
-            elif method == "OPTIONS":
-                backend_response = await self.client.options(
-                    target_url,
-                    headers=headers,
-                    follow_redirects=False
-                )
-            else:
-                # Fallback for other methods
-                backend_response = await self.client.request(
-                    method=method,
-                    url=target_url,
-                    headers=headers,
-                    content=body,
-                    follow_redirects=False
-                )
-            
-            # Read response body
-            try:
-                response_body = await backend_response.aread()
-            except AttributeError:
-                # Fallback if aread() doesn't exist
-                response_body = backend_response.content
-                if hasattr(response_body, '__aiter__'):
-                    # It's an async iterator
-                    chunks = []
-                    async for chunk in response_body:
-                        chunks.append(chunk)
-                    response_body = b''.join(chunks)
-            
-            # Prepare response headers
-            response_headers = dict(backend_response.headers)
-            
-            # Remove hop-by-hop headers from response
-            for header in hop_by_hop:
-                response_headers.pop(header, None)
-            
-            # Return response
-            return Response(
-                content=response_body,
-                status_code=backend_response.status_code,
-                headers=response_headers
+            # Make the backend request
+            response = await self.client.request(
+                method=request.method,
+                url=target_url,
+                headers=headers,
+                content=body,
+                follow_redirects=False
             )
             
-        except httpx.ConnectError:
-            raise HTTPException(502, "Cannot connect to backend")
+            # Create response
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=dict(response.headers)
+            )
+            
         except httpx.TimeoutException:
-            raise HTTPException(504, "Backend timeout")
-        except HTTPException:
-            raise
+            log_error(f"Timeout forwarding to {target_url}", component="proxy_handler")
+            raise HTTPException(504, "Gateway timeout")
         except Exception as e:
-            # Safe error handling
-            error_msg = "Proxy error"
-            try:
-                error_msg = f"Proxy error: {str(e)}"
-            except:
-                pass
-            raise HTTPException(500, error_msg)
-    
-    async def close(self):
-        """Close the httpx client."""
-        await self.client.aclose()
+            log_error(f"Error forwarding to {target_url}: {e}", component="proxy_handler")
+            raise HTTPException(502, f"Bad gateway: {e}")

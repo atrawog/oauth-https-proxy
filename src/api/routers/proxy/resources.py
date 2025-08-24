@@ -6,7 +6,7 @@ This module handles MCP (Model Context Protocol) resource metadata configuration
 import logging
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.models import ProxyResourceConfig
 
 logger = logging.getLogger(__name__)
@@ -30,9 +30,16 @@ def create_resources_router(async_storage):
         req: Request,
         proxy_hostname: str,
         config: ProxyResourceConfig,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
-        """Configure protected resource metadata for a proxy target - owner only."""
+        """Configure protected resource metadata for a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -105,9 +112,16 @@ def create_resources_router(async_storage):
     async def remove_proxy_resource(
         req: Request,
         proxy_hostname: str,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
     ):
-        """Remove protected resource metadata from a proxy target - owner only."""
+        """Remove protected resource metadata from a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         

@@ -82,14 +82,21 @@ class AuthManager:
         self.key_manager = RSAKeyManager()
         self.key_manager.load_or_generate_keys()
 
-        # For GitHub OAuth integration
-        # GitHub client initialized with placeholder redirect_uri
-        # The actual redirect_uri will be set dynamically based on request headers
-        self.github_client = AsyncOAuth2Client(
-            client_id=settings.github_client_id,
-            client_secret=settings.github_client_secret,
-            redirect_uri=f"https://auth.{settings.base_domain}/callback",  # Default, overridden per request
-        )
+        # Store for caching GitHub clients per proxy
+        self._github_clients = {}
+        
+        # Default GitHub client with environment credentials (backward compatibility)
+        # Will be used as fallback when no per-proxy config exists
+        if settings.github_client_id and settings.github_client_secret:
+            self.default_github_client = AsyncOAuth2Client(
+                client_id=settings.github_client_id,
+                client_secret=settings.github_client_secret,
+                redirect_uri=f"https://auth.{settings.base_domain}/callback",  # Default, overridden per request
+            )
+            log_info(f"Initialized default GitHub client with ID: {settings.github_client_id}")
+        else:
+            self.default_github_client = None
+            log_warning("No default GitHub OAuth credentials in environment")
 
     async def create_jwt_token(self, claims: dict, redis_client: redis.Redis, issuer: Optional[str] = None) -> str:
         """Creates a blessed JWT token using Authlib
@@ -309,26 +316,106 @@ class AuthManager:
 
         return refresh_token
 
-    async def exchange_github_code(self, code: str) -> Optional[dict]:
-        """Exchange GitHub authorization code for access token using Authlib"""
+    async def get_github_client(self, proxy_hostname: Optional[str] = None, async_storage=None) -> Optional[AsyncOAuth2Client]:
+        """Get GitHub OAuth client for a specific proxy or use default.
+        
+        Args:
+            proxy_hostname: The proxy hostname to get credentials for
+            
+        Returns:
+            Configured AsyncOAuth2Client or None if no credentials available
+        """
+        log_info(f"get_github_client called for proxy_hostname: {proxy_hostname}", component="auth_manager")
+        
+        # If no proxy specified, use default
+        if not proxy_hostname:
+            log_info(f"No proxy_hostname specified, using default client", component="auth_manager")
+            return self.default_github_client
+            
+        # Check cache first
+        if proxy_hostname in self._github_clients:
+            log_info(f"Found cached GitHub client for {proxy_hostname}", component="auth_manager")
+            return self._github_clients[proxy_hostname]
+            
+        # Use provided async_storage to get proxy-specific credentials
+        if not async_storage:
+            log_error(f"No async_storage provided for {proxy_hostname}", component="auth_manager")
+            return self.default_github_client
+        
         try:
+            # Get proxy configuration
+            log_info(f"Fetching proxy target for {proxy_hostname}", component="auth_manager")
+            proxy_target = await async_storage.get_proxy_target(proxy_hostname)
+            
+            log_info(f"Proxy target result for {proxy_hostname}: found={proxy_target is not None}, client_id={proxy_target.github_client_id if proxy_target else 'None'}", component="auth_manager")
+            
+            if proxy_target and proxy_target.github_client_id and proxy_target.github_client_secret:
+                # Create proxy-specific GitHub client
+                github_client = AsyncOAuth2Client(
+                    client_id=proxy_target.github_client_id,
+                    client_secret=proxy_target.github_client_secret,
+                    redirect_uri=f"https://{proxy_hostname}/callback",
+                )
+                # Cache it
+                self._github_clients[proxy_hostname] = github_client
+                log_info(f"Created proxy-specific GitHub client for {proxy_hostname} with client_id: {proxy_target.github_client_id}", component="auth_manager")
+                return github_client
+        except Exception as e:
+            log_error(f"Failed to get proxy-specific GitHub credentials for {proxy_hostname}: {e}", component="auth_manager", error_type=type(e).__name__)
+            import traceback
+            log_error(f"Traceback: {traceback.format_exc()}", component="auth_manager")
+        finally:
+            pass  # No cleanup needed since we don't create instances
+            
+        # Fall back to default client
+        log_info(f"Using default GitHub client for {proxy_hostname} (fallback)", component="auth_manager")
+        return self.default_github_client
+
+    async def exchange_github_code(self, code: str, proxy_hostname: Optional[str] = None, redirect_uri: Optional[str] = None, async_storage=None) -> Optional[dict]:
+        """Exchange GitHub authorization code for access token using Authlib
+        
+        Args:
+            code: The authorization code from GitHub
+            proxy_hostname: The proxy hostname to use for credential lookup
+            redirect_uri: The redirect URI used in the authorization request
+        """
+        log_info(f"exchange_github_code called - code: {code[:8]}..., proxy_hostname: {proxy_hostname}, redirect_uri: {redirect_uri}", component="auth_manager")
+        
+        try:
+            # Get the appropriate GitHub client for this proxy
+            github_client = await self.get_github_client(proxy_hostname, async_storage)
+            if not github_client:
+                log_error(f"No GitHub client available for proxy: {proxy_hostname}", component="auth_manager")
+                return None
+                
             # Set up token endpoint
-            self.github_client.metadata = {
+            github_client.metadata = {
                 "token_endpoint": "https://github.com/login/oauth/access_token",
                 "token_endpoint_auth_methods_supported": ["client_secret_post"],
             }
 
             # Exchange code for token
-            token = await self.github_client.fetch_token(
+            # GitHub requires client_id, client_secret, code, and redirect_uri (if used in authorize)
+            log_info(f"Attempting to exchange GitHub code for proxy: {proxy_hostname}, redirect_uri: {redirect_uri}", component="auth_manager")
+            
+            # Build token request parameters
+            token_params = {"code": code}
+            if redirect_uri:
+                token_params["redirect_uri"] = redirect_uri
+            
+            token = await github_client.fetch_token(
                 "https://github.com/login/oauth/access_token",
-                code=code,
                 headers={"Accept": "application/json"},
+                **token_params
             )
 
             if not token or "access_token" not in token:
+                log_error(f"Token exchange failed - no access_token in response: {token}", component="auth_manager")
                 return None
 
             # Get user info using the token
+            log_info(f"Token exchange successful, fetching user info", component="auth_manager")
+            
             async with httpx.AsyncClient(timeout=30.0) as client:
                 headers = {
                     "Authorization": f"Bearer {token['access_token']}",
@@ -339,12 +426,17 @@ class AuthManager:
                 user_response = await client.get("https://api.github.com/user", headers=headers)
 
                 if user_response.status_code != 200:
+                    log_error(f"Failed to get user info from GitHub: status={user_response.status_code}, response={user_response.text}", component="auth_manager")
                     return None
 
-                return user_response.json()
+                user_data = user_response.json()
+                log_info(f"Successfully retrieved GitHub user info: {user_data.get('login')}", component="auth_manager")
+                return user_data
 
         except Exception as e:
-            print(f"GitHub OAuth error: {e}")
+            log_error(f"GitHub OAuth error during code exchange: {e}", component="auth_manager", proxy_hostname=proxy_hostname, error_type=type(e).__name__)
+            import traceback
+            log_error(f"Traceback: {traceback.format_exc()}", component="auth_manager")
             return None
 
     def verify_pkce_challenge(self, verifier: str, challenge: str, method: str = "S256") -> bool:

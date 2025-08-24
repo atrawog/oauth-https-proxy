@@ -47,6 +47,7 @@ class RoutingDecision:
     target: Optional[str] = None  # URL or service name
     target_type: Optional[RouteTargetType] = None
     route_id: Optional[str] = None
+    route: Optional[Route] = None  # Full route object for auth config access
     preserve_host: bool = False
     custom_headers: Optional[Dict[str, str]] = None
 
@@ -246,7 +247,8 @@ class UnifiedRoutingEngine:
                 type=RoutingDecisionType.ROUTE,
                 target=target,
                 target_type=matched_route.target_type,
-                route_id=matched_route.route_id
+                route_id=matched_route.route_id,
+                route=matched_route  # Pass the full route object for auth config access
             )
         
         # 3. Check for proxy target

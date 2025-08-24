@@ -8,12 +8,14 @@ import logging
 import secrets
 import time
 import traceback
+import httpx
+from datetime import datetime, timedelta
 from typing import Optional
 from urllib.parse import urlencode
 
 import redis.asyncio as redis
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
 
 from .async_resource_protector import create_async_resource_protector
 from .auth_authlib import AuthManager
@@ -219,10 +221,28 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     },
                 )
 
-        # Generate client credentials
-        credentials = auth_manager.generate_client_credentials()
-        client_id = credentials["client_id"]
-        client_secret = credentials["client_secret"]
+        # RFC 7591 Section 3.2.1 - Handle client-suggested client_id
+        if registration.client_id:
+            # Check if the suggested client_id is already taken
+            existing_client = await redis_client.get(f"oauth:client:{registration.client_id}")
+            if existing_client:
+                # RFC 7591 - Server MAY reject if client_id is already taken
+                raise HTTPException(
+                    status_code=400,
+                    detail={
+                        "error": "invalid_client_metadata",
+                        "error_description": f"Client ID {registration.client_id} is already registered",
+                    },
+                )
+            # Use the client-suggested ID
+            client_id = registration.client_id
+            # Generate only the secret
+            client_secret = secrets.token_urlsafe(32)
+        else:
+            # Generate both client_id and secret
+            credentials = auth_manager.generate_client_credentials()
+            client_id = credentials["client_id"]
+            client_secret = credentials["client_secret"]
 
         # Calculate client expiration time
         created_at = int(time.time())
@@ -231,6 +251,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Generate registration access token for RFC 7592 management
         registration_access_token = f"reg-{secrets.token_urlsafe(32)}"
 
+        # RFC 7591 - Handle grant_types and response_types
+        grant_types = registration.grant_types or ["authorization_code"]
+        response_types = registration.response_types or ["code"]
+        
+        # Validate grant_types and response_types consistency
+        if "authorization_code" in grant_types and "code" not in response_types:
+            response_types.append("code")
+        if "code" in response_types and "authorization_code" not in grant_types:
+            grant_types.append("authorization_code")
+        
+        # Add refresh_token grant if not explicitly disabled
+        if "authorization_code" in grant_types and "refresh_token" not in grant_types:
+            grant_types.append("refresh_token")
+        
         # Store client in Redis
         # Get the actual registration endpoint URL used by the client
         registration_client_uri = f"{get_external_url(request, settings)}/register/{client_id}"
@@ -244,8 +278,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             "client_name": registration.client_name or "Unnamed Client",
             "scope": registration.scope or "openid profile email",
             "created_at": created_at,
-            "response_types": json.dumps(["code"]),
-            "grant_types": json.dumps(["authorization_code", "refresh_token"]),
+            "response_types": json.dumps(response_types),
+            "grant_types": json.dumps(grant_types),
+            "token_endpoint_auth_method": registration.token_endpoint_auth_method or "client_secret_basic",
             "registration_access_token": registration_access_token,
             "registration_client_uri": registration_client_uri,
         }
@@ -289,6 +324,210 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
 
         return response
+
+    # Device Flow endpoints
+    @router.post("/device/code")
+    async def device_code(
+        request: Request,
+        client_id: str = Form(default="device_flow_client"),
+        scope: str = Form(default="read:user user:email")
+    ):
+        """GitHub Device Flow - Step 1: Get device code (RFC 8628 compliant)
+        
+        Accepts client_id and scope as form parameters per RFC 8628 Section 3.1
+        Forwards request to GitHub's device endpoint to get a device code
+        """
+        client_ip = get_real_client_ip(request)
+        
+        log_info(
+            "Device Flow: Code request",
+            ip=client_ip,
+            client_id=client_id,
+            scope=scope
+        )
+        
+        # Forward to GitHub's device code endpoint
+        # Note: We use GitHub's OAuth app credentials, not the client_id from request
+        async with httpx.AsyncClient() as client:
+            github_response = await client.post(
+                "https://github.com/login/device/code",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.github_client_id,
+                    "scope": scope  # Use the requested scope
+                }
+            )
+        
+        result = github_response.json()
+        log_info(
+            "Device Flow: Code generated",
+            ip=client_ip,
+            device_code=result.get("device_code", "")[:8] + "..." if result.get("device_code") else None,
+            user_code=result.get("user_code")
+        )
+        
+        return result
+
+    @router.post("/device/token") 
+    async def device_token(
+        request: Request,
+        grant_type: str = Form(...),
+        device_code: str = Form(...),
+        client_id: str = Form(default="device_flow_client"),
+        redis_client: redis.Redis = Depends(get_redis),
+    ):
+        """GitHub Device Flow - Step 2: Poll for token (RFC 8628 compliant)
+        
+        Accepts form parameters per RFC 8628 Section 3.4
+        Validates grant_type and exchanges device code for access token
+        """
+        client_ip = get_real_client_ip(request)
+        
+        # Validate grant_type per RFC 8628
+        if grant_type != "urn:ietf:params:oauth:grant-type:device_code":
+            log_warning(
+                f"Invalid grant_type: {grant_type}",
+                ip=client_ip,
+                client_id=client_id
+            )
+            return JSONResponse(
+                {"error": "unsupported_grant_type"},
+                status_code=400
+            )
+        
+        log_debug(
+            "Device Flow: Token exchange attempt",
+            ip=client_ip,
+            client_id=client_id,
+            has_device_code=bool(device_code)
+        )
+        
+        async with httpx.AsyncClient() as client:
+            # Exchange device code for GitHub access token
+            github_response = await client.post(
+                "https://github.com/login/oauth/access_token",
+                headers={"Accept": "application/json"},
+                data={
+                    "client_id": settings.github_client_id,
+                    "client_secret": settings.github_client_secret,
+                    "device_code": device_code,
+                    "grant_type": "urn:ietf:params:oauth:grant-type:device_code"
+                }
+            )
+        
+        result = github_response.json()
+        
+        # If we got an access token, get user info and generate our JWT
+        if "access_token" in result:
+            github_token = result["access_token"]
+            
+            # Get GitHub user info
+            async with httpx.AsyncClient() as client:
+                user_response = await client.get(
+                    "https://api.github.com/user",
+                    headers={"Authorization": f"token {github_token}"}
+                )
+            user_info = user_response.json()
+            
+            github_user = user_info.get("login")
+            log_info(
+                "Device Flow: GitHub user authenticated",
+                ip=client_ip,
+                github_user=github_user,
+                github_email=user_info.get("email")
+            )
+            
+            # Get localhost proxy for scope assignment
+            async_storage = request.app.state.async_storage
+            proxy = await async_storage.get_proxy_target("localhost")
+            
+            assigned_scopes = []
+            
+            if proxy:
+                # Check admin users
+                if proxy.oauth_admin_users:
+                    if "*" in proxy.oauth_admin_users or github_user in proxy.oauth_admin_users:
+                        assigned_scopes.append("admin")
+                
+                # Check user users (standard access)
+                if proxy.oauth_user_users:
+                    if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
+                        assigned_scopes.append("user")
+                
+                # Check MCP users
+                if proxy.oauth_mcp_users:
+                    if "*" in proxy.oauth_mcp_users or github_user in proxy.oauth_mcp_users:
+                        assigned_scopes.append("mcp")
+            
+            # Default to user scope if no scopes assigned
+            if not assigned_scopes:
+                log_info(
+                    f"Device Flow: No scopes configured for {github_user}, defaulting to 'user'",
+                    ip=client_ip,
+                    github_user=github_user
+                )
+                assigned_scopes = ["user"]
+            
+            # Generate our JWT with assigned scopes
+            jti = f"device_{secrets.token_urlsafe(16)}"
+            now = datetime.utcnow()
+            
+            token_payload = {
+                "iss": get_external_url(request, settings),
+                "sub": str(user_info.get("id")),
+                "aud": ["http://localhost:9000"],  # Default audience for Device Flow
+                "exp": now + timedelta(seconds=settings.access_token_lifetime),
+                "iat": now,
+                "jti": jti,
+                "scope": " ".join(assigned_scopes),
+                "azp": "device_flow_client",
+                "username": github_user,
+                "email": user_info.get("email"),
+                "name": user_info.get("name")
+            }
+            
+            access_token = jwt.encode(
+                token_payload,
+                auth_manager.key_manager.private_key,
+                algorithm=settings.jwt_algorithm
+            )
+            
+            # Store token metadata in Redis
+            token_data = {
+                "jti": jti,
+                "user_id": str(user_info.get("id")),
+                "username": github_user,
+                "client_id": "device_flow_client",
+                "scope": " ".join(assigned_scopes),
+                "expires_at": (now + timedelta(seconds=settings.access_token_lifetime)).isoformat()
+            }
+            
+            await redis_client.setex(
+                f"oauth:token:{jti}",
+                settings.access_token_lifetime,
+                json.dumps(token_data)
+            )
+            
+            log_info(
+                "Device Flow: Token generated",
+                ip=client_ip,
+                github_user=github_user,
+                scopes=assigned_scopes,
+                jti=jti
+            )
+            
+            return {
+                "access_token": access_token,
+                "token_type": "Bearer",
+                "scope": " ".join(assigned_scopes),
+                "expires_in": settings.access_token_lifetime
+            }
+        
+        # Return GitHub's response as-is (error or pending) with appropriate status
+        if "error" in result:
+            # Return 400 for OAuth errors per RFC 8628
+            return JSONResponse(result, status_code=400)
+        return result
 
     # Authorization endpoint
     @router.get("/authorize")
@@ -370,6 +609,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
             
             # RFC 6749 - MUST NOT redirect on invalid client_id
+            # Check Accept header to determine response format
+            accept_header = request.headers.get("accept", "text/html")
+            
+            # Return JSON for API clients (like Claude.ai)
+            if "application/json" in accept_header:
+                return JSONResponse(
+                    status_code=400,
+                    content={
+                        "error": "invalid_client",
+                        "error_description": f"Client {client_id} is not registered. Please register at {request.url.scheme}://{request.headers.get('host', 'localhost')}/register"
+                    }
+                )
+            
+            # Return HTML for browsers
             return HTMLResponse(
                 status_code=400,
                 content=f"""
@@ -558,17 +811,35 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 has_pkce=bool(code_challenge)
             )
 
+        # Extract proxy hostname from headers FIRST (before storing auth_data)
+        # MUST use X-Forwarded-Host when request comes through proxy
+        detected_proxy_hostname = request.headers.get("x-forwarded-host") or request.headers.get("host", "")
+        detected_proxy_hostname = detected_proxy_hostname.split(":")[0]  # Remove port if present
+        
+        # Use the detected proxy hostname if not explicitly provided as parameter
+        if not proxy_hostname:
+            proxy_hostname = detected_proxy_hostname
+        
+        log_info(
+            f"OAuth authorize - proxy hostname resolution",
+            param_proxy_hostname=proxy_hostname if proxy_hostname != detected_proxy_hostname else None,
+            detected_proxy_hostname=detected_proxy_hostname,
+            final_proxy_hostname=proxy_hostname,
+            component="oauth_authorize"
+        )
+        
         # Store authorization request state
         auth_state = secrets.token_urlsafe(32)
         auth_data = {
             "client_id": client_id,
-            "redirect_uri": redirect_uri,
+            "redirect_uri": redirect_uri,  # This is the CLIENT's redirect_uri (e.g., Claude.ai's callback)
             "scope": scope,
             "state": state,
             "code_challenge": code_challenge,
             "code_challenge_method": code_challenge_method,
             "resources": resource if resource else [],  # RFC 8707 Resource Indicators
-            "proxy_hostname": proxy_hostname,  # Store proxy hostname for per-proxy GitHub user checks
+            "proxy_hostname": proxy_hostname,  # Store proxy hostname for per-proxy GitHub user checks (now correctly set!)
+            # We'll add github_redirect_uri later after we build it
         }
 
         await redis_client.setex(
@@ -577,15 +848,71 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             json.dumps(auth_data),
         )  # TODO: Break long line
         log_info(
-            f"Created OAuth state: {auth_state} for client: {client_id}, original state: {state}",
+            f"Created OAuth state: {auth_state} for client: {client_id}, original state: {state}, proxy: {proxy_hostname}",
         )
 
         # Redirect to GitHub OAuth
         # Get the external URL for the callback
         external_url = get_external_url(request, settings)
+        
+        # Get the appropriate GitHub client for this proxy
+        async_storage = request.app.state.async_storage
+        github_client = await auth_manager.get_github_client(proxy_hostname, async_storage)
+        if not github_client:
+            log_error(
+                "No GitHub OAuth credentials available",
+                ip=client_ip,
+                proxy_hostname=proxy_hostname
+            )
+            return HTMLResponse(
+                status_code=500,
+                content="GitHub OAuth not configured for this proxy"
+            )
+        
+        log_info(
+            f"Using GitHub client for {proxy_hostname}",
+            proxy_hostname=proxy_hostname,
+            client_id=github_client.client_id,
+            has_proxy_config=proxy_hostname in auth_manager._github_clients,
+            x_forwarded_host=request.headers.get("x-forwarded-host"),
+            host_header=request.headers.get("host")
+        )
+        
+        # Build the GitHub redirect_uri - this MUST match what's registered in GitHub
+        # For claude.atratest.org, this should be https://claude.atratest.org/callback
+        github_redirect_uri = f"{external_url}/callback"
+        
+        log_info(
+            f"Building GitHub redirect_uri",
+            external_url=external_url,
+            github_redirect_uri=github_redirect_uri,
+            x_forwarded_host=request.headers.get("x-forwarded-host"),
+            host_header=request.headers.get("host"),
+            proxy_hostname=proxy_hostname,
+            component="oauth_authorize"
+        )
+        
+        # Update auth_data with the GitHub redirect_uri we're using
+        auth_data["github_redirect_uri"] = github_redirect_uri
+        
+        # Re-store the updated auth_data with the GitHub redirect_uri
+        await redis_client.setex(
+            f"oauth:state:{auth_state}",
+            300,
+            json.dumps(auth_data),
+        )
+        
+        log_info(
+            f"Stored GitHub redirect_uri in auth state",
+            github_redirect_uri=github_redirect_uri,
+            auth_state=auth_state,
+            client_redirect_uri=redirect_uri,  # This is Claude.ai's callback
+            component="oauth_authorize"
+        )
+        
         github_params = {
-            "client_id": settings.github_client_id,
-            "redirect_uri": f"{external_url}/callback",
+            "client_id": github_client.client_id,
+            "redirect_uri": github_redirect_uri,
             "scope": "user:email",
             "state": auth_state,
         }
@@ -640,18 +967,37 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Get client IP
         client_ip = get_real_client_ip(request)
         
+        # Wrap entire function in try-except to catch any unexpected errors
+        try:
+            return await _handle_oauth_callback(request, code, state, error, error_description, redis_client, client_ip)
+        except HTTPException:
+            raise  # Re-raise HTTP exceptions
+        except Exception as e:
+            log_error(f"Unexpected error in OAuth callback: {e}", component="oauth_callback", error_type=type(e).__name__)
+            import traceback
+            log_error(f"Traceback: {traceback.format_exc()}", component="oauth_callback")
+            # Return generic error to avoid exposing internals
+            raise HTTPException(500, "Internal server error during OAuth callback")
+    
+    async def _handle_oauth_callback(request, code, state, error, error_description, redis_client, client_ip):
+        
         log_info(
             "OAuth callback received from GitHub",
             ip=client_ip,
             state=state,
-            code_preview=f"{code[:8]}..." if code else "no code"
+            code_preview=f"{code[:8]}..." if code else "no code",
+            host_header=request.headers.get("host"),
+            x_forwarded_host=request.headers.get("x-forwarded-host"),
+            full_url=str(request.url),
+            component="oauth_callback"
         )
         
         # Log request with OAuth context
-        await log_request(
-            logger,
-            request,
-            client_ip, proxy_hostname=request.headers.get("host"),
+        log_request(
+            method=request.method,
+            path=str(request.url.path),
+            ip=client_ip,
+            proxy_hostname=request.headers.get("host", ""),
             oauth_action="callback",
             oauth_state=state,
             oauth_code=code[:8] + "..." if code else "no_code",
@@ -691,8 +1037,38 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             resources=auth_data.get('resources')
         )
 
-        # Exchange GitHub code
-        user_info = await auth_manager.exchange_github_code(code)
+        # Exchange GitHub code using proxy-specific credentials
+        proxy_hostname = auth_data.get('proxy_hostname')
+        
+        # CRITICAL: Use the EXACT same redirect_uri we sent to GitHub in the authorize request
+        # This was stored in auth_data to ensure consistency
+        github_redirect_uri = auth_data.get('github_redirect_uri')
+        
+        if not github_redirect_uri:
+            log_error(f"Missing github_redirect_uri in auth_data", component="oauth_callback")
+            # Fallback to reconstructing it (shouldn't happen with updated code)
+            external_url = get_external_url(request, settings)
+            github_redirect_uri = f"{external_url}/callback"
+            log_warning(f"Falling back to reconstructed redirect_uri: {github_redirect_uri}", component="oauth_callback")
+        
+        log_info(f"Exchanging GitHub code for proxy: {proxy_hostname}, github_redirect_uri: {github_redirect_uri}", component="oauth_callback")
+        
+        # Get async_storage from app.state for GitHub client lookup
+        async_storage = request.app.state.async_storage
+        
+        try:
+            user_info = await auth_manager.exchange_github_code(code, proxy_hostname, github_redirect_uri, async_storage)
+        except Exception as e:
+            log_error(
+                f"Exception during GitHub code exchange: {e}",
+                ip=client_ip,
+                client_id=auth_data.get('client_id'),
+                error_type=type(e).__name__,
+                component="oauth_callback"
+            )
+            import traceback
+            log_error(f"Traceback: {traceback.format_exc()}", component="oauth_callback")
+            user_info = None
 
         if not user_info:
             log_error(
@@ -728,9 +1104,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         
         # Check if we have a proxy-specific user allowlist
         if proxy_hostname:
-            from ....storage.redis_storage import RedisStorage
-            storage = RedisStorage(redis_client)
-            proxy_target = storage.get_proxy_target(proxy_hostname)
+            # Get async_storage from app.state (set by main.py)
+            storage = request.app.state.async_storage
+            proxy_target = await storage.get_proxy_target(proxy_hostname)
             
             if proxy_target and proxy_target.auth_required_users is not None:
                 # Use proxy-specific list from auth_required_users
@@ -777,6 +1153,51 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 url=f"{auth_data['redirect_uri']}?error=access_denied&state={auth_data['state']}",  # TODO: Break long line
             )
 
+        # Assign scopes based on proxy configuration and GitHub username
+        github_user = user_info.get("login")
+        assigned_scopes = []
+        
+        # Get proxy configuration for scope assignment
+        proxy_hostname = auth_data.get("proxy_hostname", "localhost")
+        if async_storage:
+            proxy = await async_storage.get_proxy_target(proxy_hostname)
+            if proxy:
+                # Check admin users
+                if proxy.oauth_admin_users:
+                    if "*" in proxy.oauth_admin_users or github_user in proxy.oauth_admin_users:
+                        assigned_scopes.append("admin")
+                
+                # Check user users (standard access)
+                if proxy.oauth_user_users:
+                    if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
+                        assigned_scopes.append("user")
+                
+                # Check MCP users
+                if proxy.oauth_mcp_users:
+                    if "*" in proxy.oauth_mcp_users or github_user in proxy.oauth_mcp_users:
+                        assigned_scopes.append("mcp")
+        
+        # If no scopes assigned through proxy config, default to user scope
+        if not assigned_scopes:
+            log_info(
+                f"No scopes configured for user {github_user} on {proxy_hostname}, defaulting to 'user' scope",
+                ip=client_ip,
+                github_user=github_user,
+                proxy_hostname=proxy_hostname
+            )
+            assigned_scopes = ["user"]
+        
+        # Update auth_data with assigned scopes (overwrites requested scopes)
+        auth_data["scope"] = " ".join(assigned_scopes)
+        
+        log_info(
+            f"OAuth scopes assigned based on GitHub user",
+            ip=client_ip,
+            github_user=github_user,
+            assigned_scopes=assigned_scopes,
+            proxy_hostname=proxy_hostname
+        )
+        
         # Generate authorization code
         auth_code = secrets.token_urlsafe(32)
 
@@ -802,23 +1223,23 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             "OAuth authorization code generated",
             ip=client_ip,
             client_id=auth_data.get('client_id'),
-            user_id=str(user_info["id"]),
-            username=user_info["login"],
+            user_id=str(user_info.get("id", "unknown")),
+            username=user_info.get("login", "unknown"),
             email=user_info.get("email", ""),
             scope=auth_data.get("scope"),
             resources=auth_data.get("resources"),
-            redirect_uri=auth_data["redirect_uri"]
+            redirect_uri=auth_data.get("redirect_uri", "")
         )
 
         # Handle out-of-band redirect URI
-        if auth_data["redirect_uri"] == "urn:ietf:wg:oauth:2.0:oob":
+        if auth_data.get("redirect_uri") == "urn:ietf:wg:oauth:2.0:oob":
             log_debug(
                 "Using out-of-band redirect for auth code display",
-                client_id=auth_data["client_id"],
-                state=auth_data["state"]
+                client_id=auth_data.get("client_id"),
+                state=auth_data.get("state", state)
             )
             return RedirectResponse(
-                url=f"https://auth.{settings.base_domain}/success?code={auth_code}&state={auth_data['state']}",  # TODO: Break long line
+                url=f"https://auth.{settings.base_domain}/success?code={auth_code}&state={auth_data.get('state', state)}",  # TODO: Break long line
                 headers={
                     "Cache-Control": "no-cache, no-store, must-revalidate",
                     "Pragma": "no-cache",
@@ -827,9 +1248,14 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
 
         # Normal redirect
-        redirect_params = {"code": auth_code, "state": auth_data["state"]}
+        redirect_params = {"code": auth_code, "state": auth_data.get("state", state)}
 
-        final_redirect_url = f"{auth_data['redirect_uri']}?{urlencode(redirect_params)}"
+        client_redirect_uri = auth_data.get('redirect_uri')
+        if not client_redirect_uri:
+            log_error(f"Missing redirect_uri in auth_data", component="oauth_callback")
+            raise HTTPException(500, "Missing redirect_uri in auth state")
+        
+        final_redirect_url = f"{client_redirect_uri}?{urlencode(redirect_params)}"
         
         log_info(
             "OAuth callback completed, redirecting to client",
@@ -910,10 +1336,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         
         # Log request with OAuth context
-        await log_request(
-            logger,
-            request,
-            client_ip, proxy_hostname=request.headers.get("host"),
+        log_request(
+            method=request.method,
+            path=str(request.url.path),
+            ip=client_ip,
+            proxy_hostname=request.headers.get("host", ""),
             oauth_action="token_exchange",
             oauth_client_id=client_id,
             oauth_grant_type=grant_type,
@@ -1509,10 +1936,11 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         )
         
         # Log request with OAuth context
-        await log_request(
-            logger,
-            request,
-            client_ip, proxy_hostname=request.headers.get("host"),
+        log_request(
+            method=request.method,
+            path=str(request.url.path),
+            ip=client_ip,
+            proxy_hostname=request.headers.get("host", ""),
             oauth_action="introspect",
             oauth_client_id=client_id,
             oauth_token_type_hint=token_type_hint

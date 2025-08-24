@@ -8,7 +8,6 @@ import logging
 from typing import Dict, List
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 
-from src.auth import AuthDep, AuthResult
 from src.ports.models import ServicePort, PortConfiguration
 from src.docker.manager import DockerManager
 
@@ -49,8 +48,7 @@ def create_ports_router(async_storage) -> APIRouter:
     
     @router.get("/ports", response_model=Dict[int, Dict])
     async def list_all_ports(
-        request: Request,
-        auth: AuthResult = Depends(AuthDep())
+        request: Request
     ):
         """List all allocated ports across all services."""
         manager = await get_docker_manager(request)
@@ -64,8 +62,7 @@ def create_ports_router(async_storage) -> APIRouter:
     
     @router.get("/ports/available", response_model=List[Dict])
     async def get_available_port_ranges(
-        request: Request,
-        auth: AuthResult = Depends(AuthDep())
+        request: Request
     ):
         """Get available port ranges."""
         manager = await get_docker_manager(request)
@@ -81,8 +78,7 @@ def create_ports_router(async_storage) -> APIRouter:
     async def check_port_availability(
         request: Request,
         port: int = Query(..., description="Port number to check"),
-        bind_address: str = Query("0.0.0.0", description="Bind address"),
-        auth: AuthResult = Depends(AuthDep())
+        bind_address: str = Query("0.0.0.0", description="Bind address")
     ):
         """Check if a specific port is available."""
         manager = await get_docker_manager(request)
@@ -102,8 +98,7 @@ def create_ports_router(async_storage) -> APIRouter:
     async def add_service_port(
         request: Request,
         service_name: str,
-        port_config: PortConfiguration,
-        auth: AuthResult = Depends(AuthDep())
+        port_config: PortConfiguration
     ):
         """Add a port to an existing service.
         
@@ -131,7 +126,7 @@ def create_ports_router(async_storage) -> APIRouter:
             service_port = await manager.add_port_to_service(
                 service_name, 
                 config_dict, 
-                auth.token_hash
+                None  # No token ownership
             )
             return service_port
             
@@ -144,8 +139,7 @@ def create_ports_router(async_storage) -> APIRouter:
     @router.get("/{service_name}/ports", response_model=List[ServicePort])
     async def list_service_ports(
         request: Request,
-        service_name: str,
-        auth: AuthResult = Depends(AuthDep())
+        service_name: str
     ):
         """Get all ports for a service."""
         manager = await get_docker_manager(request)
@@ -166,8 +160,7 @@ def create_ports_router(async_storage) -> APIRouter:
     async def remove_service_port(
         request: Request,
         service_name: str,
-        port_name: str,
-        auth: AuthResult = Depends(AuthDep())
+        port_name: str
     ):
         """Remove a port from a service.
         
@@ -179,7 +172,7 @@ def create_ports_router(async_storage) -> APIRouter:
             success = await manager.remove_port_from_service(
                 service_name, 
                 port_name, 
-                auth.token_hash
+                None  # No token ownership
             )
             if success:
                 return {"message": f"Port {port_name} removed from service {service_name}"}
@@ -197,8 +190,7 @@ def create_ports_router(async_storage) -> APIRouter:
         request: Request,
         service_name: str,
         port_name: str,
-        port_config: PortConfiguration,
-        auth: AuthResult = Depends(AuthDep())
+        port_config: PortConfiguration
     ):
         """Update a port configuration.
         
@@ -211,7 +203,7 @@ def create_ports_router(async_storage) -> APIRouter:
             await manager.remove_port_from_service(
                 service_name, 
                 port_name, 
-                auth.token_hash
+                None  # No token ownership
             )
             
             # Add new port with updated config
@@ -232,7 +224,7 @@ def create_ports_router(async_storage) -> APIRouter:
             service_port = await manager.add_port_to_service(
                 service_name, 
                 config_dict, 
-                auth.token_hash
+                None  # No token ownership
             )
             
             return {"message": f"Port {port_name} updated", "port": service_port}

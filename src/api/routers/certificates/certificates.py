@@ -4,7 +4,6 @@ import os
 from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
 
-from src.auth import AuthDep, AuthResult
 from src.shared.logger import log_info, log_debug, log_error, log_warning
 
 
@@ -20,11 +19,14 @@ def create_router(storage, cert_manager):
     async def create_certificate(
         req: Request,
         request: dict,
-        background_tasks: BackgroundTasks,
-        auth: AuthResult = Depends(AuthDep())
+        background_tasks: BackgroundTasks
     ):
         """Create a new certificate (async operation)."""
         from src.certmanager.models import CertificateRequest
+        
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
         
         try:
             # Add cert_name if not provided
@@ -52,8 +54,8 @@ def create_router(storage, cert_manager):
                 email=cert_request.email,
                 acme_directory_url=cert_request.acme_directory_url,
                 status="pending",
-                owner_token_hash=auth.token_hash,
-                created_by=auth.principal
+                owner_token_hash=None,  # No more token ownership
+                created_by=auth_user
             )
             
             # Store certificate
@@ -74,8 +76,8 @@ def create_router(storage, cert_manager):
                 generate_certificate_async,
                 async_cert_manager,
                 cert_request,
-                auth.token_hash,
-                auth.principal
+                None,  # No more token hash
+                auth_user
             )
             log_info(f"[API] Background task queued successfully for {cert_request.cert_name}", component="api.certificates")
             
@@ -95,11 +97,14 @@ def create_router(storage, cert_manager):
     async def create_multi_domain_certificate(
         req: Request,
         request: dict,
-        background_tasks: BackgroundTasks,
-        auth: AuthResult = Depends(AuthDep())
+        background_tasks: BackgroundTasks
     ):
         """Create a multi-domain certificate (async operation)."""
         from src.certmanager.models import MultiDomainCertificateRequest
+        
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
         
         try:
             cert_request = MultiDomainCertificateRequest(**request)
@@ -124,8 +129,8 @@ def create_router(storage, cert_manager):
                 email=cert_request.email,
                 acme_directory_url=cert_request.acme_directory_url,
                 status="pending",
-                owner_token_hash=auth.token_hash,
-                created_by=auth.principal
+                owner_token_hash=None,  # No more token ownership
+                created_by=auth_user
             )
             
             # Store certificate
@@ -153,8 +158,8 @@ def create_router(storage, cert_manager):
                 generate_certificate_async,
                 async_cert_manager,
                 cert_request,
-                auth.token_hash,
-                auth.principal
+                None,  # No more token hash
+                auth_user
             )
             log_info(f"[API] Background task queued successfully for multi-domain {cert_request.cert_name}", component="api.certificates")
             
@@ -173,10 +178,13 @@ def create_router(storage, cert_manager):
     
     @router.get("/")
     async def list_certificates(
-        req: Request,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer"))
+        req: Request
     ):
         """List all certificates."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         try:
             # Debug: Check if auth_service exists
             has_auth_service = hasattr(req.app.state, 'auth_service')
@@ -189,20 +197,13 @@ def create_router(storage, cert_manager):
             all_certs = await async_storage.list_certificates()
             log_debug(f"list_certificates: Found {len(all_certs)} certificates total", component="api.certificates")
             log_debug(f"list_certificates: has_auth_service={has_auth_service}, auth_service_type={auth_service_type}", component="api.certificates")
-            log_debug(f"list_certificates: Auth principal={auth.principal}, is_admin={auth.metadata.get('is_admin', False)}, token_hash={auth.token_hash[:16] if auth.token_hash else 'None'}", component="api.certificates")
+            log_debug(f"list_certificates: Auth user={auth_user}, is_admin={is_admin}, scopes={auth_scopes}", component="api.certificates")
             
-            # Filter by ownership
-            certs_to_return = []
-            if auth.token_hash:
-                # Check if admin
-                if auth.metadata.get('is_admin', False):
-                    certs_to_return = all_certs
-                else:
-                    certs_to_return = []
-                    for cert in all_certs:
-                        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
-                        if cert_owner == auth.token_hash:
-                            certs_to_return.append(cert)
+            # No ownership filtering without tokens - return all for users with read access
+            if is_admin or "user" in auth_scopes:
+                certs_to_return = all_certs
+            else:
+                certs_to_return = []
             
             # Remove private keys from all certificates in the list
             filtered_certs = []
@@ -226,10 +227,13 @@ def create_router(storage, cert_manager):
     @router.get("/{cert_name}")
     async def get_certificate(
         req: Request,
-        cert_name: str,
-        auth: AuthResult = Depends(AuthDep())
+        cert_name: str
     ):
         """Get certificate details."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         # Get async storage
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -237,11 +241,9 @@ def create_router(storage, cert_manager):
         if not cert:
             raise HTTPException(status_code=404, detail="Certificate not found")
         
-        # Check ownership
-        if auth.token_hash and cert.owner_token_hash:
-            # Check if not admin and not owner
-            if not auth.metadata.get('is_admin', False) and cert.owner_token_hash != auth.token_hash:
-                raise HTTPException(status_code=403, detail="Access denied")
+        # No ownership check without tokens - just check if user has read access
+        if not (is_admin or "user" in auth_scopes):
+            raise HTTPException(status_code=403, detail="Access denied")
         
         return cert
     
@@ -249,10 +251,13 @@ def create_router(storage, cert_manager):
     async def get_certificate_status(
         req: Request,
         cert_name: str,
-        wait: bool = Query(default=False),
-        auth: AuthResult = Depends(AuthDep())
+        wait: bool = Query(default=False)
     ):
         """Get certificate generation status."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         import asyncio
         import json
         
@@ -288,10 +293,13 @@ def create_router(storage, cert_manager):
         req: Request,
         cert_name: str,
         background_tasks: BackgroundTasks,
-        force: bool = Query(default=False),
-        auth: AuthResult = Depends(AuthDep())
+        force: bool = Query(default=False)
     ):
         """Manually trigger certificate renewal."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         # Get async storage
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -299,11 +307,9 @@ def create_router(storage, cert_manager):
         if not cert:
             raise HTTPException(status_code=404, detail="Certificate not found")
         
-        # Check ownership
-        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
-        if cert_owner and cert_owner != auth.token_hash:
-            if not auth.metadata.get('is_admin', False):
-                raise HTTPException(status_code=403, detail="Access denied")
+        # Check if user has admin scope for renewal
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Admin access required for renewal")
         
         # Check if renewal is needed
         cert_expires = cert.get('expires_at') if isinstance(cert, dict) else getattr(cert, 'expires_at', None)
@@ -327,10 +333,13 @@ def create_router(storage, cert_manager):
     async def convert_to_production(
         req: Request,
         cert_name: str,
-        background_tasks: BackgroundTasks,
-        auth: AuthResult = Depends(AuthDep())
+        background_tasks: BackgroundTasks
     ):
         """Convert a staging certificate to production."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         # Get async storage
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -338,11 +347,9 @@ def create_router(storage, cert_manager):
         if not cert:
             raise HTTPException(status_code=404, detail="Certificate not found")
         
-        # Check ownership
-        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
-        if cert_owner and cert_owner != auth.token_hash:
-            if not auth.metadata.get('is_admin', False):
-                raise HTTPException(status_code=403, detail="Access denied")
+        # Check if user has admin scope for renewal
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Admin access required for renewal")
         
         # Check if it's actually a staging certificate
         cert_acme_url = cert.get('acme_directory_url') if isinstance(cert, dict) else getattr(cert, 'acme_directory_url', None)
@@ -417,10 +424,13 @@ def create_router(storage, cert_manager):
     @router.delete("/{cert_name}")
     async def delete_certificate(
         req: Request,
-        cert_name: str,
-        auth: AuthResult = Depends(AuthDep())
+        cert_name: str
     ):
         """Delete a certificate."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         # Get async storage and cert manager
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         async_cert_manager = req.app.state.cert_manager if hasattr(req.app.state, 'cert_manager') else None
@@ -429,11 +439,9 @@ def create_router(storage, cert_manager):
         if not cert:
             raise HTTPException(status_code=404, detail="Certificate not found")
         
-        # Check ownership
-        cert_owner = cert.get('owner_token_hash') if isinstance(cert, dict) else getattr(cert, 'owner_token_hash', None)
-        if cert_owner and cert_owner != auth.token_hash:
-            if not auth.metadata.get('is_admin', False):
-                raise HTTPException(status_code=403, detail="Access denied")
+        # Check if user has admin scope for renewal
+        if not is_admin:
+            raise HTTPException(status_code=403, detail="Admin access required for renewal")
         
         # Delete certificate
         success = await async_storage.delete_certificate(cert_name)

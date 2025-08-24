@@ -7,7 +7,7 @@ import logging
 from typing import List
 from fastapi import APIRouter, HTTPException, Depends, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.proxy.models import ProxyRoutesConfig, ProxyTargetUpdate
 
 logger = logging.getLogger(__name__)
@@ -61,10 +61,18 @@ def create_routes_router(async_storage):
     async def update_proxy_routes(
         req: Request,
         proxy_hostname: str,
-        config: ProxyRoutesConfig,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
+        config: ProxyRoutesConfig
     ):
-        """Update route settings for a proxy target - owner only."""
+        """Update route settings for a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -97,10 +105,18 @@ def create_routes_router(async_storage):
     async def enable_proxy_route(
         req: Request,
         proxy_hostname: str,
-        route_id: str,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
+        route_id: str
     ):
-        """Enable a specific route for a proxy target - owner only."""
+        """Enable a specific route for a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         
@@ -144,10 +160,18 @@ def create_routes_router(async_storage):
     async def disable_proxy_route(
         req: Request,
         proxy_hostname: str,
-        route_id: str,
-        auth: AuthResult = Depends(AuthDep(auth_type="bearer", check_owner=True, owner_param="proxy_hostname"))
+        route_id: str
     ):
-        """Disable a specific route for a proxy target - owner only."""
+        """Disable a specific route for a proxy target."""
+        # Get auth info from headers (set by proxy)
+        auth_user = req.headers.get("X-Auth-User", "system")
+        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
+        
         # Get async async_storage if available
         async_storage = req.app.state.async_storage if hasattr(req.app.state, 'async_storage') else None
         

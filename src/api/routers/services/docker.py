@@ -9,7 +9,6 @@ from typing import Dict, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
 from python_on_whales.exceptions import DockerException
 
-from src.auth import AuthDep, AuthResult
 from src.docker.models import (
     DockerServiceConfig,
     DockerServiceInfo,
@@ -63,14 +62,16 @@ def create_docker_router(async_storage) -> APIRouter:
     async def list_services(
         request: Request,
         owned_only: bool = Query(False, description="Only show services owned by current token"),
-        auth: AuthResult = Depends(AuthDep())
     ):
         """List all Docker services."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         
-        # Filter by owner if requested
-        owner_hash = auth.token_hash if owned_only else None
-        services = await manager.list_services(owner_hash)
+        # No ownership filtering without tokens
+        services = await manager.list_services(None)
         
         return DockerServiceListResponse(
             services=services,
@@ -82,17 +83,18 @@ def create_docker_router(async_storage) -> APIRouter:
         request: Request,
         config: DockerServiceConfig,
         auto_proxy: bool = Query(False, description="Automatically create proxy configuration"),
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Create a new Docker service.
         
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
         Requires admin token or special docker:create permission.
         """
-        # Check permissions
-        has_permission = (
-            auth.is_admin or
-            "docker:create" in getattr(auth, 'permissions', [])
-        )
+        # Check permissions - admin scope required for create
+        has_permission = is_admin
         if not has_permission:
             raise HTTPException(403, "Admin token or docker:create permission required")
         
@@ -103,8 +105,8 @@ def create_docker_router(async_storage) -> APIRouter:
             raise HTTPException(409, f"Service {config.service_name} already exists")
         
         try:
-            # Create service
-            service_info = await manager.create_service(config, auth.token_hash)
+            # Create service (no token ownership)
+            service_info = await manager.create_service(config, None)
             
             response = DockerServiceCreateResponse(
                 service=service_info,
@@ -123,7 +125,7 @@ def create_docker_router(async_storage) -> APIRouter:
                         enabled=True,
                         enable_http=True,
                         enable_https=False,  # Start with HTTP only
-                        owner_token_hash=auth.token_hash,
+                        owner_token_hash=None,  # No token ownership
                         preserve_host_header=True
                     )
                     
@@ -150,9 +152,12 @@ def create_docker_router(async_storage) -> APIRouter:
     async def get_service(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Get information about a specific service."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
@@ -166,9 +171,13 @@ def create_docker_router(async_storage) -> APIRouter:
         request: Request,
         service_name: str,
         updates: DockerServiceUpdate,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Update a Docker service configuration.
+        
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         
         Note: Some updates require container recreation.
         """
@@ -178,11 +187,9 @@ def create_docker_router(async_storage) -> APIRouter:
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.is_admin
-        if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to update this service")
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin access required to update service")
         
         try:
             updated_service = await manager.update_service(service_name, updates)
@@ -199,20 +206,21 @@ def create_docker_router(async_storage) -> APIRouter:
         service_name: str,
         force: bool = Query(False, description="Force delete even if running"),
         delete_proxy: bool = Query(True, description="Also delete associated proxy"),
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Delete a Docker service and cleanup resources."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.is_admin
-        if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to delete this service")
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin access required to delete service")
         
         try:
             # Delete service
@@ -240,20 +248,21 @@ def create_docker_router(async_storage) -> APIRouter:
     async def start_service(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Start a stopped service."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.is_admin
-        if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to control this service")
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin access required to control service")
         
         try:
             await manager.start_service(service_name)
@@ -268,20 +277,21 @@ def create_docker_router(async_storage) -> APIRouter:
     async def stop_service(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Stop a running service."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.is_admin
-        if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to control this service")
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin access required to control service")
         
         try:
             await manager.stop_service(service_name)
@@ -296,20 +306,21 @@ def create_docker_router(async_storage) -> APIRouter:
     async def restart_service(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Restart a service."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.is_admin
-        if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to control this service")
+        # Check permissions - admin scope required for mutations
+        if not is_admin:
+            raise HTTPException(403, "Admin access required to control service")
         
         try:
             await manager.restart_service(service_name)
@@ -326,9 +337,12 @@ def create_docker_router(async_storage) -> APIRouter:
         service_name: str,
         lines: int = Query(100, description="Number of log lines to return"),
         timestamps: bool = Query(False, description="Include timestamps"),
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Get service logs."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         
@@ -339,7 +353,7 @@ def create_docker_router(async_storage) -> APIRouter:
         is_owner = service_info.owner_token_hash == auth.token_hash
         is_admin = auth.is_admin
         if not (is_owner or is_admin):
-            raise HTTPException(403, "Not authorized to view logs for this service")
+            raise HTTPException(403, "Admin access required to view service logs")
         
         try:
             logs = await manager.get_service_logs(service_name, lines, timestamps)
@@ -358,9 +372,12 @@ def create_docker_router(async_storage) -> APIRouter:
     async def get_service_stats(
         request: Request,
         service_name: str,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Get service resource statistics."""
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         service_info = await manager.get_service(service_name)
         

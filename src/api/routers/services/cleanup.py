@@ -7,7 +7,7 @@ import logging
 from typing import Dict
 from fastapi import APIRouter, Depends, HTTPException, Request
 
-from src.auth import AuthDep, AuthResult
+# Authentication is handled by proxy, API trusts headers
 from src.docker.manager import DockerManager
 
 logger = logging.getLogger(__name__)
@@ -48,15 +48,19 @@ def create_cleanup_router(storage) -> APIRouter:
     @router.post("/cleanup")
     async def cleanup_orphaned_services(
         request: Request,
-        auth: AuthResult = Depends(AuthDep())
     ):
         """Clean up orphaned Docker containers and services.
         
-        Requires admin token.
+        Requires admin scope.
         """
+        # Get auth info from headers (set by proxy)
+        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        is_admin = "admin" in auth_scopes
+        
         # Admin only
-        if not auth.is_admin:
-            raise HTTPException(403, "Admin token required")
+        if not is_admin:
+            raise HTTPException(403, "Admin scope required")
         
         manager = await get_docker_manager(request)
         

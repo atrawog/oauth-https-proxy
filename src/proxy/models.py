@@ -61,6 +61,15 @@ class ProxyTarget(BaseModel):
     oauth_server_custom_metadata: Optional[Dict[str, Any]] = None  # Custom fields
     oauth_server_override_defaults: bool = False  # Use proxy config instead of defaults
     
+    # GitHub OAuth Configuration (per-proxy)
+    github_client_id: Optional[str] = None  # GitHub OAuth App Client ID
+    github_client_secret: Optional[str] = None  # GitHub OAuth App Client Secret (encrypted)
+    
+    # OAuth scope-based user lists (for scope assignment)
+    oauth_admin_users: Optional[List[str]] = None  # GitHub users who get admin scope
+    oauth_user_users: Optional[List[str]] = None   # GitHub users who get user scope (* = all)
+    oauth_mcp_users: Optional[List[str]] = None    # GitHub users who get mcp scope
+    
     @field_validator('auth_mode')
     @classmethod
     def validate_auth_mode(cls, v):
@@ -82,8 +91,8 @@ class ProxyTarget(BaseModel):
     def validate_auth_proxy(cls, v):
         if v is not None:
             v = v.strip().lower()
-            if not v or not '.' in v:
-                raise ValueError('Invalid auth proxy hostname')
+            if not v:
+                raise ValueError('Auth proxy hostname cannot be empty')
         return v
     
     @field_serializer('created_at')
@@ -107,8 +116,8 @@ class ProxyTargetRequest(BaseModel):
     @classmethod
     def validate_proxy_hostname(cls, v: str) -> str:
         v = v.strip()
-        if not v or not '.' in v:
-            raise ValueError('Invalid proxy_hostname format')
+        if not v:
+            raise ValueError('proxy_hostname cannot be empty')
         if v.startswith('.') or v.endswith('.'):
             raise ValueError('proxy_hostname cannot start or end with a dot')
         return v.lower()
@@ -168,6 +177,9 @@ class ProxyTargetUpdate(BaseModel):
     oauth_server_pkce_required: Optional[bool] = None
     oauth_server_custom_metadata: Optional[Dict[str, Any]] = None
     oauth_server_override_defaults: Optional[bool] = None
+    # GitHub OAuth Configuration fields
+    github_client_id: Optional[str] = None
+    github_client_secret: Optional[str] = None
     
     @field_validator('target_url')
     @classmethod
@@ -199,8 +211,8 @@ class ProxyTargetUpdate(BaseModel):
     def validate_auth_proxy(cls, v):
         if v is not None:
             v = v.strip().lower()
-            if not v or not '.' in v:
-                raise ValueError('Invalid auth proxy hostname')
+            if not v:
+                raise ValueError('Auth proxy hostname cannot be empty')
         return v
 
 
@@ -288,6 +300,28 @@ class ProxyResourceConfig(BaseModel):
         for method in v:
             if method not in valid_methods:
                 raise ValueError(f"Invalid bearer method: {method}")
+        return v
+
+
+class ProxyGitHubOAuthConfig(BaseModel):
+    """Request model for configuring proxy GitHub OAuth credentials."""
+    github_client_id: str
+    github_client_secret: str
+    
+    @field_validator('github_client_id')
+    @classmethod
+    def validate_github_client_id(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError('GitHub Client ID cannot be empty')
+        return v
+    
+    @field_validator('github_client_secret')
+    @classmethod
+    def validate_github_client_secret(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError('GitHub Client Secret cannot be empty')
         return v
 
 

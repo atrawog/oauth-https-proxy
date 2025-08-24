@@ -154,6 +154,14 @@ This documentation is organized into modular component-specific files:
 - Protected resource metadata (RFC 9728)
 - Per-proxy user allowlists
 
+### Per-Proxy GitHub OAuth Configuration
+- **Individual GitHub Apps**: Each proxy can have its own GitHub OAuth App credentials
+- **Environment Fallback**: Automatically falls back to `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET` environment variables
+- **Dynamic Switching**: OAuth credentials are resolved per-request based on proxy hostname
+- **Secure Storage**: Client secrets are stored securely in Redis (never exposed in API responses)
+- **Multi-Tenancy Support**: Different proxies can authenticate with different GitHub organizations
+- **Zero Downtime**: Update credentials without restarting services
+
 ### Unified Async Logging Architecture
 - **Fire-and-Forget Pattern**: All logging operations are non-blocking using `asyncio.create_task()`
 - **Component Isolation**: Each component has immutable component name to prevent contamination
@@ -213,12 +221,13 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 7. **Redis-Only Storage**: All configuration and state in Redis, no filesystem dependencies
 8. **Smart Certificate Handling**: Automatic detection and creation of certificates
 9. **Per-Proxy User Allowlists**: Granular GitHub user access control per proxy
-10. **PROXY Protocol Support**: Preserves real client IPs through load balancers
-11. **Enhanced CLI Client**: Smart table formatting with context-aware display
-12. **Exactly-Once Processing**: Redis Streams with single consumer group ensure reliability
-13. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
-14. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes, and real-time analytics
-15. **Robust Error Handling**: Comprehensive null checks and graceful degradation throughout
+10. **Per-Proxy GitHub OAuth Apps**: Each proxy can have its own GitHub OAuth credentials with environment fallback
+11. **PROXY Protocol Support**: Preserves real client IPs through load balancers
+12. **Enhanced CLI Client**: Smart table formatting with context-aware display
+13. **Exactly-Once Processing**: Redis Streams with single consumer group ensure reliability
+14. **Root-Level API**: Clean URLs without version prefixes (`/tokens/`, `/certificates/`, etc.)
+15. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes, and real-time analytics
+16. **Robust Error Handling**: Comprehensive null checks and graceful degradation throughout
 
 ## Environment Configuration
 

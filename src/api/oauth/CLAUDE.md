@@ -14,8 +14,8 @@ OAuth is integrated directly into the proxy service:
 ## Configuration
 
 ### OAuth Service Configuration
-- `GITHUB_CLIENT_ID` - GitHub OAuth application client ID (required for OAuth)
-- `GITHUB_CLIENT_SECRET` - GitHub OAuth application client secret (required for OAuth)
+- `GITHUB_CLIENT_ID` - GitHub OAuth application client ID (global default, can be overridden per-proxy)
+- `GITHUB_CLIENT_SECRET` - GitHub OAuth application client secret (global default, can be overridden per-proxy)
 - `BASE_DOMAIN` - Base domain for OAuth service (default: localhost)
 - `OAUTH_ACCESS_TOKEN_LIFETIME` - Access token lifetime in seconds (default: 1800 = 30 minutes)
 - `OAUTH_REFRESH_TOKEN_LIFETIME` - Refresh token lifetime in seconds (default: 31536000 = 1 year)
@@ -44,6 +44,27 @@ OAuth is integrated directly into the proxy service:
 3. Returns user info or 401
 4. Proxy validates user against `auth_required_users` (if configured)
 5. Proxy adds headers: `X-Auth-User-Id`, `X-Auth-User-Name`, etc.
+
+## Per-Proxy GitHub OAuth Configuration
+
+Each proxy can have its own GitHub OAuth App credentials:
+
+### Configuration Priority
+1. **Proxy-specific credentials**: If `github_client_id` and `github_client_secret` are configured for the proxy
+2. **Environment variables**: Falls back to `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+
+### How It Works
+1. OAuth `/authorize` endpoint detects proxy hostname from request headers
+2. AuthManager looks up proxy configuration to find custom GitHub credentials
+3. If found, uses proxy-specific GitHub OAuth App for authentication
+4. If not found, uses global environment variables as fallback
+5. OAuth callback retrieves original proxy context from state to use correct credentials
+
+### Benefits
+- **Multi-tenancy**: Different proxies can use different GitHub organizations
+- **Security isolation**: Compromised credentials affect only one proxy
+- **Gradual migration**: Start with global config, migrate proxies individually
+- **Zero downtime**: Update credentials without service restarts
 
 ### OAuth Authorization Flow with Per-Proxy Users
 1. Proxy redirects to `/authorize` with `proxy_hostname` parameter
@@ -271,6 +292,12 @@ just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth clien
 just oauth-clients-list [active-only] [token]     # List OAuth clients
 just oauth-sessions-list [token]                  # List active sessions
 just oauth-test-tokens <server-url> [token]       # Generate test OAuth tokens for MCP client
+
+# Per-proxy GitHub OAuth configuration
+just proxy-github-oauth-set <hostname> <client-id> <client-secret> [token]  # Set GitHub OAuth credentials
+just proxy-github-oauth-show <hostname> [token]   # Show GitHub OAuth config (without secret)
+just proxy-github-oauth-clear <hostname> [token]  # Clear GitHub OAuth config (use env vars)
+just proxy-github-oauth-list [token]              # List proxies with custom GitHub OAuth
 ```
 
 ## Protected Resource Configuration

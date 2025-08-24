@@ -58,13 +58,7 @@ def register_all_routers(app: FastAPI) -> None:
         "Certificate management endpoints"
     ))
     
-    # Token management
-    routers_config.append((
-        "tokens", 
-        lambda: _create_tokens_router(async_storage),
-        "/tokens",
-        "API token management"
-    ))
+    # Token management removed - OAuth only authentication
     
     # Proxy management
     routers_config.append((
@@ -82,13 +76,7 @@ def register_all_routers(app: FastAPI) -> None:
         "HTTP routing rules"
     ))
     
-    # Route auth configuration
-    routers_config.append((
-        "route_auth",
-        lambda: _create_route_auth_router(async_storage),
-        "/routes",  # Same prefix as routes
-        "Route authentication configuration"
-    ))
+    # Route auth removed - OAuth only authentication
     
     # Resource management
     routers_config.append((
@@ -133,21 +121,7 @@ def register_all_routers(app: FastAPI) -> None:
         "Log query and analysis"
     ))
     
-    # Authentication configuration endpoints
-    routers_config.append((
-        "auth_config",
-        lambda: _create_auth_config_router(async_storage),
-        "/auth-config",
-        "Legacy authentication configuration"
-    ))
-    
-    # Flexible auth endpoints
-    routers_config.append((
-        "auth_endpoints",
-        lambda: _create_auth_endpoints_router(async_storage),
-        "/auth/endpoints",
-        "Flexible authentication endpoints"
-    ))
+    # Auth system removed - OAuth only authentication
     
     # Debug router for checking app state
     routers_config.append((
@@ -183,7 +157,7 @@ def register_all_routers(app: FastAPI) -> None:
             logger.error(f"Traceback for {name}: {traceback.format_exc()}")
             failed_routers.append(f"{name}: {str(e)}")
             # For critical routers, we might want to raise here
-            if name in ['tokens', 'certificates', 'proxy']:
+            if name in ['certificates', 'proxy']:
                 raise RuntimeError(f"Critical router failed: {error_msg}")
     
     # ========== LOG SUMMARY ==========
@@ -235,12 +209,6 @@ def _create_certificates_router(storage, cert_manager) -> APIRouter:
     return create_router(storage, cert_manager)
 
 
-def _create_tokens_router(async_storage) -> APIRouter:
-    """Create tokens router."""
-    from .tokens import create_tokens_router
-    return create_tokens_router(async_storage)
-
-
 def _create_proxy_router(async_storage, cert_manager) -> APIRouter:
     """Create proxy router."""
     from .proxy import create_router
@@ -251,12 +219,6 @@ def _create_routes_router(async_storage) -> APIRouter:
     """Create routes router."""
     from .routes.routes import create_router
     return create_router(async_storage)
-
-
-def _create_route_auth_router(async_storage) -> APIRouter:
-    """Create route auth router."""
-    from .routes.route_auth import create_route_auth_router
-    return create_route_auth_router(async_storage)
 
 
 def _create_resources_router(storage) -> APIRouter:
@@ -289,16 +251,7 @@ def _create_logs_router(async_storage) -> APIRouter:
     return create_logs_router(async_storage)
 
 
-def _create_auth_config_router(async_storage) -> APIRouter:
-    """Create auth config router."""
-    from .auth.auth_config import create_auth_config_router
-    return create_auth_config_router(async_storage)
-
-
-def _create_auth_endpoints_router(async_storage) -> APIRouter:
-    """Create auth endpoints router."""
-    from .auth.auth_endpoints import create_auth_endpoints_router
-    return create_auth_endpoints_router(async_storage)
+# Auth routers removed - OAuth only authentication
 
 
 def _create_debug_router() -> APIRouter:

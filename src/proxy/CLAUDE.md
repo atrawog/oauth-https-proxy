@@ -82,7 +82,11 @@ The Proxy Manager provides dynamic reverse proxy functionality with SSL terminat
   "oauth_server_claims": null,  // Supported claims
   "oauth_server_pkce_required": false,  // Require PKCE
   "oauth_server_custom_metadata": null,  // Custom fields
-  "oauth_server_override_defaults": false  // Use proxy config instead of defaults
+  "oauth_server_override_defaults": false,  // Use proxy config instead of defaults
+  
+  // GitHub OAuth Configuration (per-proxy)
+  "github_client_id": null,  // Custom GitHub OAuth App Client ID
+  "github_client_secret": null  // Custom GitHub OAuth App Client Secret (encrypted)
 }
 ```
 
@@ -161,6 +165,15 @@ This provides granular control over authentication at the proxy level. The field
 
 This dual-check ensures consistent access control throughout the authentication flow.
 
+### Per-Proxy GitHub OAuth Apps
+Each proxy can have its own GitHub OAuth App configuration:
+- **Custom Credentials**: Configure `github_client_id` and `github_client_secret` per proxy
+- **Environment Fallback**: If not configured, falls back to `GITHUB_CLIENT_ID` and `GITHUB_CLIENT_SECRET`
+- **Dynamic Resolution**: OAuth flow determines which credentials to use based on proxy hostname
+- **Secure Storage**: Client secrets are encrypted in Redis and never exposed in API responses
+- **Multi-Tenancy**: Different proxies can authenticate with different GitHub organizations
+- **Zero-Downtime Updates**: Change credentials without restarting services
+
 ## Protected Resource Metadata Configuration
 
 Enable protected resource metadata endpoints for proxies:
@@ -195,6 +208,10 @@ When enabled, the proxy automatically serves:
 - `POST /proxy/targets/{hostname}/oauth-server` - Configure OAuth authorization server metadata
 - `DELETE /proxy/targets/{hostname}/oauth-server` - Remove OAuth server metadata
 - `GET /proxy/targets/{hostname}/oauth-server` - Get OAuth server configuration
+- `POST /proxy/targets/{hostname}/github-oauth` - Configure GitHub OAuth credentials
+- `GET /proxy/targets/{hostname}/github-oauth` - Get GitHub OAuth config (without secret)
+- `DELETE /proxy/targets/{hostname}/github-oauth` - Clear GitHub OAuth config
+- `GET /proxy/targets/github-oauth/configured` - List all proxies with custom GitHub OAuth
 - `GET /proxy/targets/{hostname}/routes` - Get proxy routes
 - `PUT /proxy/targets/{hostname}/routes` - Update proxy routes
 
@@ -231,6 +248,12 @@ just proxy-resource-list [token]           # List protected resources
 just proxy-oauth-server-set <hostname> [issuer] [scopes] [grant-types] [response-types] [token-auth-methods] [claims] [pkce-required] [custom-metadata] [override-defaults] [token]
 just proxy-oauth-server-clear <hostname> [token]
 just proxy-oauth-server-show <hostname> [token]
+
+# GitHub OAuth credentials configuration (per-proxy)
+just proxy-github-oauth-set <hostname> <client-id> <client-secret> [token]
+just proxy-github-oauth-show <hostname> [token]
+just proxy-github-oauth-clear <hostname> [token]
+just proxy-github-oauth-list [token]
 ```
 
 ## Proxy App Architecture
