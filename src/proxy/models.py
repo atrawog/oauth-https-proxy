@@ -383,6 +383,23 @@ DEFAULT_PROXIES = [
         "auth_enabled": False,
         "route_mode": "all",
         "enabled_routes": [],
-        "disabled_routes": []
+        "disabled_routes": [],
+        # MCP Protected Resource Metadata
+        "resource_endpoint": "/",
+        "resource_scopes": ["admin", "user", "mcp"],
+        "resource_stateful": False,
+        "resource_versions": ["2025-06-18", "2024-11-05"],
+        "resource_server_info": {
+            "name": "OAuth HTTPS Proxy API",
+            "version": "1.0.0",
+            "description": "OAuth-secured API and proxy management system"
+        },
+        "resource_bearer_methods": ["header"],
+        "resource_documentation_suffix": "/docs",
+        "resource_custom_metadata": {
+            "supports_mcp": True,
+            "supports_oauth": True,
+            "supports_device_flow": True
+        }
     }
 ]

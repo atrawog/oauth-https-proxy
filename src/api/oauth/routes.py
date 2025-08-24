@@ -119,10 +119,10 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             # Extract hostname from request headers to get proxy-specific config
             proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
-            if not hostname:
+            if not proxy_hostname:
                 proxy_hostname = request.headers.get("host", "").split(":")[0]
             
-            return await metadata_handler.get_authorization_server_metadata(request, hostname)
+            return await metadata_handler.get_authorization_server_metadata(request, proxy_hostname)
         
         # Fall back to default metadata if no storage
         api_url = get_external_url(request, settings)
@@ -330,20 +330,30 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     async def device_code(
         request: Request,
         client_id: str = Form(default="device_flow_client"),
-        scope: str = Form(default="read:user user:email")
+        scope: str = Form(default="read:user user:email"),
+        resource: Optional[str] = Form(default=None)
     ):
-        """GitHub Device Flow - Step 1: Get device code (RFC 8628 compliant)
+        """GitHub Device Flow - Step 1: Get device code (RFC 8628 + MCP compliant)
         
-        Accepts client_id and scope as form parameters per RFC 8628 Section 3.1
+        Accepts client_id, scope, and resource as form parameters per RFC 8628 and RFC 8707
+        The resource parameter identifies the proxy/MCP server the token will be used with
         Forwards request to GitHub's device endpoint to get a device code
         """
         client_ip = get_real_client_ip(request)
+        
+        # Default resource to localhost proxy if not specified (MCP compliance)
+        if not resource:
+            # Get the proxy hostname from request to use as default resource
+            host = request.headers.get("host", "localhost")
+            resource = f"http://{host}" if host == "localhost" else f"https://{host}"
+            log_info(f"Device Flow: No resource specified, defaulting to {resource}", ip=client_ip)
         
         log_info(
             "Device Flow: Code request",
             ip=client_ip,
             client_id=client_id,
-            scope=scope
+            scope=scope,
+            resource=resource
         )
         
         # Forward to GitHub's device code endpoint
@@ -359,13 +369,33 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
         
         result = github_response.json()
+        
+        # Store the requested resource with the device code for later use
+        if result.get("device_code"):
+            device_code_data = {
+                "resource": resource,
+                "scope": scope,
+                "client_id": client_id
+            }
+            # Store in Redis with same expiry as GitHub's device code
+            expires_in = result.get("expires_in", 900)  # Default 15 minutes
+            redis_client = await get_redis()
+            await redis_client.setex(
+                f"device_code:{result['device_code']}",
+                expires_in,
+                json.dumps(device_code_data)
+            )
+        
         log_info(
             "Device Flow: Code generated",
             ip=client_ip,
             device_code=result.get("device_code", "")[:8] + "..." if result.get("device_code") else None,
-            user_code=result.get("user_code")
+            user_code=result.get("user_code"),
+            resource=resource
         )
         
+        # Include resource in response for client awareness
+        result["resource"] = resource
         return result
 
     @router.post("/device/token") 
@@ -468,14 +498,41 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 )
                 assigned_scopes = ["user"]
             
+            # Retrieve the resource from stored device code data
+            device_code_data_str = await redis_client.get(f"device_code:{device_code}")
+            if device_code_data_str:
+                device_code_data = json.loads(device_code_data_str)
+                resource = device_code_data.get("resource", "http://localhost")
+                # Clean up the stored data
+                await redis_client.delete(f"device_code:{device_code}")
+            else:
+                # Fallback if no stored data (shouldn't happen)
+                resource = "http://localhost"
+                log_warning(f"Device Flow: No stored resource for device code, using default", ip=client_ip)
+            
             # Generate our JWT with assigned scopes
             jti = f"device_{secrets.token_urlsafe(16)}"
             now = datetime.utcnow()
             
+            # Get the issuer URL (auth server)
+            issuer_url = get_external_url(request, settings)
+            
+            # Audience is the resource (proxy/MCP server) where token will be used (MCP compliant)
+            audience_url = resource
+            
+            log_info(
+                f"Device Flow: Generating token",
+                ip=client_ip,
+                github_user=github_user,
+                resource=resource,
+                audience=audience_url,
+                scopes=assigned_scopes
+            )
+            
             token_payload = {
-                "iss": get_external_url(request, settings),
+                "iss": issuer_url,
                 "sub": str(user_info.get("id")),
-                "aud": ["http://localhost:9000"],  # Default audience for Device Flow
+                "aud": audience_url,  # Resource URI where token will be used (MCP compliant)
                 "exp": now + timedelta(seconds=settings.access_token_lifetime),
                 "iat": now,
                 "jti": jti,
@@ -508,14 +565,14 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 json.dumps(token_data)
             )
             
-            # Generate refresh token for device flow
+            # Generate refresh token for device flow with the same resource
             refresh_token_value = await auth_manager.create_refresh_token(
                 {
                     "user_id": str(user_info.get("id")),
                     "username": github_user,
                     "client_id": "device_flow_client",
                     "scope": " ".join(assigned_scopes),
-                    "resources": ["http://localhost:9000"]  # Default resource for device flow
+                    "resource": resource  # Store the resource for refresh (MCP compliant)
                 },
                 redis_client
             )
@@ -1359,43 +1416,54 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             oauth_grant_type=grant_type,
             oauth_resources=resource if resource else []
         )
-        # Validate client
-        client = await auth_manager.get_client(client_id, redis_client)
-        if not client:
-            log_warning(
-                "OAuth token request with invalid client",
-                    ip=client_ip,
-                client_id=client_id,
+        # Special handling for device_flow_client (public client)
+        if client_id == "device_flow_client":
+            # Device flow client is a public client that doesn't require registration
+            # or client_secret authentication
+            client = None
+            log_debug(
+                "Using public device_flow_client for token exchange",
+                ip=client_ip,
                 grant_type=grant_type
             )
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "invalid_client",
-                    "error_description": "Client authentication failed",
-                },
-                headers={"WWW-Authenticate": "Basic"},
-            )
+        else:
+            # Validate regular client
+            client = await auth_manager.get_client(client_id, redis_client)
+            if not client:
+                log_warning(
+                    "OAuth token request with invalid client",
+                        ip=client_ip,
+                    client_id=client_id,
+                    grant_type=grant_type
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "invalid_client",
+                        "error_description": "Client authentication failed",
+                    },
+                    headers={"WWW-Authenticate": "Basic"},
+                )
 
-        # Validate client secret
-        if client_secret and not client.check_client_secret(client_secret):
-            log_warning(
-                "OAuth token request with invalid client secret",
-                    ip=client_ip,
-                client_id=client_id,
-                grant_type=grant_type
-            )
-            raise HTTPException(
-                status_code=401,
-                detail={
-                    "error": "invalid_client",
-                    "error_description": "Invalid client credentials",
-                },
-                headers={"WWW-Authenticate": "Basic"},
-            )
+            # Validate client secret for confidential clients
+            if client_secret and not client.check_client_secret(client_secret):
+                log_warning(
+                    "OAuth token request with invalid client secret",
+                        ip=client_ip,
+                    client_id=client_id,
+                    grant_type=grant_type
+                )
+                raise HTTPException(
+                    status_code=401,
+                    detail={
+                        "error": "invalid_client",
+                        "error_description": "Invalid client credentials",
+                    },
+                    headers={"WWW-Authenticate": "Basic"},
+                )
 
-        # Validate grant type
-        if not client.check_grant_type(grant_type):
+        # Validate grant type (skip for device_flow_client)
+        if client and not client.check_grant_type(grant_type):
             raise HTTPException(
                 status_code=400,
                 detail={
@@ -1680,15 +1748,39 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 audience_will_be_set_to=token_resources
             )
             
-            # Generate new access token with the correct issuer URL
+            # Generate new access token with the correct issuer URL and audience
             issuer_url = get_external_url(request, settings)
+            
+            # Use the resource from the refresh token as audience (MCP compliant)
+            # This preserves the original resource the token was issued for
+            resource = refresh_data.get("resource")
+            if not resource:
+                # For backward compatibility with old refresh tokens
+                resources = refresh_data.get("resources", [])
+                if resources:
+                    resource = resources[0] if isinstance(resources, list) else resources
+                else:
+                    resource = "http://localhost"  # Last resort fallback
+                    log_warning(
+                        f"Refresh token missing resource, using default",
+                        ip=client_ip,
+                        refresh_token_preview=refresh_token[:10] if refresh_token else "N/A"
+                    )
+            
+            log_info(
+                f"Refreshing token with resource",
+                ip=client_ip,
+                resource=resource,
+                username=refresh_data.get("username")
+            )
+            
             access_token = await auth_manager.create_jwt_token(
                 {
                     "sub": refresh_data["user_id"],
                     "username": refresh_data["username"],
                     "scope": refresh_data["scope"],
                     "client_id": client_id,
-                    "resources": token_resources,  # RFC 8707 Resource Indicators
+                    "audience": resource,  # Use the original resource as audience (MCP compliant)
                 },
                 redis_client,
                 issuer=issuer_url

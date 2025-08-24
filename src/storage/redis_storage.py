@@ -617,7 +617,7 @@ class RedisStorage:
             logger.error(f"Failed to initialize default routes: {e}")
     
     def initialize_default_proxies(self) -> None:
-        """Initialize default proxy configurations that don't already exist."""
+        """Initialize default proxy configurations and update resource metadata if missing."""
         try:
             logger.info("Checking default proxies...")
             
@@ -626,14 +626,32 @@ class RedisStorage:
             from datetime import datetime, timezone
             
             created_count = 0
+            updated_count = 0
             existing_count = 0
             
             for proxy_dict in DEFAULT_PROXIES:
                 proxy_hostname = proxy_dict["proxy_hostname"]
                 
                 # Check if this proxy already exists
-                if self.get_proxy_target(proxy_hostname):
-                    existing_count += 1
+                existing_proxy = self.get_proxy_target(proxy_hostname)
+                if existing_proxy:
+                    # Update resource metadata if missing for localhost proxy
+                    if proxy_hostname == "localhost" and not existing_proxy.resource_endpoint:
+                        # Update with resource metadata from defaults
+                        existing_proxy.resource_endpoint = proxy_dict.get("resource_endpoint")
+                        existing_proxy.resource_scopes = proxy_dict.get("resource_scopes")
+                        existing_proxy.resource_stateful = proxy_dict.get("resource_stateful", False)
+                        existing_proxy.resource_versions = proxy_dict.get("resource_versions")
+                        existing_proxy.resource_server_info = proxy_dict.get("resource_server_info")
+                        existing_proxy.resource_bearer_methods = proxy_dict.get("resource_bearer_methods")
+                        existing_proxy.resource_documentation_suffix = proxy_dict.get("resource_documentation_suffix")
+                        existing_proxy.resource_custom_metadata = proxy_dict.get("resource_custom_metadata")
+                        
+                        if self.store_proxy_target(proxy_hostname, existing_proxy):
+                            logger.info(f"Updated resource metadata for default proxy: {proxy_hostname}")
+                            updated_count += 1
+                    else:
+                        existing_count += 1
                     continue
                 
                 # Add created_at timestamp
@@ -649,6 +667,8 @@ class RedisStorage:
             
             if created_count > 0:
                 logger.info(f"Created {created_count} missing default proxies")
+            if updated_count > 0:
+                logger.info(f"Updated {updated_count} default proxies with resource metadata")
             if existing_count > 0:
                 logger.info(f"Found {existing_count} existing default proxies")
                     

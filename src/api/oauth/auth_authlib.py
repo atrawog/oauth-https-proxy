@@ -81,6 +81,9 @@ class AuthManager:
         # Initialize RSA key manager for RS256 - THE BLESSED ALGORITHM!
         self.key_manager = RSAKeyManager()
         self.key_manager.load_or_generate_keys()
+        
+        # Store public key in Redis for proxy JWT validation
+        self._store_public_key_in_redis()
 
         # Store for caching GitHub clients per proxy
         self._github_clients = {}
@@ -97,6 +100,36 @@ class AuthManager:
         else:
             self.default_github_client = None
             log_warning("No default GitHub OAuth credentials in environment")
+    
+    def _store_public_key_in_redis(self):
+        """Store the RSA public key in Redis for proxy JWT validation."""
+        try:
+            import redis
+            import os
+            
+            # Get Redis connection details from environment
+            redis_password = os.getenv("REDIS_PASSWORD")
+            if not redis_password:
+                log_warning("Cannot store public key in Redis: REDIS_PASSWORD not set")
+                return
+            
+            # Create synchronous Redis client for initialization
+            redis_client = redis.Redis(
+                host="redis",  # Docker service name
+                port=6379,
+                password=redis_password,
+                decode_responses=True
+            )
+            
+            # Store public key PEM in Redis
+            public_key_pem = self.key_manager.public_key_pem.decode('utf-8')
+            redis_client.set("oauth:public_key", public_key_pem)
+            log_info("Stored OAuth public key in Redis for proxy JWT validation")
+            
+        except Exception as e:
+            log_error(f"Failed to store public key in Redis: {e}")
+            # Don't fail initialization if we can't store the key
+            # The OAuth service will still work, but the proxy won't be able to validate JWTs
 
     async def create_jwt_token(self, claims: dict, redis_client: redis.Redis, issuer: Optional[str] = None) -> str:
         """Creates a blessed JWT token using Authlib
@@ -118,24 +151,37 @@ class AuthManager:
             issuer = f"https://auth.{self.settings.base_domain}"
         
         # Handle audience claim for RFC 8707 Resource Indicators
+        # Resources are the proxy hostnames where the token will be used
         resources = claims.pop("resources", [])
         if resources:
-            # If resources specified, use them as audience (RFC 8707)
+            # Resources become the audience (RFC 8707)
             aud = resources if len(resources) > 1 else resources[0]
-            log_debug(
+            log_info(
                 "Setting token audience from resources",
                 resources=resources,
                 audience=aud,
                 client_id=claims.get("client_id")
             )
         else:
-            # Fallback to auth server URL for backward compatibility
-            aud = issuer
-            log_debug(
-                "No resources specified, using issuer as audience",
-                audience=aud,
-                client_id=claims.get("client_id")
-            )
+            # If no resources specified, use explicit audience if provided
+            aud = claims.pop("audience", None)
+            if not aud:
+                # This should not happen - caller should always specify audience
+                log_error(
+                    "CRITICAL: No audience or resources specified for token",
+                    client_id=claims.get("client_id"),
+                    username=claims.get("username")
+                )
+                # Use issuer as last resort (but this is wrong)
+                aud = issuer
+        
+        log_info(
+            f"Creating JWT token",
+            audience=aud,
+            issuer=issuer,
+            client_id=claims.get("client_id"),
+            username=claims.get("username")
+        )
         
         payload = {
             **claims,

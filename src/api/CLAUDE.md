@@ -47,35 +47,22 @@ api/
 
 All API endpoints are mounted at the root level with clean URLs: `/{resource}`. This provides a simple, consistent API structure.
 
-## Token Management API
+## OAuth Token Management
 
-### Token Architecture
-- Bearer token authentication for all write operations
-- Dual-key storage: by hash (auth) and by name (management)
-- Full token retrieval (not just preview)
-- Ownership tracking - tokens own certificates/proxies
-- Cascade deletion - deleting token removes owned resources
+### OAuth Authentication
+- All authentication via OAuth 2.1 with GitHub integration
+- JWT tokens with RS256 signature
+- Scopes: `admin`, `user`, `mcp`
+- Token lifetime: 30 minutes (configurable)
+- Refresh tokens supported
 
-### Token Schema
-```json
-{
-  "name": "admin",
-  "token": "acme_7da65cc83419b3...",
-  "hash": "sha256:479719852dbf16c7...",
-  "cert_email": "admin@example.com",
-  "created_at": "2024-01-15T10:00:00Z"
-}
-```
-
-### Token Endpoints
-- `GET /tokens/` - List all tokens (requires trailing slash)
-- `POST /tokens/` - Create new token
-- `POST /tokens/generate` - Generate token for display
-- `PUT /tokens/email` - Update certificate email for current token
-- `GET /tokens/info` - Get current token information
-- `GET /tokens/{name}` - Get specific token details
-- `DELETE /tokens/{name}` - Delete a token
-- `GET /tokens/{name}/reveal` - Securely reveal token value
+### OAuth Token Commands
+Use the justfile commands for OAuth token management:
+- `just oauth-login` - Login via device flow
+- `just oauth-status` - Check token status
+- `just oauth-refresh` - Refresh access token
+- `just oauth-logout` - Clear stored tokens
+- `just oauth-info` - Display detailed token info
 
 ## Route Management API
 
@@ -154,9 +141,8 @@ The API uses a flexible authentication system that supports multiple auth types:
 
 #### Authentication Types
 - **none** - Public access, no authentication required
-- **bearer** - API token authentication (acm_* tokens)
-- **admin** - Admin-only operations (requires ADMIN_TOKEN)
-- **oauth** - OAuth 2.1 with GitHub integration
+- **oauth** - OAuth 2.1 with GitHub integration (default for all protected endpoints)
+- **admin** - Admin-only operations (OAuth token with admin scope)
 
 #### Using AuthDep in Routes
 
@@ -170,7 +156,7 @@ from src.auth import AuthDep, AuthResult
 async def health():
     return {"status": "ok"}
 
-# Bearer token required (default)
+# OAuth token required (default)
 @router.get("/data")
 async def get_data(auth: AuthResult = Depends(AuthDep())):
     return {"user": auth.principal}
@@ -191,7 +177,7 @@ async def create_service(
 ):
     return {"created_by": auth.principal}
 
-# Bearer with ownership check
+# OAuth with ownership check
 @router.delete("/certificates/{cert_name}")
 async def delete_cert(
     cert_name: str,
@@ -204,7 +190,7 @@ async def delete_cert(
 
 For endpoints requiring authentication:
 ```
-Authorization: Bearer acm_your_token_here
+Authorization: Bearer <oauth_jwt_token>
 ```
 
 #### Dynamic Configuration

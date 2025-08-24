@@ -101,7 +101,7 @@ class RequestNormalizer:
             return NormalizedRequest(
                 request_id=str(uuid.uuid4()),
                 protocol='http',
-                hostname=proxy_hostname,  # Fixed: use 'hostname' not 'proxy_hostname'
+                hostname=proxy_hostname,
                 path=path,
                 method=method,
                 headers=headers,
@@ -118,7 +118,7 @@ class RequestNormalizer:
             return NormalizedRequest(
                 request_id=str(uuid.uuid4()),
                 protocol='http',
-                hostname='',  # Fixed: use 'hostname' not 'proxy_hostname'
+                hostname='',
                 path='/',
                 method='GET',
                 headers={},

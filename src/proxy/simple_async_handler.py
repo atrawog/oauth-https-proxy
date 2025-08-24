@@ -84,39 +84,121 @@ class SimpleAsyncProxyHandler:
             return auth_header[7:]
         return None
     
+    async def _get_proxy_resource_uri(self) -> str:
+        """Get the proxy's resource URI for audience validation.
+        
+        The resource URI is the canonical identifier for this proxy as an MCP resource.
+        For localhost, it's http://localhost. For production, it's https://{hostname}
+        """
+        # Get hostname from storage or default to localhost
+        if hasattr(self, 'proxy_hostname'):
+            hostname = self.proxy_hostname
+        else:
+            # Default to localhost if not set
+            hostname = "localhost"
+        
+        # Build the resource URI
+        if hostname == "localhost":
+            return "http://localhost"
+        else:
+            return f"https://{hostname}"
+    
     async def validate_oauth_jwt(self, token: str) -> Optional[Dict[str, Any]]:
         """Validate OAuth JWT token and return payload."""
         try:
+            log_info(f"Starting OAuth JWT validation", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN")
+            
             # Get OAuth public key from storage or config
             if self.oauth_components and hasattr(self.oauth_components, 'public_key'):
                 public_key = self.oauth_components.public_key
+                log_info("Using public key from oauth_components", component="proxy_handler")
             else:
                 # Try to get from storage
+                log_info("Attempting to get public key from Redis storage", component="proxy_handler")
                 public_key_data = await self.storage.get("oauth:public_key")
                 if not public_key_data:
-                    log_warning("No OAuth public key available for JWT validation", component="proxy_handler")
+                    log_error("CRITICAL: No OAuth public key found in Redis at oauth:public_key", component="proxy_handler")
                     return None
                 public_key = public_key_data
+                log_info(f"Retrieved public key from Redis, length: {len(public_key) if public_key else 0} chars", component="proxy_handler")
+            
+            # Log key preview for debugging
+            if public_key:
+                key_preview = public_key[:100] if isinstance(public_key, str) else str(public_key)[:100]
+                log_debug(f"Public key preview: {key_preview}...", component="proxy_handler")
             
             # Decode and validate JWT
+            log_info("Attempting JWT decode with RS256/HS256 algorithms", component="proxy_handler")
+            
+            # First decode without audience validation to get the audience claim
             payload = jwt.decode(
                 token,
                 public_key,
                 algorithms=["RS256", "HS256"],
-                options={"verify_signature": True, "verify_exp": True}
+                options={
+                    "verify_signature": True, 
+                    "verify_exp": True,
+                    "verify_aud": False  # We'll validate audience manually
+                }
             )
             
-            log_debug(f"JWT validated successfully for user: {payload.get('sub')}", component="proxy_handler")
+            # Get the proxy's resource URI
+            proxy_resource_uri = await self._get_proxy_resource_uri()
+            log_info(f"Proxy resource URI: {proxy_resource_uri}", component="proxy_handler")
+            
+            # Validate audience (MCP compliant)
+            token_audience = payload.get('aud')
+            if not token_audience:
+                log_error("Token has no audience claim", component="proxy_handler")
+                return None
+            
+            # Check if proxy's resource URI is in the audience
+            # Audience can be a string or list of strings
+            if isinstance(token_audience, str):
+                audience_list = [token_audience]
+            else:
+                audience_list = token_audience
+            
+            log_info(
+                f"Validating audience",
+                component="proxy_handler",
+                token_audience=audience_list,
+                proxy_resource=proxy_resource_uri
+            )
+            
+            if proxy_resource_uri not in audience_list:
+                log_warning(
+                    f"Token audience does not include proxy resource",
+                    component="proxy_handler",
+                    token_audience=audience_list,
+                    required_resource=proxy_resource_uri
+                )
+                return None
+            
+            log_info(f"Audience validation successful", component="proxy_handler")
+            
+            log_info(
+                f"JWT validation SUCCESSFUL",
+                component="proxy_handler",
+                user=payload.get('sub'),
+                username=payload.get('username'),
+                scope=payload.get('scope'),
+                issuer=payload.get('iss'),
+                audience=payload.get('aud'),
+                client_id=payload.get('client_id')
+            )
             return payload
             
-        except jwt.ExpiredSignatureError:
-            log_warning("JWT token expired", component="proxy_handler")
+        except jwt.ExpiredSignatureError as e:
+            log_warning(f"JWT token expired: {e}", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN")
             return None
         except jwt.InvalidTokenError as e:
-            log_warning(f"Invalid JWT token: {e}", component="proxy_handler")
+            log_warning(f"Invalid JWT token: {e}", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN", error_type=type(e).__name__)
             return None
         except Exception as e:
-            log_error(f"Error validating JWT: {e}", component="proxy_handler")
+            log_error(f"Unexpected error validating JWT: {e}", component="proxy_handler", error_type=type(e).__name__, token_preview=token[:30] if token else "NO_TOKEN")
+            import traceback
+            log_error(f"Traceback: {traceback.format_exc()}", component="proxy_handler")
             return None
     
     def get_required_scopes(self, method: str, path: str) -> Optional[List[str]]:

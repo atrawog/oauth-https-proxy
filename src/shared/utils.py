@@ -6,11 +6,6 @@ from typing import Optional
 from datetime import datetime, timezone
 
 
-def generate_token() -> str:
-    """Generate a cryptographically secure API token."""
-    return f"acm_{secrets.token_urlsafe(32)}"
-
-
 def hash_token(token: str) -> str:
     """Create SHA256 hash of API token."""
     return f"sha256:{hashlib.sha256(token.encode()).hexdigest()}"
