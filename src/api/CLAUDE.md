@@ -89,8 +89,8 @@ if not is_admin:
 {
   "route_id": "auth-route",
   "path_pattern": "/auth/",
-  "target_type": "service",  // port|service|hostname|url
-  "target_value": "auth",
+  "target_type": "url",  // Always "url" - the only supported type
+  "target_value": "http://api:9000",  // Explicit URL to target service
   "priority": 90,  // Higher = checked first
   "methods": ["GET", "POST"],
   "enabled": true,
@@ -102,6 +102,8 @@ if not is_admin:
   }
 }
 ```
+
+**Note**: Routes now use URL-only targeting. The `target_type` must always be "url" and `target_value` must be a complete URL (e.g., `http://api:9000` for internal Docker services or `https://example.com` for external services).
 
 ## Log Query API
 

@@ -36,7 +36,12 @@ def create_router(storage):
         req: Request,
         request: OAuthSetupRequest,
     ):
-        """Automatically configure all required OAuth routes."""
+        """[DEPRECATED] OAuth routes are now created automatically via DEFAULT_ROUTES.
+        
+        This endpoint is kept for backward compatibility but does nothing.
+        All OAuth routes (authorize, token, callback, etc.) are automatically
+        created on system startup via DEFAULT_ROUTES in src/proxy/routes.py.
+        """
         # Get auth info from headers (set by proxy)
         auth_user = req.headers.get("X-Auth-User", "system")
         auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
@@ -46,81 +51,36 @@ def create_router(storage):
         if not is_admin:
             raise HTTPException(403, "Admin scope required")
         
-        # Define OAuth routes to create
-        # ONLY the .well-known endpoints are needed as routes
-        # All other OAuth endpoints are handled by the auth domain directly
-        oauth_routes = []
-        
-        created_routes = []
-        skipped_routes = []
-        errors = []
-        
-        for route_config in oauth_routes:
-            try:
-                # Check if route already exists
-                existing_route = storage.get_route(route_config["route_id"])
-                
-                if existing_route and not request.force:
-                    skipped_routes.append(route_config["route_id"])
-                    continue
-                
-                # Create route object
-                route = Route(
-                    route_id=route_config["route_id"],
-                    path_pattern=route_config["path"],
-                    target_type=route_config["target_type"],
-                    target_value=route_config["target_value"],
-                    priority=route_config["priority"],
-                    description=route_config["description"],
-                    enabled=True,
-                    methods=[],  # Empty list means all methods
-                    is_regex=False,
-                    created_at=datetime.now(timezone.utc),
-                    owner_token_hash=f"sha256:{_['hash'].split(':')[1]}"  # Admin token hash
-                )
-                
-                # Store route
-                if storage.store_route(route):
-                    created_routes.append(route_config["route_id"])
-                    logger.info(f"Created OAuth route: {route_config['route_id']}")
-                else:
-                    errors.append(f"{route_config['route_id']}: Failed to store")
-                    
-            except Exception as e:
-                errors.append(f"{route_config['route_id']}: {str(e)}")
-                logger.error(f"Error creating OAuth route {route_config['route_id']}: {e}")
-        
-        # Summary
-        success = len(errors) == 0
-        
-        if success:
-            logger.info(
-                f"OAuth routes setup completed: {len(created_routes)} created, "
-                f"{len(skipped_routes)} skipped"
-            )
-        else:
-            logger.warning(
-                f"OAuth routes setup completed with errors: {len(created_routes)} created, "
-                f"{len(skipped_routes)} skipped, {len(errors)} errors"
-            )
+        # DEPRECATED: Routes are now created automatically via DEFAULT_ROUTES
+        # This endpoint returns success but doesn't create any routes
+        logger.warning(
+            "setup_oauth_routes called but is deprecated. "
+            "Routes are created automatically via DEFAULT_ROUTES"
+        )
         
         return OAuthSetupResponse(
             oauth_domain=request.oauth_domain,
-            created_routes=created_routes,
-            skipped_routes=skipped_routes,
-            errors=errors,
-            success=success
+            created_routes=[],
+            skipped_routes=[
+                "authorize", "token", "callback", "register", "verify",
+                "jwks", "revoke", "introspect", "device-code", "device-token",
+                "oauth-authorization-server", "oauth-protected-resource"
+            ],
+            errors=[],
+            success=True
         )
     
     @router.get("/setup-status")
     async def get_oauth_setup_status(
         domain: str = Query(..., description="OAuth domain to check")
     ):
-        """Check OAuth route setup status."""
+        """[DEPRECATED] Check OAuth route setup status.
         
-        # Expected routes
-        # ONLY the .well-known endpoints are needed as routes
-        # All other OAuth endpoints are handled by the auth domain directly
+        Routes are now created automatically via DEFAULT_ROUTES.
+        This endpoint always returns success.
+        """
+        
+        # DEPRECATED: Routes are created automatically via DEFAULT_ROUTES
         expected_routes = []
         
         # Check which routes exist and point to the correct domain

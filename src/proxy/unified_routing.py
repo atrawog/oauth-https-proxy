@@ -367,40 +367,45 @@ class UnifiedRoutingEngine:
     async def resolve_route_target(self, route: Route) -> Optional[str]:
         """Resolve route target to actual URL.
         
+        Simplified to URL-only routing. All routes should use URL type.
+        Legacy types are auto-converted with warnings.
+        
         Args:
             route: Route to resolve
             
         Returns:
             Target URL or None if not resolvable
         """
-        if route.target_type == RouteTargetType.PORT:
-            # Forward to localhost:port
-            return f"http://localhost:{route.target_value}"
+        if route.target_type == RouteTargetType.URL:
+            # Direct URL - the only supported type
+            return str(route.target_value)
+        
+        # Handle legacy types with warnings for migration
+        elif route.target_type == RouteTargetType.PORT:
+            # Auto-convert PORT to URL
+            port = int(route.target_value) if isinstance(route.target_value, str) else route.target_value
+            log_warning(
+                f"Legacy PORT route {route.route_id} should be migrated to URL type",
+                component="routing_engine"
+            )
+            return f"http://localhost:{port}"
         
         elif route.target_type == RouteTargetType.SERVICE:
-            # Look up service URL
-            service_url = None
-            if hasattr(self.storage, 'redis_client'):
-                service_url = await self.storage.redis_client.get(f"service:url:{route.target_value}")
-            
-            if service_url:
-                return service_url
-            
-            # Fallback to localhost:port if service has a port registered
-            # This would need to be looked up from dispatcher's named_services
-            log_warning(f"Service URL not found for {route.target_value}", component="routing_engine")
+            # Legacy SERVICE type - log error
+            log_error(
+                f"SERVICE route type is deprecated. Route {route.route_id} needs migration to URL type",
+                component="routing_engine"
+            )
+            # Return None to indicate this route cannot be resolved
             return None
         
         elif route.target_type == RouteTargetType.HOSTNAME:
-            # Forward to proxy handling this hostname
-            proxy = await self.get_proxy_target(str(route.target_value))
-            if proxy:
-                return proxy.target_url
+            # Legacy HOSTNAME type - log error  
+            log_error(
+                f"HOSTNAME route type is deprecated. Route {route.route_id} needs migration to URL type",
+                component="routing_engine"
+            )
             return None
-        
-        elif route.target_type == RouteTargetType.URL:
-            # Direct URL
-            return str(route.target_value)
         
         return None
     

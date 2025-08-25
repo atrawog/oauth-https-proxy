@@ -20,6 +20,19 @@ This document provides comprehensive development and testing guidelines for the 
 - **Debugging**: All debugging via `just` commands (logs, shell, redis-cli)
 - **Database**: Redis for everything (key-value, caching, queues, pub/sub, persistence)
 
+### Environment Variable Chain (CRITICAL)
+The environment variable chain for `just` commands works as follows:
+1. **Just loads .env**: The `justfile` has `set dotenv-load := true` and `set export := true`
+2. **Just exports to shell**: All loaded variables are exported to the shell environment
+3. **Pixi inherits environment**: When `just` runs `pixi run`, pixi inherits the full environment
+4. **Python receives variables**: Python scripts access via `os.getenv()`
+
+**IMPORTANT**: The `.env` file is loaded from the justfile's directory, NOT the current working directory.
+This means when testing, you must either:
+- Run commands from the project root directory
+- Use absolute paths in `set dotenv-path`
+- Create test justfiles with proper dotenv-path settings
+
 ### Root Cause Analysis (Required Before any Code or Configuration Change)
 1. Why did it fail? (surface symptom)
 2. Why did that condition exist? (enabling circumstance)
@@ -34,6 +47,38 @@ This document provides comprehensive development and testing guidelines for the 
 - ACME URLs can be switched between staging and production for testing
 - HTTP routing configuration is managed via Redis, not environment variables
 - Docker socket access requires appropriate group permissions (DOCKER_GID)
+
+### OAuth Authentication Requirements (CRITICAL)
+**Circular Dependency Prevention**: The following OAuth endpoints MUST be excluded from authentication on the localhost proxy to prevent circular dependencies:
+
+#### Required OAuth Exclusions
+These endpoints must be accessible without authentication:
+- `/token` - Token refresh endpoint (prevents "need token to get token" deadlock)
+- `/device/code` - Device flow initiation
+- `/device/token` - Device flow polling  
+- `/authorize` - OAuth authorization
+- `/callback` - OAuth callback
+- `/jwks` - Public key distribution
+- `/.well-known/oauth-authorization-server` - OAuth metadata
+- `/register` - Dynamic client registration (RFC 7591)
+
+#### Additional Public Endpoints
+- `/health` - Health check endpoint
+- `/.well-known/*` - All well-known endpoints (OAuth metadata, MCP resource metadata)
+
+**Configuration**: Set `auth_excluded_paths` on the localhost proxy:
+```python
+auth_excluded_paths = [
+    "/token",
+    "/device/",  # Covers /device/code and /device/token
+    "/authorize",
+    "/callback",
+    "/jwks",
+    "/.well-known/",
+    "/register",
+    "/health"
+]
+```
 
 ## System Architecture
 
@@ -265,6 +310,8 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 16. **Trust-Based API**: API endpoints read auth headers without validation
 17. **Redis-Based Port Management**: All port allocations stored persistently in Redis with atomic operations
 18. **Deterministic Port Allocation**: Hash-based preferred ports ensure consistency across restarts
+19. **URL-Only Routing**: Eliminated PORT/SERVICE/HOSTNAME types - all routes use explicit URLs (`http://api:9000`)
+20. **Clean Route IDs**: Routes have predictable IDs matching endpoints (`token` not `token-80c106aa`)
 
 ## Port Configuration
 
@@ -326,9 +373,12 @@ The system automatically creates a localhost proxy during startup to ensure the 
    - Async components (logger, metrics, etc.)
    
 2. **Initialize Default Routes** (`storage.initialize_default_routes()`):
-   - OAuth endpoints (`/authorize`, `/token`, `/callback`)
+   - All routes created from `DEFAULT_ROUTES` in `src/proxy/routes.py`
+   - OAuth endpoints (`/authorize`, `/token`, `/callback`, `/device/*`, etc.)
    - ACME challenges (`/.well-known/acme-challenge/*`)
    - Well-known endpoints (`/.well-known/*`)
+   - All routes use URL type exclusively (`http://api:9000`)
+   - Clean route IDs matching endpoints (e.g., `token` not `token-80c106aa`)
 
 3. **Initialize Default Proxies** (`storage.initialize_default_proxies()`):
    - Creates localhost proxy if missing
@@ -565,6 +615,55 @@ Dispatcher → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Ba
 2. **Trust boundaries matter**: Never trust partial validation - either fully validate or don't
 3. **Working code > clever architecture**: The simpler solution that works is better than complex ideas
 4. **Security first**: A security hole from incomplete validation is worse than slightly later validation
+
+## Troubleshooting
+
+### OAuth Token Refresh Failures
+
+#### Symptom
+```
+Token refresh failed - please run: proxy-client oauth login
+```
+
+#### Root Causes and Solutions
+
+1. **Circular Authentication Dependency**
+   - **Cause**: The `/token` endpoint requires authentication to access
+   - **Solution**: Ensure localhost proxy has correct `auth_excluded_paths` (see OAuth Authentication Requirements above)
+   - **Test**: `curl -X POST http://localhost/token` should NOT return 401
+
+2. **Environment Variables Not Loaded**
+   - **Cause**: Running commands outside project root or `.env` not found
+   - **Solution**: Always run `just` commands from project root directory
+   - **Test**: `just echo-tokens` should show both OAUTH_ACCESS_TOKEN and OAUTH_REFRESH_TOKEN
+
+3. **Token Actually Expired**
+   - **Cause**: Refresh token has expired (1 year lifetime)
+   - **Solution**: Run `just oauth-login` to get new tokens
+   - **Test**: Check token expiry with `just oauth-status`
+
+4. **API Connection Issues**
+   - **Cause**: API service not running or not accessible
+   - **Solution**: Ensure services are up with `just up`
+   - **Test**: `curl http://localhost/health` should return 200
+
+#### Prevention
+- Always configure `auth_excluded_paths` for OAuth endpoints on localhost proxy
+- Use `just oauth-status` to monitor token validity
+- Run `just oauth-refresh` proactively before tokens expire
+- Ensure `.env` file has valid OAUTH_ACCESS_TOKEN and OAUTH_REFRESH_TOKEN
+
+### Testing OAuth Token Refresh
+```bash
+# Test that token endpoint is accessible without auth
+curl -X POST http://localhost/token -d "grant_type=refresh_token&refresh_token=${OAUTH_REFRESH_TOKEN}&client_id=device_flow_client"
+
+# Test token refresh via client
+just oauth-refresh
+
+# Verify new token works
+just proxy-list
+```
 
 ## Contributing
 

@@ -1,14 +1,26 @@
 """Proxy module - Single unified handler for all proxy operations."""
 
-from .unified_handler import UnifiedProxyHandler
+# Import models and routes directly (no circular dependency)
 from .app import create_proxy_app
 from .models import ProxyTarget
 from .routes import Route, RouteTargetType, RouteScope, DEFAULT_ROUTES
 
-# For backward compatibility during transition (will be removed after testing)
-ProxyHandler = UnifiedProxyHandler
-EnhancedProxyHandler = UnifiedProxyHandler  # Temporary alias
-EnhancedAsyncProxyHandler = UnifiedProxyHandler  # Temporary alias
+# Lazy import for handler to avoid circular dependency
+def __getattr__(name):
+    """Lazy import of handler classes to avoid circular imports."""
+    if name in ['UnifiedProxyHandler', 'ProxyHandler', 'EnhancedProxyHandler', 'EnhancedAsyncProxyHandler']:
+        from .unified_handler import UnifiedProxyHandler
+        
+        # For backward compatibility during transition
+        if name == 'ProxyHandler':
+            return UnifiedProxyHandler
+        elif name == 'EnhancedProxyHandler':
+            return UnifiedProxyHandler
+        elif name == 'EnhancedAsyncProxyHandler':
+            return UnifiedProxyHandler
+        else:
+            return UnifiedProxyHandler
+    raise AttributeError(f"module '{__name__}' has no attribute '{name}'")
 
 __all__ = [
     'UnifiedProxyHandler',

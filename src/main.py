@@ -31,6 +31,8 @@ async def initialize_components(config: Config) -> tuple:
     # Initialize storage with Redis URL
     redis_url = config.get_redis_url_with_password()
     storage = RedisStorage(redis_url)
+    # Since we're in async context, must initialize async
+    await storage.initialize_async()
     
     # Initialize async components
     from .api.async_init import init_async_components
@@ -45,7 +47,7 @@ async def initialize_components(config: Config) -> tuple:
     
     # Initialize HTTPS server
     https_server = HTTPSServer(manager)
-    https_server.load_certificates()
+    await https_server.load_certificates()
     
     # Initialize scheduler
     scheduler = CertificateScheduler(manager)
@@ -58,10 +60,10 @@ async def initialize_components(config: Config) -> tuple:
     )
     
     # Initialize default routes
-    storage.initialize_default_routes()
+    await storage.initialize_default_routes()
     
     # Initialize default proxies
-    storage.initialize_default_proxies()
+    await storage.initialize_default_proxies()
     
     # Note: Flexible auth system is initialized directly in run_server()
     
@@ -309,7 +311,8 @@ def main() -> None:
         sys.exit(0)
     except Exception as e:
         logger.error(f"Python logging: Failed to start - {e}", exc_info=True)
-        log_error(f"Failed to start OAuth HTTPS Proxy: {e}", component="main")
+        # Don't use async log_error here since we may not have an event loop
+        print(f"ERROR: Failed to start OAuth HTTPS Proxy: {e}", file=sys.stderr)
         sys.exit(1)
 
 

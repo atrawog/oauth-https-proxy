@@ -94,11 +94,10 @@ The Proxy Manager provides dynamic reverse proxy functionality with SSL terminat
 
 Priority-based path routing with Redis storage and scope support:
 
-### Route Target Types
-- **port**: Forward to `localhost:<port>` (e.g., `3000`)
-- **service**: Forward to named service - Docker, external, or internal (e.g., `auth`, `api-gateway`)
-- **hostname**: Forward to proxy handling that hostname (e.g., `api.example.com`)
-- **url**: Forward to any URL directly (e.g., `http://backend:3000` or `https://api.example.com`)
+### Route Target Type (URL-Only)
+- **url**: Forward to any URL directly (e.g., `http://api:9000`, `http://backend:3000`, `https://api.example.com`)
+
+**Note**: The system now uses URL-only routing exclusively. Legacy route types (PORT, SERVICE, HOSTNAME) have been deprecated and removed. All routes must specify explicit target URLs.
 
 ### Route Scopes
 Routes can be scoped to control their applicability:

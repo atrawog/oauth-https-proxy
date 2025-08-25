@@ -18,11 +18,12 @@ The system uses consistent key naming patterns for organization and performance:
 
 ### Service Keys
 ```
-service:url:{name}          # Service name to URL mapping (all service types)
 service:external:{name}     # External service configuration JSON
 docker_service:{name}       # Docker service configuration JSON
 services:external           # Set of external service names
 ```
+
+**Note**: The `service:url:{name}` mapping has been deprecated with the move to URL-only routing. Routes now contain explicit target URLs rather than service name references.
 
 ### OAuth Token Keys (JWT-based, no storage of bearer tokens)
 ```

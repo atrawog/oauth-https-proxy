@@ -35,7 +35,7 @@ class ProxyClientMiddleware:
                 # Look up real client info from Redis
                 try:
                     key = f"proxy:client:{server_port}:{client_port}"
-                    data = self.redis_client.get(key)
+                    data = await self.redis_client.get(key)
                     
                     if data:
                         client_info = json.loads(data)

@@ -174,22 +174,25 @@ class RouteUpdateRequest(BaseModel):
     proxy_hostnames: Optional[List[str]] = None
 
 
-# Default routes that should always exist
+# Default routes that should always exist (includes all OAuth routes)
 DEFAULT_ROUTES = [
+    # ACME Challenge
     {
         "route_id": "acme-challenge",
         "path_pattern": "/.well-known/acme-challenge/",
-        "target_type": RouteTargetType.SERVICE,
-        "target_value": "api",
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 100,
         "description": "ACME challenge validation",
         "enabled": True
     },
+    
+    # OAuth Well-Known Endpoints
     {
         "route_id": "oauth-protected-resource",
         "path_pattern": "/.well-known/oauth-protected-resource",
-        "target_type": RouteTargetType.SERVICE,
-        "target_value": "api",
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 100,
         "description": "MCP OAuth protected resource metadata",
         "enabled": True
@@ -197,69 +200,107 @@ DEFAULT_ROUTES = [
     {
         "route_id": "oauth-authorization-server",
         "path_pattern": "/.well-known/oauth-authorization-server",
-        "target_type": RouteTargetType.SERVICE,
-        "target_value": "api",
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
         "description": "OAuth authorization server metadata",
         "enabled": True
-    }
-]
-
-# OAuth routes that need to be created for OAuth functionality
-OAUTH_ROUTES = [
+    },
+    
+    # OAuth Core Endpoints
     {
+        "route_id": "authorize",
         "path_pattern": "/authorize",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "OAuth authorization endpoint"
+        "description": "OAuth authorization endpoint",
+        "enabled": True
     },
     {
+        "route_id": "token",
         "path_pattern": "/token",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "OAuth token endpoint"
+        "description": "OAuth token endpoint",
+        "enabled": True
     },
     {
+        "route_id": "callback",
         "path_pattern": "/callback",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "OAuth callback endpoint"
+        "description": "OAuth callback endpoint",
+        "enabled": True
+    },
+    
+    # OAuth Device Flow
+    {
+        "route_id": "device-code",
+        "path_pattern": "/device/code",
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
+        "priority": 95,
+        "description": "OAuth device flow initiation",
+        "enabled": True
     },
     {
+        "route_id": "device-token",
+        "path_pattern": "/device/token",
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
+        "priority": 95,
+        "description": "OAuth device flow token polling",
+        "enabled": True
+    },
+    
+    # OAuth Management Endpoints
+    {
+        "route_id": "register",
         "path_pattern": "/register",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "OAuth client registration"
+        "description": "OAuth client registration",
+        "enabled": True
     },
     {
+        "route_id": "verify",
         "path_pattern": "/verify",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "ForwardAuth verification"
+        "description": "ForwardAuth verification",
+        "enabled": True
     },
     {
-        "path_pattern": "/.well-known/oauth-authorization-server",
-        "target_type": RouteTargetType.HOSTNAME,
-        "priority": 95,
-        "description": "OAuth server metadata"
-    },
-    {
+        "route_id": "jwks",
         "path_pattern": "/jwks",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "JSON Web Key Set"
+        "description": "JSON Web Key Set",
+        "enabled": True
     },
     {
+        "route_id": "revoke",
         "path_pattern": "/revoke",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "Token revocation"
+        "description": "Token revocation",
+        "enabled": True
     },
     {
+        "route_id": "introspect",
         "path_pattern": "/introspect",
-        "target_type": RouteTargetType.HOSTNAME,
+        "target_type": RouteTargetType.URL,
+        "target_value": "http://api:9000",
         "priority": 95,
-        "description": "Token introspection"
+        "description": "Token introspection",
+        "enabled": True
     }
 ]
 

@@ -12,7 +12,7 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.exceptions import HTTPException
-from .unified_handler import UnifiedProxyHandler
+# Lazy import UnifiedProxyHandler to avoid circular dependency
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, set_global_logger
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
@@ -150,6 +150,8 @@ class ProxyOnlyApp:
                 
                 # Create the proxy handler with hostname for route filtering
                 proxy_hostname = self.domains[0] if self.domains else None
+                # Lazy import to avoid circular dependency
+                from .unified_handler import UnifiedProxyHandler
                 self.proxy_handler = UnifiedProxyHandler(
                     self.handler_storage, 
                     self.redis_clients,

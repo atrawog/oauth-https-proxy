@@ -388,6 +388,18 @@ DEFAULT_PROXIES = [
         "custom_headers": {},
         "owner_token_hash": "",
         "auth_enabled": False,
+        "auth_excluded_paths": [
+            "/token",          # Token refresh endpoint - CRITICAL
+            "/device/",        # Device flow endpoints (/device/code, /device/token)
+            "/authorize",      # OAuth authorization
+            "/callback",       # OAuth callback
+            "/jwks",          # Public keys
+            "/.well-known/",  # All well-known endpoints
+            "/register",      # Dynamic client registration
+            "/health",        # Health check
+            "/revoke",        # Token revocation
+            "/introspect"     # Token introspection
+        ],
         "route_mode": "all",
         "enabled_routes": [],
         "disabled_routes": [],

@@ -241,7 +241,7 @@ class UnifiedDispatcher:
         # Generic routing rules sorted by priority (highest first)
         self.routes: List[Route] = []
         # Named instances for routing targets
-        self.named_services: Dict[str, int] = {}  # name -> port
+        # Named services removed - using URL-only routing
         # Initialize DNS resolver for reverse lookups
         self.dns_resolver = get_dns_resolver()
         
@@ -315,32 +315,7 @@ class UnifiedDispatcher:
             if not enable_http and not enable_https:
                 log_warning(f"Domain {domain} has no protocols enabled!", component="dispatcher")
     
-    def register_named_service(self, name: str, port: int, service_url: Optional[str] = None):
-        """Register a named service for routing targets.
-        
-        Args:
-            name: Service name (e.g., 'api')
-            port: Port number for localhost access
-            service_url: Full URL for Docker service access (e.g., 'http://api:9000')
-        """
-        self.named_services[name] = port
-        log_info(f"Registered named service: {name} -> port {port}", component="dispatcher")
-        
-        # Store in Redis so proxies can access it
-        if self.storage:
-            try:
-                # Store service URL
-                if service_url:
-                    self.storage.redis_client.set(f"service:url:{name}", service_url)
-                    log_info(f"Stored service {name} URL in Redis: {service_url}", component="dispatcher")
-                elif name == "api":
-                    # Special case for API service - use Docker service name
-                    self.storage.redis_client.set(f"service:url:{name}", "http://api:9000")
-                    log_info(f"Stored API service URL in Redis: http://api:9000", component="dispatcher")
-                
-                log_debug(f"Stored service {name} in Redis", component="dispatcher")
-            except Exception as e:
-                log_error(f"Failed to store service in Redis: {e}", component="dispatcher", error=e)
+    # Removed register_named_service - using URL-only routing
     
     async def load_routes_from_storage(self):
         """Load routes from Redis storage."""
@@ -350,10 +325,10 @@ class UnifiedDispatcher:
         
         try:
             # Initialize default routes if needed
-            self.storage.initialize_default_routes()
+            await self.storage.initialize_default_routes()
             
             # Initialize default proxies if needed
-            self.storage.initialize_default_proxies()
+            await self.storage.initialize_default_proxies()
             
             # Load all routes from storage
             self.routes = await self._list_routes()
@@ -382,17 +357,34 @@ class UnifiedDispatcher:
             log_debug(f"Error parsing HTTP request: {e}", component="dispatcher")
             return None, None
     
-    def resolve_route_target(self, route: Route) -> Optional[Union[int, str]]:
-        """Resolve a route to a target port or URL."""
+    def resolve_route_target(self, route: Route) -> Optional[str]:
+        """Resolve a route to a target URL.
+        
+        Simplified to URL-only routing. Legacy types are auto-converted.
+        """
+        if route.target_type == RouteTargetType.URL:
+            return route.target_value
+        
+        # Auto-migrate legacy PORT type to URL
         if route.target_type == RouteTargetType.PORT:
-            return route.target_value if isinstance(route.target_value, int) else int(route.target_value)
-        elif route.target_type == RouteTargetType.SERVICE:
-            return self.named_services.get(route.target_value)
-        elif route.target_type == RouteTargetType.HOSTNAME:
-            # hostname_to_http_port contains ports with PROXY protocol enabled
-            return self.hostname_to_http_port.get(route.target_value)
-        elif route.target_type == RouteTargetType.URL:
-            return route.target_value  # Return URL as-is
+            port = int(route.target_value) if isinstance(route.target_value, str) else route.target_value
+            log_warning(f"Auto-converting legacy PORT route {route.route_id} to URL", component="dispatcher")
+            return f"http://localhost:{port}"
+        
+        # Auto-migrate legacy SERVICE type to common Docker service URLs
+        if route.target_type == RouteTargetType.SERVICE:
+            service = str(route.target_value)
+            if service == "api":
+                log_warning(f"Auto-converting legacy SERVICE route {route.route_id} to http://api:9000", component="dispatcher")
+                return "http://api:9000"
+            log_error(f"Unknown service '{service}' in route {route.route_id}", component="dispatcher")
+            return None
+        
+        # HOSTNAME type deprecated
+        if route.target_type == RouteTargetType.HOSTNAME:
+            log_error(f"HOSTNAME route type deprecated for route {route.route_id}", component="dispatcher")
+            return None
+        
         return None
     
     async def _forward_http_request(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, 
@@ -712,7 +704,7 @@ class UnifiedDispatcher:
             elif self.storage:
                 # Fallback to sync storage
                 try:
-                    proxy_json = self.storage.redis_client.get(f"proxy:{proxy_hostname}")
+                    proxy_json = await self.storage.redis_client.get(f"proxy:{proxy_hostname}")
                     if proxy_json:
                         proxy_data = json.loads(proxy_json)
                         proxy_config = ProxyTarget(**proxy_data)
@@ -835,12 +827,8 @@ class UnifiedDispatcher:
                 data = self._inject_http_header(data, 'X-Trace-Id', trace_id)
                 log_trace(f"Injected X-Trace-Id header: {trace_id}", component="dispatcher")
             
-            # Determine if this is a named instance or proxy target
+            # Named services removed - using URL-only routing
             service_name = None
-            for name, port in self.named_services.items():
-                if port == target_port:
-                    service_name = name
-                    break
             
             # Forward to the target instance with PROXY protocol enabled
             await self._forward_connection(
@@ -1246,7 +1234,7 @@ class UnifiedMultiInstanceServer:
         https_port = None
         
         if self.redis:
-            mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+            mapping_data = await self.redis.hget("proxy:ports:mappings", proxy_hostname)
             if mapping_data:
                 mapping = json.loads(mapping_data)
                 http_port = mapping.get("http")
@@ -1291,7 +1279,7 @@ class UnifiedMultiInstanceServer:
                 "https": https_port,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
+            await self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
             log_debug(f"[PROXY_CREATE] Stored port mapping for {proxy_hostname} in Redis", component="dispatcher")
         
         # Create instance - this is a proxy-only instance
@@ -1468,7 +1456,7 @@ class UnifiedMultiInstanceServer:
         https_port = None
         
         if self.redis:
-            mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+            mapping_data = await self.redis.hget("proxy:ports:mappings", proxy_hostname)
             if mapping_data:
                 mapping = json.loads(mapping_data)
                 http_port = mapping.get("http")
@@ -1511,7 +1499,7 @@ class UnifiedMultiInstanceServer:
                 "https": https_port,
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
-            self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
+            await self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
             log_debug(f"[UNIFIED] Stored port mapping for {proxy_hostname} in Redis", component="dispatcher")
         
         # Create Hypercorn instance - MUST succeed
@@ -1563,7 +1551,7 @@ class UnifiedMultiInstanceServer:
         
         # Get port mapping from Redis to release ports
         if self.redis:
-            mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+            mapping_data = await self.redis.hget("proxy:ports:mappings", proxy_hostname)
             if mapping_data:
                 mapping = json.loads(mapping_data)
                 http_port = mapping.get("http")
@@ -1578,7 +1566,7 @@ class UnifiedMultiInstanceServer:
                     log_debug(f"[UNIFIED] Released HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
                 
                 # Remove mapping from Redis
-                self.redis.hdel("proxy:ports:mappings", proxy_hostname)
+                await self.redis.hdel("proxy:ports:mappings", proxy_hostname)
                 log_debug(f"[UNIFIED] Removed port mapping for {proxy_hostname} from Redis", component="dispatcher")
         
         # Stop the instance
@@ -1759,7 +1747,7 @@ class UnifiedMultiInstanceServer:
                 # Get the allocated port from Redis mapping
                 port = None
                 if self.redis:
-                    mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+                    mapping_data = await self.redis.hget("proxy:ports:mappings", proxy_hostname)
                     if mapping_data:
                         mapping = json.loads(mapping_data)
                         port = mapping.get("http")
@@ -1980,16 +1968,15 @@ class UnifiedMultiInstanceServer:
         logger.info("Python logging: Loading routes from storage")
         await self.dispatcher.load_routes_from_storage()
         
-        # 3. Register API service
-        logger.info("Python logging: Registering API service")
-        self.dispatcher.register_named_service('api', 10001, 'http://api:9000')
+        # 3. Named services removed - using URL-only routing
+        logger.info("Python logging: URL-only routing enabled (no named services)")
         
         # 4. Load existing port mappings from Redis
         logger.info("Python logging: Loading existing port mappings from Redis")
         log_info("Loading existing proxy port mappings from Redis...", component="dispatcher")
         
         if self.redis:
-            mappings = self.redis.hgetall("proxy:ports:mappings")
+            mappings = await self.redis.hgetall("proxy:ports:mappings")
             if mappings:
                 log_info(f"Found {len(mappings)} existing port mappings in Redis", component="dispatcher")
                 for hostname_bytes, mapping_bytes in mappings.items():

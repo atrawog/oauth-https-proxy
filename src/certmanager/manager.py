@@ -16,7 +16,13 @@ class CertificateManager:
     
     def __init__(self, storage):
         """Initialize certificate manager."""
-        self.storage = storage
+        # If storage is UnifiedStorage, get sync interface
+        # to ensure we always get sync methods even in async context
+        if hasattr(storage, 'get_sync_interface'):
+            self.storage = storage.get_sync_interface()
+            logger.info("CertificateManager using sync interface from UnifiedStorage")
+        else:
+            self.storage = storage
         self.acme_client = ACMEClient(self.storage)
         self.ssl_contexts: Dict[str, any] = {}
     

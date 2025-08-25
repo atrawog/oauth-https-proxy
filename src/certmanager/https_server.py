@@ -48,9 +48,15 @@ class HTTPSServer:
         
         return context
     
-    def load_certificates(self):
+    async def load_certificates(self):
         """Load all certificates from storage with proxy-aware prioritization."""
-        certificates = self.manager.list_certificates()
+        # Handle both sync and async storage
+        if hasattr(self.manager, 'storage') and hasattr(self.manager.storage, '_async_storage'):
+            # UnifiedStorage - use async directly
+            certificates = await self.manager.storage._async_storage.list_certificates()
+        else:
+            # Legacy sync storage
+            certificates = self.manager.list_certificates()
         
         # First pass: Load all certificates into a temporary structure
         cert_contexts = {}  # cert_name -> (context, domains)
@@ -64,7 +70,11 @@ class HTTPSServer:
                     logger.error(f"Failed to load certificate {certificate.cert_name}: {e}")
         
         # Second pass: Check proxy configurations to determine which certificates to use
-        proxy_targets = self.manager.storage.list_proxy_targets()
+        # Handle both sync and async storage for proxy targets
+        if hasattr(self.manager, 'storage') and hasattr(self.manager.storage, '_async_storage'):
+            proxy_targets = await self.manager.storage._async_storage.list_proxy_targets()
+        else:
+            proxy_targets = self.manager.storage.list_proxy_targets()
         domain_to_cert = {}  # domain -> cert_name mapping based on proxy config
         
         for proxy in proxy_targets:

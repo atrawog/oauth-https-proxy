@@ -584,21 +584,33 @@ class AsyncRedisStorage:
                 # Check if this proxy already exists
                 existing_proxy = await self.get_proxy_target(proxy_hostname)
                 if existing_proxy:
-                    # Update resource metadata if missing for localhost proxy
-                    if proxy_hostname == "localhost" and not existing_proxy.resource_endpoint:
-                        # Update with resource metadata from defaults
-                        existing_proxy.resource_endpoint = proxy_dict.get("resource_endpoint")
-                        existing_proxy.resource_scopes = proxy_dict.get("resource_scopes")
-                        existing_proxy.resource_stateful = proxy_dict.get("resource_stateful", False)
-                        existing_proxy.resource_versions = proxy_dict.get("resource_versions")
-                        existing_proxy.resource_server_info = proxy_dict.get("resource_server_info")
-                        existing_proxy.resource_bearer_methods = proxy_dict.get("resource_bearer_methods")
-                        existing_proxy.resource_documentation_suffix = proxy_dict.get("resource_documentation_suffix")
-                        existing_proxy.resource_custom_metadata = proxy_dict.get("resource_custom_metadata")
+                    # Update localhost proxy with critical settings
+                    if proxy_hostname == "localhost":
+                        needs_update = False
                         
-                        if await self.store_proxy_target(proxy_hostname, existing_proxy):
-                            log_info(f"Updated resource metadata for default proxy: {proxy_hostname}", component="redis_storage")
+                        # Always ensure auth_excluded_paths are set for localhost to prevent circular dependency
+                        if not existing_proxy.auth_excluded_paths or existing_proxy.auth_excluded_paths != proxy_dict.get("auth_excluded_paths"):
+                            existing_proxy.auth_excluded_paths = proxy_dict.get("auth_excluded_paths")
+                            needs_update = True
+                            log_info(f"Updating auth_excluded_paths for localhost proxy", component="redis_storage")
+                        
+                        # Update resource metadata if missing
+                        if not existing_proxy.resource_endpoint:
+                            existing_proxy.resource_endpoint = proxy_dict.get("resource_endpoint")
+                            existing_proxy.resource_scopes = proxy_dict.get("resource_scopes")
+                            existing_proxy.resource_stateful = proxy_dict.get("resource_stateful", False)
+                            existing_proxy.resource_versions = proxy_dict.get("resource_versions")
+                            existing_proxy.resource_server_info = proxy_dict.get("resource_server_info")
+                            existing_proxy.resource_bearer_methods = proxy_dict.get("resource_bearer_methods")
+                            existing_proxy.resource_documentation_suffix = proxy_dict.get("resource_documentation_suffix")
+                            existing_proxy.resource_custom_metadata = proxy_dict.get("resource_custom_metadata")
+                            needs_update = True
+                        
+                        if needs_update and await self.store_proxy_target(proxy_hostname, existing_proxy):
+                            log_info(f"Updated default proxy configuration: {proxy_hostname}", component="redis_storage")
                             updated_count += 1
+                        else:
+                            existing_count += 1
                     else:
                         existing_count += 1
                     continue

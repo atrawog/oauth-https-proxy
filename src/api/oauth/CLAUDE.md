@@ -132,16 +132,21 @@ Each proxy can have its own GitHub OAuth App credentials:
 
 ## OAuth Routes Configuration
 
-OAuth routes are automatically handled by the auth proxy domain. The OAuth server runs integrated with the proxy service, so no manual route setup is required. When you create an auth proxy (e.g., `auth.yourdomain.com`), it automatically handles all OAuth endpoints:
+OAuth routes are automatically created on system startup via `DEFAULT_ROUTES` in `src/proxy/routes.py`. All OAuth endpoints are pre-configured with URL-only routing pointing to `http://api:9000`. The following routes are created automatically:
 
 - `/authorize` - OAuth authorization endpoint
 - `/token` - Token exchange endpoint  
 - `/callback` - OAuth callback handler
 - `/verify` - Token verification endpoint
-- `/.well-known/oauth-authorization-server` - Server metadata
+- `/device/code` - Device flow initiation
+- `/device/token` - Device flow polling
 - `/jwks` - JSON Web Key Set endpoint
-- `/revoke` - Token revocation endpoint
-- `/introspect` - Token introspection endpoint
+- `/revoke` - Token revocation
+- `/introspect` - Token introspection
+- `/.well-known/oauth-authorization-server` - Server metadata
+- `/.well-known/oauth-protected-resource` - Protected resource metadata
+
+All routes use clean IDs (e.g., `token` not `token-80c106aa`) and explicit URL targets. No manual route setup is required.
 
 ## MCP Authorization Flow
 
@@ -219,8 +224,8 @@ Response:
 
 - `GET /oauth/clients` - List OAuth clients
 - `GET /oauth/sessions` - Active sessions
-- `POST /oauth/admin/setup-routes` - Setup OAuth routes (admin scope required)
-- `GET /oauth/admin/setup-status` - Check OAuth route setup status
+- `POST /oauth/admin/setup-routes` - [DEPRECATED] Routes are created automatically via DEFAULT_ROUTES
+- `GET /oauth/admin/setup-status` - [DEPRECATED] Routes are created automatically via DEFAULT_ROUTES
 
 ## OAuth Status API Endpoints
 
