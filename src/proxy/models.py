@@ -379,7 +379,7 @@ class ProxyOAuthServerConfig(BaseModel):
 DEFAULT_PROXIES = [
     {
         "proxy_hostname": "localhost",
-        "target_url": "http://127.0.0.1:9000",
+        "target_url": "http://api:9000",
         "cert_name": "",
         "enabled": True,
         "enable_http": True,

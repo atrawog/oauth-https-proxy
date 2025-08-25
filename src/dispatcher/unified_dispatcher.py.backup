@@ -13,7 +13,7 @@ import struct
 import json
 import time
 import traceback
-import h11
+import httpx
 from typing import Dict, Optional, List, Tuple, Set, Union
 from datetime import datetime, timezone
 
@@ -22,6 +22,7 @@ from hypercorn.config import Config as HypercornConfig
 from ..middleware.proxy_protocol_handler import create_proxy_protocol_server
 
 from ..proxy.models import ProxyTarget
+from ..proxy.routes import Route, RouteTargetType, RouteScope
 from ..proxy.app import create_proxy_app
 from .models import DomainService
 from ..shared.logger import log_info, log_warning, log_error, log_debug, log_trace
@@ -237,6 +238,8 @@ class UnifiedDispatcher:
         self.hostname_to_https_port: Dict[str, int] = {}
         self.http_server = None
         self.https_server = None
+        # Generic routing rules sorted by priority (highest first)
+        self.routes: List[Route] = []
         # Named instances for routing targets
         # Named services removed - using URL-only routing
         # Initialize DNS resolver for reverse lookups
@@ -253,6 +256,36 @@ class UnifiedDispatcher:
         if self.async_storage:
             return await self.async_storage.list_routes()
         return self.storage.list_routes() if self.storage else []
+    
+    def get_applicable_routes(self, proxy_config: Optional[ProxyTarget]) -> List[Route]:
+        """Get routes applicable to a specific proxy based on its configuration and scope."""
+        if not proxy_config:
+            # No proxy config means use all global routes (backwards compatibility)
+            return [r for r in self.routes if r.scope == RouteScope.GLOBAL]
+        
+        # Filter routes by scope first
+        applicable_routes = []
+        for route in self.routes:
+            if route.scope == RouteScope.GLOBAL:
+                # Global routes apply to all proxies
+                applicable_routes.append(route)
+            elif route.scope == RouteScope.PROXY and proxy_config.proxy_hostname in route.proxy_hostnames:
+                # Proxy-specific routes only apply to listed proxies
+                applicable_routes.append(route)
+        
+        # Sort by priority (higher first) - proxy-specific routes can override global ones
+        applicable_routes.sort(key=lambda r: r.priority, reverse=True)
+        
+        # Apply existing route filtering based on route_mode
+        if proxy_config.route_mode == "none":
+            # No routes apply
+            return []
+        elif proxy_config.route_mode == "selective":
+            # Only enabled routes apply
+            return [r for r in applicable_routes if r.route_id in proxy_config.enabled_routes]
+        else:  # route_mode == "all" (default)
+            # All routes except disabled ones
+            return [r for r in applicable_routes if r.route_id not in proxy_config.disabled_routes]
     
     def register_domain(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
@@ -290,6 +323,15 @@ class UnifiedDispatcher:
             # Initialize default proxies if needed
             await self.storage.initialize_default_proxies()
             
+            # Load all routes from storage
+            self.routes = await self._list_routes()
+            
+            # Filter only enabled routes
+            self.routes = [r for r in self.routes if r.enabled]
+            
+            log_info(f"Loaded {len(self.routes)} routes from storage", component="dispatcher")
+            for route in self.routes:
+                log_info(f"  {route.priority}: {route.path_pattern} -> {route.target_type.value}:{route.target_value} - {route.description}", component="dispatcher")
         except Exception as e:
             log_error(f"Failed to load routes from storage: {e}", component="dispatcher", error=e)
     
@@ -316,16 +358,16 @@ class UnifiedDispatcher:
         We use h11 ONLY to safely parse the Host header, then forward
         the ORIGINAL data unchanged to avoid any corruption.
         """
+        import h11
+        
         conn = h11.Connection(h11.SERVER)
         conn.receive_data(data)
         
         hostname = None
-        log_debug(f"h11: Processing request data, length={len(data)}", component="dispatcher")
         
         # Parse just enough to get the Host header
         while True:
             event = conn.next_event()
-            log_debug(f"h11 event: {type(event).__name__}", component="dispatcher")
             
             if event is h11.NEED_DATA:
                 # We only have initial data, can't get more here
@@ -333,18 +375,19 @@ class UnifiedDispatcher:
                 break
                 
             elif isinstance(event, h11.Request):
-                # Headers are part of the Request event in h11
-                log_debug(f"h11 Request: {event.method} {event.target}", component="dispatcher")
-                # Extract Host header from request headers
-                for name, value in event.headers:
-                    log_debug(f"h11 header: {name}={value}", component="dispatcher")
+                # Got request line, continue to headers
+                continue
+                
+            elif isinstance(event, h11.Headers):
+                # Extract Host header
+                for name, value in event:
                     if name.lower() == b'host':
                         hostname = value.decode('utf-8')
                         # Remove port if present
                         if ':' in hostname:
                             hostname = hostname.split(':')[0]
                         break
-                # Stop after processing request
+                # Stop parsing after headers
                 break
                 
             elif event in (h11.Data, h11.EndOfMessage):
@@ -542,8 +585,7 @@ class UnifiedDispatcher:
             try:
                 proxy_hostname, complete_data = self.extract_hostname_with_h11(data)
             except Exception as e:
-                log_error(f"Failed to parse HTTP request with h11: {e}", component="dispatcher", error=e)
-                log_debug(f"Request data (first 200 bytes): {data[:200]}", component="dispatcher")
+                log_debug(f"Failed to parse HTTP request: {e}", component="dispatcher")
                 # Send 400 Bad Request
                 error_response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 17\r\n\r\nMalformed request"
                 writer.write(error_response)
@@ -551,36 +593,159 @@ class UnifiedDispatcher:
                 return
             
             if not proxy_hostname:
-                # Send 400 Bad Request - no Host header
-                error_response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 19\r\n\r\nNo Host header found"
-                writer.write(error_response)
-                await writer.drain()
+                log_trace("No hostname found in request", component="api_server")
+                log_warning(
+                    "No hostname found in HTTP request",
+                    client_ip=client_ip
+                )
+                writer.close()
+                await writer.wait_closed()
                 return
             
-            log_info(f"Forwarding HTTP connection for {proxy_hostname} from {client_ip}:{client_port}", 
-                     component="dispatcher")
+            log_trace(
+                "HTTP hostname extracted",
+                client_ip=client_ip, proxy_hostname=proxy_hostname
+            )
             
-            # Find proxy instance port for hostname  
+            # Get proxy configuration to determine route filtering  
+            proxy_config = None
+            if self.async_storage:
+                try:
+                    proxy_json = await self.async_storage.redis_client.get(f"proxy:{proxy_hostname}")
+                    if proxy_json:
+                        proxy_data = json.loads(proxy_json)
+                        proxy_config = ProxyTarget(**proxy_data)
+                    else:
+                        if proxy_hostname == 'localhost':
+                            log_error(f"CRITICAL: localhost proxy MUST exist but was not found in HTTP handler", component="dispatcher")
+                            raise RuntimeError("localhost proxy configuration is missing - system not properly initialized")
+                        log_debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)", component="dispatcher")
+                except Exception as e:
+                    log_error(f"Error loading proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    if proxy_hostname == 'localhost':
+                        raise RuntimeError(f"CRITICAL: Cannot load localhost proxy config: {e}")
+                    raise
+            elif self.storage:
+                # Fallback to sync storage
+                try:
+                    proxy_json = await self.storage.redis_client.get(f"proxy:{proxy_hostname}")
+                    if proxy_json:
+                        proxy_data = json.loads(proxy_json)
+                        proxy_config = ProxyTarget(**proxy_data)
+                    else:
+                        if proxy_hostname == 'localhost':
+                            log_error(f"CRITICAL: localhost proxy MUST exist but was not found in HTTP handler", component="dispatcher")
+                            raise RuntimeError("localhost proxy configuration is missing - system not properly initialized")
+                        log_debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)", component="dispatcher")
+                except Exception as e:
+                    log_error(f"Error loading proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    if proxy_hostname == 'localhost':
+                        raise RuntimeError(f"CRITICAL: Cannot load localhost proxy config: {e}")
+                    raise
+            
+            # Apply route filtering based on proxy configuration
+            applicable_routes = self.get_applicable_routes(proxy_config)
+            
+            # Check generic routes with filtering
+            method, request_path = self.get_request_info(data)
+            
+            # Log detailed request with unified logger if available
+            if self.unified_logger:
+                # First, gather all metadata
+                # Resolve client hostname
+                client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
+                
+                # Extract headers and query params
+                headers = self._extract_http_headers(data)
+                query_params = self._extract_query_params(data)
+                body_sample = data[:1024] if data else None  # First 1KB for logging
+                
+                # Generate trace ID with COMPLETE metadata for Redis storage
+                trace_id = self.unified_logger.start_trace(
+                    "http_request",
+                    proxy_hostname=proxy_hostname,  # The proxy being accessed
+                    method=method or "",
+                    path=request_path or "",
+                    client_ip=client_ip,
+                    client_port=client_port,
+                    client_hostname=client_hostname,  # Resolved hostname
+                    user_agent=headers.get('user-agent', '') if headers else '',
+                    referer=headers.get('referer', '') if headers else '',
+                    query=self._extract_query_params(data) if data else ''
+                )
+                
+                # Log detailed request
+                await self.unified_logger.log_request(
+                    method=method or "",
+                    path=request_path or "",
+                    client_ip=client_ip,
+                    proxy_hostname=proxy_hostname,  # The proxy being accessed
+                    trace_id=trace_id,
+                    headers=headers,
+                    body=body_sample,
+                    query_params=query_params,
+                    client_hostname=client_hostname,  # Reverse DNS of client
+                    log_source="dispatcher",
+                    event_type="http_request" if method else "connection_lifecycle"
+                )
+            else:
+                # Fallback to old logging
+                log_debug(
+                    "HTTP request details",
+                    client_ip=client_ip, proxy_hostname=proxy_hostname,
+                    method=method,
+                    path=request_path
+                )
+            # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_http_port.get(proxy_hostname)
             if not target_port:
-                # Send 404 Not Found
-                error_msg = f"No proxy for {proxy_hostname}".encode()
-                error_response = b"HTTP/1.1 404 Not Found\r\nContent-Length: %d\r\n\r\n%b" % (len(error_msg), error_msg)
-                writer.write(error_response)
+                # This should NEVER happen if instances are created properly
+                available_http_hosts = list(self.hostname_to_http_port.keys())
+                log_error(f"CRITICAL: No HTTP port mapping for {proxy_hostname}", component="dispatcher")
+                log_error(f"Available mappings: {available_http_hosts}", component="dispatcher")
+                log_error(f"Total mappings: {len(self.hostname_to_http_port)}", component="dispatcher")
+                
+                # Special error for localhost
+                if proxy_hostname == 'localhost':
+                    error_msg = f"CRITICAL: localhost has no port mapping - UnifiedMultiInstanceServer not properly initialized?"
+                else:
+                    error_msg = f"CRITICAL: No port mapping for {proxy_hostname} - instance not created? This is a BUG!"
+                
+                log_error(error_msg, component="dispatcher")
+                
+                # Send 500 error response - this is a system failure
+                error_response = f"HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: {len(error_msg)}\r\n\r\n{error_msg}"
+                writer.write(error_response.encode())
                 await writer.drain()
-                return
+                writer.close()
+                await writer.wait_closed()
+                
+                # Also raise to ensure it's logged
+                raise RuntimeError(error_msg)
             
-            # Forward to proxy instance with PROXY protocol
-            # Use complete_data to ensure we forward the EXACT bytes received
+            
+            # Inject X-Trace-Id header into the HTTP request if we have a trace_id
+            if self.unified_logger and 'trace_id' in locals():
+                # Inject the trace_id into the HTTP request
+                data = self._inject_http_header(data, 'X-Trace-Id', trace_id)
+                log_trace(f"Injected X-Trace-Id header: {trace_id}", component="dispatcher")
+            
+            # Named services removed - using URL-only routing
+            service_name = None
+            
+            # Forward to the target instance with PROXY protocol enabled
             await self._forward_connection(
-                reader, writer, complete_data, '127.0.0.1', target_port,
-                client_ip=client_ip, client_port=client_port,
-                use_proxy_protocol=True, proxy_hostname=proxy_hostname
+                reader, writer, data, '127.0.0.1', target_port, 
+                client_ip=client_ip, client_port=client_port, use_proxy_protocol=True, proxy_hostname=proxy_hostname, service_name=service_name, 
+                trace_id=trace_id if 'trace_id' in locals() else None
             )
             
         except Exception as e:
-            log_error(f"Error handling HTTP connection: {e}", component="dispatcher", error=e)
+            log_error(f"Error handling HTTP connection: {e}", component="api_server", error=e)
+            import traceback
+            traceback.print_exc()
         finally:
+            log_trace("Closing HTTP connection", component="api_server")
             writer.close()
             await writer.wait_closed()
     
@@ -741,71 +906,70 @@ class UnifiedDispatcher:
             log_error(f"Error sending PROXY protocol header: {e}", component="dispatcher")
             # Continue without PROXY protocol on error
 
-    async def _forward_connection(self, client_reader, client_writer, initial_data, 
-                                  target_host, target_port, client_ip=None, 
-                                  client_port=None, use_proxy_protocol=False, 
-                                  proxy_hostname=None, service_name=None, trace_id=None):
-        """
-        Forward connection to target with optional PROXY protocol.
-        This is a PURE TCP forwarder - no HTTP parsing or modification.
-        """
-        target_reader = None
-        target_writer = None
-        
+    async def _forward_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter,
+                                  initial_data: bytes, target_host: str, target_port: int, 
+                                  client_ip: str = None, client_port: int = None, use_proxy_protocol: bool = False,
+                                  proxy_hostname: str = None, service_name: str = None, trace_id: str = None):
+        """Forward a connection to target host:port with optional PROXY protocol support."""
         try:
-            # Connect to target
+            # Connect to the target
             target_reader, target_writer = await asyncio.open_connection(target_host, target_port)
             
-            # Send PROXY protocol header if needed
-            if use_proxy_protocol and client_ip and client_port:
-                proxy_header = f"PROXY TCP4 {client_ip} {target_host} {client_port} {target_port}\r\n"
-                target_writer.write(proxy_header.encode())
-                log_debug(f"Sent PROXY header: {proxy_header.strip()}", component="dispatcher")
+            # Get the local port of our connection to backend (for Redis key)
+            backend_local_addr = target_writer.get_extra_info('sockname')
+            backend_local_port = backend_local_addr[1] if backend_local_addr else 0
             
-            # Send initial data (the complete HTTP request)
+            # Send PROXY protocol header to preserve real client IP
+            if use_proxy_protocol:
+                # Use defaults if not provided
+                if not client_ip or client_ip == 'unknown':
+                    client_ip = '127.0.0.1'
+                if not client_port:
+                    client_port = 0
+                
+                # Enhanced logging with hostname and instance
+                service_info = f" (service: {service_name})" if service_name else ""
+                log_debug(
+                    f"Forwarding connection - Client: {client_ip}:{client_port} -> "
+                    f"Hostname: {proxy_hostname or 'unknown'} -> "
+                    f"Target: {target_host}:{target_port}{service_info} "
+                    f"[PROXY protocol: enabled]"
+                )
+                await self._send_proxy_protocol_header(target_writer, client_ip, client_port, target_port)
+            
+            # No header injection - using PROXY protocol instead
+            
+            # Send the initial data we already read
             target_writer.write(initial_data)
             await target_writer.drain()
             
-            # Bidirectional forwarding - pure TCP bytes
+            # Forward data bidirectionally
             async def forward(src_reader, dst_writer, direction):
-                """Forward bytes from src to dst without any parsing."""
                 try:
                     while True:
-                        # Use larger buffer for efficiency
-                        data = await src_reader.read(65536)
+                        data = await src_reader.read(4096)
                         if not data:
                             break
                         dst_writer.write(data)
                         await dst_writer.drain()
-                except asyncio.CancelledError:
-                    raise
                 except Exception as e:
-                    log_debug(f"Forward {direction} ended: {e}", component="dispatcher")
+                    log_debug(f"Forward {direction} error: {e}", component="dispatcher")
                 finally:
                     try:
-                        if not dst_writer.is_closing():
-                            dst_writer.write_eof()
+                        dst_writer.close()
+                        await dst_writer.wait_closed()
                     except:
                         pass
             
-            # Forward both directions concurrently
+            # Create forwarding tasks
             await asyncio.gather(
-                forward(client_reader, target_writer, "client->target"),
-                forward(target_reader, client_writer, "target->client"),
+                forward(reader, target_writer, "client->server"),
+                forward(target_reader, writer, "server->client"),
                 return_exceptions=True
             )
             
         except Exception as e:
-            log_error(f"Error forwarding connection: {e}", component="dispatcher", error=e)
-        finally:
-            # Clean up connections
-            for writer in [client_writer, target_writer]:
-                if writer and not writer.is_closing():
-                    writer.close()
-                    try:
-                        await writer.wait_closed()
-                    except:
-                        pass
+            log_error(f"Error forwarding connection: {e}", component="dispatcher")
     
     async def start(self):
         """Start both HTTP and HTTPS dispatchers without blocking."""

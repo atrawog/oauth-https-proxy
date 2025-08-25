@@ -6,7 +6,6 @@ sync and async contexts, eliminating code duplication.
 
 import asyncio
 from typing import Optional, Any
-import redis
 import redis.asyncio as redis_async
 from asgiref.sync import sync_to_async, async_to_sync
 from ..shared.logger import log_info, log_debug, log_error, log_warning
@@ -122,6 +121,24 @@ class UnifiedStorage:
             log_debug(f"Wrapping async method {name} for sync context", component="unified_storage")
             return async_to_sync(attr)
             
+    @property
+    def redis_client(self):
+        """Get Redis client for direct access.
+        
+        Returns the underlying Redis client from AsyncRedisStorage.
+        This is needed for components that need direct Redis access,
+        like CertificateManager's scan operations.
+        """
+        if not self._initialized:
+            log_warning("Accessing redis_client before initialization", component="unified_storage")
+            self.initialize()
+        
+        if self._async_storage and hasattr(self._async_storage, 'redis_client'):
+            return self._async_storage.redis_client
+        else:
+            log_error("Redis client not available", component="unified_storage")
+            return None
+    
     def get_sync_interface(self):
         """Get a sync-only interface that always returns sync methods.
         

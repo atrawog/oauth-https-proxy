@@ -129,20 +129,29 @@ The system provides a complete reverse proxy solution with:
 ```
 Dispatcher → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Backend
 (Port 80/443) (PROXY + SSL)      (Starlette)    (OAuth + Routing)
+(Pure TCP)    (Port 12xxx/13xxx)               (All HTTP logic)
 ```
 
 ### How It Works
-1. **Dispatcher** (Ports 80/443): Routes requests to proxy instances based on hostname (SNI for HTTPS)
+1. **Dispatcher** (Ports 80/443): Pure TCP forwarder
+   - Extracts hostname using h11 (HTTP) or SNI (HTTPS)
+   - Looks up target port in Redis
+   - Adds PROXY protocol header
+   - Forwards raw TCP bidirectionally
+   - NO HTTP parsing, routing, or modification
+   
 2. **HypercornInstance**: 
    - Handles PROXY protocol (preserves client IPs)
    - Terminates SSL with certificates from Redis
    - Runs on ports 12xxx (HTTP) and 13xxx (HTTPS)
+   
 3. **ProxyOnlyApp**: Minimal Starlette app that forwards all requests to UnifiedProxyHandler
+
 4. **UnifiedProxyHandler**: 
    - Complete OAuth validation with scope checking
    - Route matching and backend selection
    - User allowlist enforcement
-   - 912 lines of battle-tested logic
+   - All HTTP-aware logic happens here
 
 ### Why This Architecture Works
 1. **PROXY Protocol is Essential**: Without it, we lose client IPs (everything would be 127.0.0.1)
@@ -312,6 +321,8 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 18. **Deterministic Port Allocation**: Hash-based preferred ports ensure consistency across restarts
 19. **URL-Only Routing**: Eliminated PORT/SERVICE/HOSTNAME types - all routes use explicit URLs (`http://api:9000`)
 20. **Clean Route IDs**: Routes have predictable IDs matching endpoints (`token` not `token-80c106aa`)
+21. **Pure TCP Forwarding**: Dispatcher is a Layer 4 forwarder using h11 only for hostname extraction - no HTTP handling
+22. **h11 for Safety**: Uses the same HTTP/1.1 parser as httpx/uvicorn for safe hostname extraction without manual parsing
 
 ## Port Configuration
 

@@ -2,23 +2,35 @@
 
 ## Overview
 
-The Unified Dispatcher is THE server - FastAPI is just another service it manages! It handles all incoming HTTP/HTTPS requests and routes them to appropriate services based on hostname and path.
+The Unified Dispatcher is a **PURE TCP FORWARDER** that routes incoming connections to proxy instances based solely on hostname. It does NOT parse, modify, or interpret HTTP beyond extracting the hostname.
 
 ## Architecture
 
 ```
 Client → Dispatcher (80/443) → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Backend
-         (Read SNI & route)     ├─ PROXY Handler (12xxx/13xxx)
-                                │  • Parse PROXY header
-                                │  • Store client IP in Redis
-                                └─ Hypercorn (22xxx/23xxx)
-                                   • Terminate SSL
-                                   • Run Starlette app
-                                   • OAuth validation in UnifiedProxyHandler
+         (Extract hostname)     ├─ PROXY Protocol TCP Forward
+         (Forward raw TCP)      ├─ Ports 12xxx (HTTP) / 13xxx (HTTPS)
+                               └─ All HTTP/OAuth/Routing logic here
 
 For localhost with Docker:
-Client → Dispatcher (80) → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → API (http://api:9000)
+Client → Dispatcher (80) → [PROXY + TCP] → HypercornInstance (12000) → UnifiedProxyHandler → API (http://api:9000)
 ```
+
+### Key Principle: Pure TCP Forwarding
+
+The dispatcher's ONLY responsibilities are:
+1. **Extract hostname** from HTTP Host header (using h11) or TLS SNI
+2. **Look up target port** in Redis hostname-to-port mapping
+3. **Add PROXY protocol header** to preserve client IP
+4. **Forward raw TCP bidirectionally** without modification
+
+The dispatcher does NOT:
+- Parse HTTP requests or responses
+- Match routes or paths
+- Modify headers
+- Handle authentication
+- Make routing decisions beyond hostname
+- Interpret HTTP bodies or methods
 
 ## Why HypercornInstance, Not EnhancedProxyInstance
 
@@ -35,6 +47,37 @@ HypercornInstance + UnifiedProxyHandler provides:
 - **Complete OAuth validation with context**: Scopes, user allowlists, route-specific auth
 - **No duplicate implementations**: One place for routing logic
 - **Proven, working architecture**: This was already working before we broke it
+
+## h11 for Safe Hostname Extraction
+
+The dispatcher uses the h11 library (the same HTTP/1.1 parser used by httpx and uvicorn) ONLY to safely extract the hostname from HTTP requests:
+
+```python
+def extract_hostname_with_h11(self, data: bytes) -> tuple[Optional[str], bytes]:
+    """Extract hostname using h11 - safe and standards-compliant"""
+    conn = h11.Connection(h11.SERVER)
+    conn.receive_data(data)
+    
+    while True:
+        event = conn.next_event()
+        if isinstance(event, h11.Request):
+            # Headers are part of the Request event in h11
+            for name, value in event.headers:
+                if name.lower() == b'host':
+                    hostname = value.decode('utf-8')
+                    if ':' in hostname:
+                        hostname = hostname.split(':')[0]
+                    return hostname, data
+        elif event is h11.NEED_DATA:
+            break
+    return None, data
+```
+
+**Why h11?**
+- Standards-compliant HTTP/1.1 parsing
+- Handles edge cases and malformed requests safely
+- Same parser used by production Python web servers
+- Avoids manual string manipulation bugs
 
 ## Why the Dispatcher CANNOT Terminate SSL
 
@@ -118,20 +161,23 @@ class DomainService:
     ssl_context: Optional[SSLContext]  # Pre-loaded
 ```
 
-## Request Routing
+## Request Forwarding (NOT Routing!)
 
-### Hostname-Based Routing
-1. Extract hostname from request
-2. Look up service for hostname in Redis
-3. Route to appropriate app instance
-4. Apply SSL context if HTTPS
+### Pure Hostname-Based Forwarding
+The dispatcher does NOT route - it only forwards based on hostname:
 
-### Path-Based Routing
-Within each hostname, paths are routed based on:
-1. Route priority (higher checked first)
-2. Path pattern matching
-3. HTTP method filtering
-4. Scope (global vs proxy-specific)
+1. **HTTP**: Extract hostname from Host header using h11
+2. **HTTPS**: Extract hostname from TLS SNI
+3. **Lookup**: Get target port from Redis `proxy:ports:mappings`
+4. **Forward**: Add PROXY header and forward raw TCP
+
+### NO Path-Based Routing in Dispatcher
+Path-based routing happens in UnifiedProxyHandler, NOT the dispatcher:
+- The dispatcher forwards ALL requests for a hostname to ONE proxy instance
+- That proxy instance handles all path matching and backend routing
+- OAuth validation, scope checking, and user allowlists happen there too
+
+**Critical**: The dispatcher is a Layer 4 (TCP) forwarder with minimal Layer 7 (HTTP) awareness - just enough to extract hostname.
 
 ## SSL/TLS Handling
 
@@ -210,25 +256,43 @@ Each instance monitored for:
 - Response time
 - Memory usage
 
+## What Was Removed (January 2025 Refactor)
+
+The dispatcher was simplified from an HTTP-aware proxy to a pure TCP forwarder:
+
+### Removed Components (~150 lines)
+- `_forward_http_request()` method - Was parsing and reassembling HTTP
+- `resolve_route_target()` method - Route matching moved to proxy instances
+- Route priority checking - Now handled by UnifiedProxyHandler
+- httpx client - No HTTP client needed for TCP forwarding
+- HTTP response creation - Only minimal error responses for missing Host header
+- Request/response modification - Pure forwarding, no modification
+
+### Why These Were Removed
+The previous implementation was:
+1. **Corrupting POST bodies** by splitting on `\r\n` and rejoining
+2. **Duplicating logic** that already existed in UnifiedProxyHandler
+3. **Violating separation of concerns** by doing routing at the TCP layer
+4. **Creating maintenance burden** with duplicate route matching
+
 ## Performance Optimizations
 
-### Connection Pooling
-Shared connection pools for backend communication:
+### Bidirectional TCP Streaming
+The dispatcher now uses efficient bidirectional streaming:
 ```python
-http_client = httpx.AsyncClient(
-    limits=httpx.Limits(
-        max_keepalive_connections=20,
-        max_connections=100
+async def _forward_connection(self, reader, writer, initial_data, target_host, target_port):
+    """Pure TCP forwarding with PROXY protocol header"""
+    # Add PROXY header for client IP preservation
+    proxy_header = f"PROXY TCP4 {client_ip} {target_host} {client_port} {target_port}\r\n"
+    
+    # Forward initial data with PROXY header
+    target_writer.write(proxy_header.encode() + initial_data)
+    
+    # Bidirectional streaming
+    await asyncio.gather(
+        self._stream_data(reader, target_writer),  # Client → Backend
+        self._stream_data(target_reader, writer)   # Backend → Client
     )
-)
-```
-
-### Request Streaming
-Large requests/responses streamed to prevent memory issues:
-```python
-async def stream_response(backend_response):
-    async for chunk in backend_response.aiter_bytes():
-        yield chunk
 ```
 
 ## Error Handling

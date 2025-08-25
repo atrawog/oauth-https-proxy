@@ -58,22 +58,8 @@ class SystemTools(BaseMCPTools):
                 
                 # Export tokens (if requested)
                 if include_tokens:
-                    tokens = []
-                    async for key in self.storage.redis_client.scan_iter(match="token:*"):
-                        if isinstance(key, bytes):
-                            key = key.decode('utf-8')
-                        parts = key.split(":")
-                        if len(parts) == 2:
-                            token_data = await self.storage.get_api_token_by_name(parts[1])
-                            if token_data:
-                                token_export = {
-                                    "name": token_data["name"],
-                                    "cert_email": token_data.get("cert_email", "")
-                                }
-                                if include_secrets:
-                                    token_export["token"] = token_data["token"]
-                                tokens.append(token_export)
-                    config["tokens"] = tokens
+                    # OAuth-only authentication - no API tokens to export
+                    config["tokens"] = []
                 
                 # Export certificates
                 certs = await self.storage.list_certificates()
@@ -255,22 +241,10 @@ class SystemTools(BaseMCPTools):
                 
                 # Import tokens
                 if "tokens" in config:
+                    # OAuth-only authentication - skip API token import
+                    # Tokens are present in config for backward compatibility but not imported
                     for token_data in config["tokens"]:
-                        try:
-                            existing = await self.storage.get_api_token_by_name(token_data["name"])
-                            if existing and not force:
-                                results["skipped"]["tokens"] += 1
-                                continue
-                            
-                            if "token" in token_data:
-                                await self.storage.store_api_token(
-                                    token_data["name"],
-                                    token_data["token"],
-                                    cert_email=token_data.get("cert_email")
-                                )
-                                results["imported"]["tokens"] += 1
-                        except Exception as e:
-                            results["errors"].append(f"Token {token_data['name']}: {e}")
+                        results["skipped"]["tokens"] += 1
                 
                 # Import certificates
                 if "certificates" in config:

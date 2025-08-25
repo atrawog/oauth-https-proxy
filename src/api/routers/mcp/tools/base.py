@@ -52,27 +52,23 @@ class BaseMCPTools:
     async def validate_token(self, token: str, require_admin: bool = False) -> Dict[str, Any]:
         """Validate API token and return token info.
         
+        Note: This method is deprecated with OAuth-only authentication.
+        It's kept for backward compatibility but always returns a dummy response.
+        
         Args:
-            token: API token to validate
-            require_admin: Whether admin privileges are required
+            token: API token to validate (ignored)
+            require_admin: Whether admin privileges are required (ignored)
             
         Returns:
-            Token information dictionary
-            
-        Raises:
-            PermissionError: If token is invalid or insufficient permissions
+            Dummy token information dictionary
         """
-        if not token:
-            raise PermissionError("Token required for this operation")
-        
-        token_info = await self.storage.get_api_token(token)
-        if not token_info:
-            raise PermissionError("Invalid token")
-        
-        if require_admin and token_info.get('name', '').upper() != 'ADMIN':
-            raise PermissionError("Admin token required for this operation")
-        
-        return token_info
+        # OAuth-only system - no API tokens to validate
+        # Return dummy response for backward compatibility
+        return {
+            'name': 'oauth_user',
+            'type': 'oauth',
+            'valid': True
+        }
     
     async def check_ownership(self, token_info: Dict[str, Any], resource_owner: str, resource_type: str = "resource") -> None:
         """Check if token owns a resource.
