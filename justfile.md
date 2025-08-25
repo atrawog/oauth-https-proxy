@@ -1,367 +1,401 @@
 # Justfile Commands Documentation
 
-## Overview
+## Quick Start
 
-All system operations are executed via `just` commands. This ensures consistent environment loading, proper execution context, and simplified command syntax.
+The OAuth HTTPS Proxy system is managed through `just` commands that provide a unified interface to the `proxy-client` CLI tool. All commands automatically handle environment configuration and authentication.
 
-## System Management
+### Essential Commands
+
+```bash
+# System lifecycle
+just up                  # Start all services
+just down                # Stop all services
+just status              # Show system status
+just health              # Check system health
+
+# OAuth authentication
+just oauth login         # Authenticate via GitHub
+just oauth status        # Check authentication status
+
+# Quick setup
+just quickstart api.example.com http://localhost:3000  # Create proxy with certificate
+just init                # Initialize system with defaults
+```
+
+## Unified Command Interface (NEW - Recommended)
+
+The new unified interface provides intuitive access to all system features. Each command follows the pattern:
+```bash
+just <resource> <action> [arguments...]
+```
+
+### Certificate Management
+```bash
+just cert create <name> <domain> [--staging] [--email admin@example.com]
+just cert list
+just cert show <name> [--pem]
+just cert renew <name> [--force]
+just cert delete <name> [--force]
+just cert convert-to-production <name>
+```
+
+### Proxy Management
+```bash
+just proxy create <hostname> <target-url> [--staging] [--enable-https]
+just proxy list
+just proxy show <hostname>
+just proxy update <hostname> [options...]
+just proxy delete <hostname> [--delete-cert]
+
+# Authentication
+just proxy auth enable <hostname> [--auth-proxy auth.localhost]
+just proxy auth disable <hostname>
+just proxy auth config <hostname> [--users alice,bob] [--scopes admin,user]
+just proxy auth show <hostname>
+
+# Protected Resources (RFC 9728)
+just proxy resource set <hostname> [--endpoint /api] [--scopes read,write]
+just proxy resource show <hostname>
+just proxy resource clear <hostname>
+just proxy resource list
+
+# OAuth Server Configuration
+just proxy oauth-server set <hostname> [--scopes "admin user mcp"]
+just proxy oauth-server show <hostname>
+just proxy oauth-server clear <hostname>
+
+# GitHub OAuth (Per-Proxy)
+just proxy-github set <hostname> <client-id> <client-secret>
+just proxy-github show <hostname>
+just proxy-github clear <hostname>
+just proxy-github list
+```
 
 ### Service Management
 ```bash
-just up                      # Start all services
-just down                    # Stop all services
-just restart                 # Restart all services
-just rebuild <service>       # Rebuild specific service (api or redis)
-just logs-service [service] [lines]  # View Docker container logs
-just shell                   # Shell into api container
-just redis-cli               # Access Redis CLI
+just service create <name> <image> [--port 3000] [--memory 512m] [--cpu 1.0]
+just service list [--type docker|external|all]
+just service show <name>
+just service start|stop|restart <name>
+just service delete <name> [--force]
+just service logs <name> [--lines 100]
+just service stats <name>
+
+# Port management
+just service port add <name> <port> [--bind-address 127.0.0.1]
+just service port remove <name> <port-name>
+just service port list <name>
+just service ports  # List all allocated ports
+
+# External services
+just service external register <name> <url> [--description "..."]
+just service external list
+just service external unregister <name>
 ```
 
-### Health and Maintenance
+### Route Management
 ```bash
-just health                  # Check system health
-just service-cleanup-orphaned [token]  # Clean up orphaned resources
-just help                    # Show all available commands
+just route create <path> <target-type> <target-value> [--priority 50]
+just route list
+just route show <route-id>
+just route delete <route-id>
+
+# Scope-based routes
+just route create-global <path> <target-type> <target-value>
+just route create-proxy <path> <target-type> <target-value> <proxies>
+just route list-by-scope [global|proxy]
 ```
 
-## Quick Start Commands
-
+### OAuth Management
 ```bash
-just quickstart <hostname> <target-url> [enable-auth]  # Quick setup proxy + cert
-just setup-oauth <domain>                              # Setup OAuth server
-just create-app <name> <image>                         # Create containerized app
+just oauth login                      # GitHub Device Flow authentication
+just oauth status                     # Check token status
+just oauth refresh                    # Refresh access token
+just oauth logout                     # Clear tokens
+
+# Client management
+just oauth client list [--active-only]
+just oauth register <name> [--redirect-uri ...] [--scope "read write"]
+
+# Token management
+just oauth token list [--token-type access|refresh] [--username ...]
+
+# Session management
+just oauth session list
+
+# Administration
+just oauth admin [subcommands...]
+just oauth metrics
 ```
 
-## Certificate Management
-
+### Log Management
 ```bash
-# Certificate operations
-just cert-create <name> <domain> [staging] [email] [token]
-just cert-delete <name> [force] [token]
-just cert-list [token]
-just cert-show <name> [pem] [token]
+just log search [--hours 1] [--hostname ...] [--limit 50]
+just log errors [--hours 1] [--limit 20]
+just log follow [--interval 2] [--hostname ...]
+
+# Query by dimension
+just log ip <ip> [--hours 1]
+just log proxy <hostname> [--hours 1]
+just log user <username> [--hours 1]
+just log oauth-client <client-id> [--hours 1]
+just log session <session-id> [--hours 1]
+just log status <code> [--hours 1]
+just log method <method> [--hours 1]
+just log path <pattern> [--hours 1]
+just log slow [--threshold 1000] [--hours 1]
+
+# Analytics
+just log stats [--hours 1]
+just log oauth-flow [--client-id ...] [--username ...]
+
+# Management
+just log clear [--force]
+just log test
+
+# Log levels and filtering
+just log level set <level> [--component ...]
+just log level get [--component ...]
+just log filter set <component> [--suppress ".*health.*"]
+just log filter stats
 ```
 
-## Proxy Management
-
-### Basic Proxy Operations
+### System Management
 ```bash
-just proxy-create <hostname> <target-url> [staging] [preserve-host] [enable-http] [enable-https] [email] [token]
-just proxy-delete <hostname> [delete-cert] [force] [token]
-just proxy-list [token]
-just proxy-show <hostname> [token]
+just system health [--check-config]
+just system config export [--output backup.yaml] [--include-tokens]
+just system config import <filename> [--force]
 ```
 
-### OAuth Proxy Authentication
+### Workflow Commands
 ```bash
-just proxy-auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]
-just proxy-auth-disable <hostname> [token]
-just proxy-auth-config <hostname> [users] [emails] [groups] [allowed-scopes] [allowed-audiences] [token]
-just proxy-auth-show <hostname> [token]
+just workflow proxy-quickstart <hostname> <target-url> [--enable-auth]
+just workflow oauth-setup <domain> [--generate-key]
+just workflow service-with-proxy <name> <image> [--enable-https]
+just workflow cleanup [--orphaned-only] [--force]
 ```
 
-### Protected Resource Metadata (RFC 9728)
+### Resource Management
 ```bash
-just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]
-just proxy-resource-clear <hostname> [token]
-just proxy-resource-show <hostname> [token]
-just proxy-resource-list [token]
+just resource list
+just resource show <resource-id>
+just resource [other subcommands...]
 ```
 
-### OAuth Authorization Server Metadata
-```bash
-just proxy-oauth-server-set <hostname> [issuer] [scopes] [grant-types] [response-types] [token-auth-methods] [claims] [pkce-required] [custom-metadata] [override-defaults] [token]
-just proxy-oauth-server-clear <hostname> [token]
-just proxy-oauth-server-show <hostname> [token]
-```
+## Convenience Commands
 
-### GitHub OAuth Credentials (Per-Proxy)
-```bash
-just proxy-github-oauth-set <hostname> <client-id> <client-secret> [token]  # Set GitHub OAuth credentials
-just proxy-github-oauth-show <hostname> [token]                            # Show config (without secret)
-just proxy-github-oauth-clear <hostname> [token]                           # Clear config (use env vars)
-just proxy-github-oauth-list [token]                                       # List proxies with custom GitHub OAuth
-```
-
-## Route Management
-
-### Basic Route Operations
-```bash
-just route-list [token]
-just route-show <route-id> [token]
-just route-create <path> <target-type> <target-value> [priority] [methods] [is-regex] [description] [token]
-just route-delete <route-id> [token]
-```
-
-### Scope-Based Route Operations
-```bash
-just route-create-global <path> <target-type> <target-value> [priority] [methods] [is-regex] [description] [token]
-just route-create-proxy <path> <target-type> <target-value> <proxies> [priority] [methods] [is-regex] [description] [token]
-just route-list-by-scope [scope] [token]
-```
-
-## Service Management
-
-### Docker Service Management
-```bash
-just service-create <name> [image] [dockerfile] [port] [memory] [cpu] [auto-proxy] [token]
-just service-create-exposed <name> <image> <port> [bind-address] [memory] [cpu] [token]
-just service-list [owned-only] [token]
-just service-show <name> [token]
-just service-delete <name> [force] [delete-proxy] [token]
-just service-start <name> [token]
-just service-stop <name> [token]
-just service-restart <name> [token]
-```
-
-### External Service Management
-```bash
-just service-register <name> <target-url> [description] [token]
-just service-list-external [token]
-just service-show-external <name> [token]
-just service-update-external <name> <target-url> [description] [token]
-just service-unregister <name> [token]
-just service-register-oauth [token]
-```
-
-### Service Monitoring
-```bash
-just service-logs <name> [lines] [timestamps] [token]
-just service-stats <name> [token]
-just service-proxy-create <name> [hostname] [enable-https] [token]
-just service-cleanup [token]
-```
-
-### Port Management
-```bash
-just service-port-add <name> <port> [bind-address] [source-token] [token]
-just service-port-remove <name> <port-name> [token]
-just service-port-list <name> [token]
-just service-port-check <port> [bind-address] [token]
-just service-ports-global [available-only] [token]
-```
-
-### Unified Service Views
-```bash
-just service-list-all [type] [token]
-```
-
-## OAuth Management
-
-### OAuth Authentication (Device Flow)
-```bash
-just oauth-login                    # Login via GitHub Device Flow
-just oauth-refresh                  # Refresh access token
-just oauth-status                   # Check token status
-just oauth-key-generate             # Generate OAuth JWT keys
-```
-
-### OAuth Client Management
-```bash
-just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client
-just oauth-clients-list [active-only] [page] [per-page]   # List OAuth clients
-just oauth-token-list [type] [client-id] [username] [page] [per-page] [include-expired]
-```
-
-### OAuth Monitoring
-```bash
-just oauth-sessions-list            # List active OAuth sessions
-just oauth-test-tokens <server-url> # Test OAuth token endpoints
-just oauth-clients-list [active-only] [page] [per-page]  # List OAuth clients
-```
-
-## Logging
-
-### Log Query Commands
-```bash
-just logs [hours] [event] [level] [hostname] [limit]                # Recent logs
-just logs-ip <ip> [hours] [event] [level] [limit]                  # Logs by client IP
-just logs-proxy <hostname> [hours] [limit]                         # Logs by proxy hostname
-just logs-hostname <hostname> [hours] [limit]                      # Logs by hostname
-just logs-oauth-client <client-id> [hours] [event] [level] [limit] # Logs by OAuth client
-just logs-errors [hours] [limit]                                   # Recent errors only
-just logs-errors-debug [hours] [include-warnings] [limit]          # Detailed error logs
-just logs-follow [interval] [event] [level] [hostname]             # Follow logs real-time
-just logs-docker [lines] [follow]                                  # Docker container logs
-just logs-service [service] [lines]                                # Service logs
-```
-
-### Log Analysis Commands
-```bash
-just logs-oauth <ip> [hours] [limit]                        # OAuth activity by IP
-just logs-oauth-debug <ip> [hours] [limit]                  # OAuth debug logs
-just logs-oauth-flow [client-id] [username] [hours]         # OAuth flow trace
-just logs-oauth-user <username> [hours] [limit]             # OAuth logs by user
-just logs-search <query> [hours] [event] [level] [hostname] [limit]  # Search logs
-just logs-stats [hours]                                     # Log statistics
-just logs-user <user-id> [hours] [limit]                   # Logs by user ID
-just logs-session <session-id> [hours] [limit]             # Logs by session
-just logs-method <method> [hours] [limit]                  # Logs by HTTP method
-just logs-status <code> [hours] [limit]                    # Logs by HTTP status
-just logs-slow [threshold-ms] [hours] [limit]              # Slow requests
-just logs-path <pattern> [hours] [limit]                   # Logs by path pattern
-```
-
-### Log Management Commands
-```bash
-just logs-clear                     # Clear all logs
-just logs-test                      # Test logging system
-just logs-help                      # Show log command help
-just log-level-set <level> [component]        # Set log level
-just log-level-get [component]                # Get current log level
-just log-level-reset <component>              # Reset to default level
-just log-filter-set <component> [patterns]    # Set log filters
-just log-filter-get <component>               # Get current filters
-just log-filter-reset <component>             # Clear filters
-just log-filter-stats                         # Filter statistics
-just log-reduce-verbose                       # Reduce verbose logging
-just log-debug-enable <component>             # Enable debug for component
-just log-trace-enable <component>             # Enable trace for component
-```
-
-## Configuration Management
+These commands provide quick access to common operations:
 
 ```bash
-just config-save [filename]        # Save full configuration to YAML backup
-just config-load <filename> [force]  # Load configuration from YAML backup
+just status              # Comprehensive system status
+just backup [filename]   # Create full system backup
+just restore <filename>  # Restore from backup
+just init               # Initialize with defaults
+just validate           # Validate configuration
+just troubleshoot       # Run diagnostics
+just cleanup            # Clean orphaned resources
 ```
 
-## System Cleanup
+## System Management
 
+### Docker Operations
 ```bash
-just cleanup-resources       # Clean up all resources
-just service-cleanup         # Clean up orphaned services
-just service-cleanup-orphaned  # Clean up orphaned resources
+just up                  # Start all services
+just down                # Stop all services
+just restart             # Restart all services
+just rebuild [service]   # Rebuild specific service
+just shell              # Open shell in API container
+just redis-cli          # Access Redis CLI
 ```
 
-## Development & Testing
-
+### Development & Testing
 ```bash
-just test [files]           # Run standard test suite
-just test-all               # Run comprehensive test suite
-just docs-build             # Build documentation
-just dry-run <command> [args]  # Test command without execution
+just test [files]        # Run tests
+just test-all           # Run comprehensive test suite
+just docs-build         # Build documentation
+just dry-run <command>  # Test command without execution
 ```
-
-## Environment Variables
-
-The justfile automatically loads environment variables from `.env` file. Key variables include:
-
-### Core Configuration
-- `ADMIN_TOKEN` - Administrative token for privileged operations
-- `TOKEN` - Default authentication token
-- `API_URL` - Base URL for API endpoints
-- `BASE_DOMAIN` - Base domain for services
-
-### Testing Configuration
-- `TEST_DOMAIN` - Domain for automated testing
-- `TEST_EMAIL` - Email for test certificates
-- `TEST_TOKEN` - Token for automated test authentication
-
-### Service Configuration
-- `REDIS_PASSWORD` - Redis authentication password
-- `DOCKER_GID` - Docker group GID on host
-- `LOG_LEVEL` - Application log level
 
 ## Command Patterns
 
-### Token Parameter
-Most commands accept an optional `[token]` parameter. If not provided, uses `$TOKEN` environment variable:
+### Positional Arguments
+Commands use positional arguments for clarity:
 ```bash
-just proxy-list                    # Uses $TOKEN
-just proxy-list $ADMIN_TOKEN       # Uses specific token
+just proxy create api.example.com http://localhost:3000
+# Instead of: just proxy-create hostname=api.example.com target-url=http://localhost:3000
 ```
 
-### Boolean Parameters
-Boolean parameters use "true"/"false" strings:
+### Options and Flags
+Optional parameters use standard CLI conventions:
 ```bash
-just cert-create test example.com true   # Use staging
-just cert-create prod example.com false  # Use production
+just cert create my-cert example.com --staging --email admin@example.com
+just service logs my-app --lines 100 --follow
 ```
 
-### Multiple Values
-Some parameters accept comma-separated values:
+### Subcommands
+Complex resources use subcommands for organization:
 ```bash
-just proxy-auth-config api.example.com "alice,bob,charlie" "" ""
+just proxy auth enable api.example.com
+just service port add my-app 8080
+just log level set DEBUG --component proxy
 ```
 
-### Optional Parameters
-Square brackets indicate optional parameters:
+## Environment Configuration
+
+The justfile automatically loads environment variables from `.env`:
+
 ```bash
-just service-create my-app          # Minimal
-just service-create my-app nginx:latest "" 3000 512m 1.0  # Full options
+# Core configuration
+REDIS_PASSWORD=<strong-password>      # Required
+BASE_DOMAIN=example.com              # Base domain for services
+API_URL=http://localhost:80          # API endpoint
+
+# OAuth configuration
+GITHUB_CLIENT_ID=<github-app-id>     # GitHub OAuth App ID
+GITHUB_CLIENT_SECRET=<github-secret> # GitHub OAuth App Secret
+OAUTH_JWT_PRIVATE_KEY_B64=<key>     # JWT signing key (base64)
+OAUTH_ACCESS_TOKEN=<token>          # Current access token
+OAUTH_REFRESH_TOKEN=<token>         # Current refresh token
+
+# Logging
+LOG_LEVEL=INFO                      # Global log level
 ```
 
-## Command Examples
+## Common Workflows
 
-### Complete Proxy Setup
+### Setting Up a New Proxy
 ```bash
-# Create token
-just token-generate developer dev@example.com
+# Quick setup with auto-certificate
+just quickstart api.example.com http://localhost:3000
 
-# Create proxy with certificate
-just proxy-create api.example.com http://backend:3000
-
-# Enable authentication
-just proxy-auth-enable api.example.com auth.example.com forward
-
-# Configure allowed users
-just proxy-auth-config api.example.com "alice,bob" "" ""
+# Or step-by-step
+just proxy create api.example.com http://localhost:3000
+just cert create api api.example.com
+just proxy auth enable api.example.com
 ```
 
-### Docker Service with Proxy
+### Deploying a Docker Service
 ```bash
-# Create service
-just service-create my-app nginx:latest "" 3000
+# Create service with automatic proxy
+just workflow service-with-proxy my-app nginx:latest --enable-https
 
-# Create proxy for service
-just service-proxy-create my-app app.example.com true
-
-# Check logs
-just service-logs my-app 100 true
+# Or manual steps
+just service create my-app nginx:latest --port 3000
+just proxy create app.example.com http://my-app:3000
 ```
 
-### OAuth Setup
+### OAuth Configuration
 ```bash
-# Generate RSA key
-just oauth-key-generate
+# Initial setup
+just oauth login                    # Authenticate
+just workflow oauth-setup example.com --generate-key
 
-# Setup OAuth routes
-just oauth-routes-setup example.com
-
-# Register test client
-just oauth-client-register test-client https://localhost/callback "mcp:read mcp:write"
+# Per-proxy GitHub App
+just proxy-github set api.example.com gh_app_id gh_app_secret
 ```
 
-## Best Practices
+### Debugging Issues
+```bash
+just troubleshoot                   # Run full diagnostics
+just log errors --hours 1           # Recent errors
+just log follow --hostname api.example.com  # Live logs
+just service logs my-app --lines 100
+```
 
-1. **Always Use Just**: Never run Python scripts or docker commands directly
-2. **Environment Variables**: Set common values in `.env` file
-3. **Token Security**: Use environment variables for tokens, not command line
-4. **Check Status First**: Use list/show commands before create/delete
-5. **Use Staging Certificates**: Test with staging before production
+### Backup and Restore
+```bash
+# Create backup
+just backup                         # Auto-named with timestamp
+just backup production-backup.yaml  # Named backup
+
+# Restore
+just restore production-backup.yaml
+```
+
+## Migration Guide
+
+### Old Command → New Command Mapping
+
+| Old Command | New Command |
+|------------|-------------|
+| `just proxy-create ...` | `just proxy create ...` |
+| `just cert-list` | `just cert list` |
+| `just service-logs ...` | `just service logs ...` |
+| `just logs-errors` | `just log errors` |
+| `just proxy-auth-enable ...` | `just proxy auth enable ...` |
+| `just oauth-login` | `just oauth login` |
+| `just service-port-add ...` | `just service port add ...` |
+| `just logs-ip ...` | `just log ip ...` |
+| `just proxy-github-oauth-set ...` | `just proxy-github set ...` |
+
+### Deprecated Commands
+
+The following commands are deprecated and will be removed in a future version:
+- `logs-docker` - Use `service logs` instead
+- `service-list` - Use `service list --type docker` instead  
+- `logs-errors-debug` - Use `log errors --include-warnings` instead
+- `service-register-oauth` - Use `service external register oauth ...` instead
 
 ## Troubleshooting
 
 ### Command Not Found
 ```bash
-just help  # List all available commands
+just --list              # List all available commands
+just <command> --help    # Get help for specific command
 ```
 
-### Authentication Errors
+### Authentication Issues
 ```bash
-just token-list  # Verify token exists
-export TOKEN=acm_your_token  # Set token
+just oauth status        # Check current authentication
+just oauth refresh       # Refresh expired token
+just oauth login         # Re-authenticate
 ```
 
-### Service Issues
+### Service Problems
 ```bash
-just logs-service api 100  # Check service logs
-just health  # Check system health
+just status              # Check overall system status
+just troubleshoot        # Run diagnostics
+just log errors --hours 1  # Check recent errors
+```
+
+### Connection Issues
+```bash
+just health              # Check if services are responding
+docker compose ps        # Check Docker containers
+just redis-cli           # Test Redis connection
+```
+
+## Best Practices
+
+1. **Use Unified Commands**: Prefer the new unified interface (`just proxy create`) over old-style commands
+2. **Check Status First**: Run `just status` before making changes
+3. **Use Staging Certificates**: Test with `--staging` before production certificates
+4. **Regular Backups**: Run `just backup` before major changes
+5. **Monitor Logs**: Use `just log follow` during deployments
+6. **Validate Changes**: Run `just validate` after configuration updates
+
+## Advanced Usage
+
+### Custom Scripts
+```bash
+# Run any proxy-client command directly
+just proxy-client <any-command>
+
+# Dry-run mode for testing
+just dry-run proxy create test.example.com http://localhost:3000
+```
+
+### Direct API Access
+```bash
+# The unified commands wrap proxy-client, which calls the API
+# You can also use proxy-client directly for advanced operations:
+pixi run proxy-client --format json proxy list | jq '.'
 ```
 
 ## Related Documentation
 
-- [General Guidelines](src/CLAUDE.md) - Development guidelines
-- [API Documentation](src/api/CLAUDE.md) - API endpoints
-- [Client Documentation](oauth-https-proxy-client/CLAUDE.md) - Python CLI client
+- [General Development Guidelines](CLAUDE.md)
+- [API Documentation](src/api/CLAUDE.md)
+- [Python CLI Client](oauth-https-proxy-client/CLAUDE.md)
+- [OAuth Implementation](OAUTH_IMPLEMENTATION_SUMMARY.md)
+- [Component Documentation](src/)

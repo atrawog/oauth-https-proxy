@@ -502,10 +502,10 @@ just shell
 just redis-cli
 
 # View logs
-just logs                      # Show recent logs (chronological order)
-just logs-follow               # Follow logs in real-time with ANSI colors
-just logs-errors              # Show recent errors
-just logs-docker               # View Docker container logs only
+just log search                # Show recent logs (chronological order)
+just log follow                # Follow logs in real-time with ANSI colors
+just log errors                # Show recent errors
+just service logs api          # View Docker container logs
 ```
 
 ## Testing Guidelines
@@ -543,7 +543,7 @@ just test-docker        # Docker service tests
 TEST_DOMAIN=test.example.com
 TEST_EMAIL=test@example.com
 TEST_PROXY_TARGET_URL=https://example.com
-# OAuth tokens are obtained via just oauth-login
+# OAuth tokens are obtained via just oauth login
 # No bearer tokens (acm_*) or admin tokens anymore - pure OAuth JWT only
 ```
 
@@ -553,10 +553,10 @@ TEST_PROXY_TARGET_URL=https://example.com
 LOG_LEVEL=DEBUG just test
 
 # Check test logs
-just logs-errors 1 100
+just log errors --hours 1 --limit 100
 
 # Monitor test execution
-just logs-follow | grep TEST
+just log follow | grep TEST
 ```
 
 ## Project Structure
@@ -650,7 +650,7 @@ Token refresh failed - please run: proxy-client oauth login
 
 3. **Token Actually Expired**
    - **Cause**: Refresh token has expired (1 year lifetime)
-   - **Solution**: Run `just oauth-login` to get new tokens
+   - **Solution**: Run `just oauth login` to get new tokens
    - **Test**: Check token expiry with `just oauth-status`
 
 4. **API Connection Issues**

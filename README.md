@@ -25,8 +25,8 @@ The system is currently running with the following configuration:
 1. **auth.example.com** (OAuth Server)
    ```bash
    # Create OAuth server proxy
-   just proxy-create auth.example.com http://127.0.0.1:9000
-   just cert-create proxy-auth-example-com auth.example.com
+   just proxy create auth.example.com http://127.0.0.1:9000
+   just cert create proxy-auth-example-com auth.example.com
    ```
    - Purpose: OAuth authentication server
    - Endpoints: /authorize, /token, /callback, /device/*, /mcp
@@ -34,12 +34,12 @@ The system is currently running with the following configuration:
 2. **claude.example.com** (Application Proxy)
    ```bash
    # Create application proxy with OAuth protection
-   just proxy-create claude.example.com http://127.0.0.1:9000
-   just cert-create proxy-claude-example-com claude.example.com
-   just proxy-auth-enable claude.example.com
+   just proxy create claude.example.com http://127.0.0.1:9000
+   just cert create proxy-claude-example-com claude.example.com
+   just proxy auth enable claude.example.com
    
    # Configure GitHub user access (optional)
-   just proxy-auth-config claude.example.com "alice,bob" "" "" "" ""
+   just proxy auth config claude.example.com --users alice,bob
    ```
    - Purpose: OAuth-protected application endpoint
    - Authentication: OAuth required
@@ -96,7 +96,7 @@ This system uses **pure OAuth 2.1** authentication - completely removing the bea
    - 90% reduction in authentication code (~80KB removed)
 
 2. **GitHub Device Flow Authentication**
-   - Use `just oauth-login` to authenticate via GitHub
+   - Use `just oauth login` to authenticate via GitHub
    - No localhost callbacks needed - perfect for CLI/server use
    - JWT tokens with 30-minute lifetime, refresh tokens for persistence
 
@@ -124,7 +124,7 @@ OAUTH_LOCALHOST_USER_USERS=*              # User scope for localhost proxy
 OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope for localhost proxy
 
 # Per-proxy user allowlists (controls who can access the proxy):
-just proxy-auth-config api.example.com "alice,bob" "" "" "" ""
+just proxy auth config api.example.com --users alice,bob
 
 # Per-proxy scope assignment (which users get which scopes) - via direct API:
 curl -X PUT http://localhost/proxy/targets/api.example.com \
@@ -261,11 +261,11 @@ just up
 # - Default ACME/OAuth routes
 
 # Create OAuth server proxy (required for OAuth functionality)
-just proxy-create auth.example.com http://127.0.0.1:9000
-just cert-create proxy-auth-example-com auth.example.com
+just proxy create auth.example.com http://127.0.0.1:9000
+just cert create proxy-auth-example-com auth.example.com
 
 # Login via OAuth (device flow)
-just oauth-login
+just oauth login
 # Follow the prompts to authenticate with GitHub
 ```
 
@@ -353,7 +353,7 @@ docker-compose up -d
 just health
 
 # Login via OAuth Device Flow
-just oauth-login
+just oauth login
 # Follow the instructions to authenticate with GitHub
 # Your OAuth token is automatically saved and used by the CLI
 ```
@@ -362,22 +362,22 @@ just oauth-login
 
 ```bash
 # Create OAuth server proxy with staging certificate (for testing)
-just proxy-create auth.example.com "http://127.0.0.1:9000" staging=true
+just proxy create auth.example.com http://127.0.0.1:9000 --staging
 
 # Once verified working, recreate with production certificate
-just proxy-delete auth.example.com
-just proxy-create auth.example.com "http://127.0.0.1:9000"
+just proxy delete auth.example.com
+just proxy create auth.example.com http://127.0.0.1:9000
 ```
 
 ### Step 4: Create Main Website Proxy
 
 ```bash
 # Create main website proxy with staging certificate
-just proxy-create example.com "http://127.0.0.1:9000" staging=true
+just proxy create example.com http://127.0.0.1:9000 --staging
 
 # Once verified, switch to production
-just proxy-delete example.com
-just proxy-create example.com "http://127.0.0.1:9000"
+just proxy delete example.com
+just proxy create example.com http://127.0.0.1:9000
 ```
 
 ### Step 5: Deploy Protected Services
@@ -392,17 +392,17 @@ docker run -d --name my-service \
   my-service:latest
 
 # Register as external service
-just service-register my-service "http://my-service:3000" "My Service"
+just service external register my-service http://my-service:3000 --description "My Service"
 
 # Create proxy for the service
-just proxy-create service.example.com http://my-service:3000
-just cert-create proxy-service-example-com service.example.com
+just proxy create service.example.com http://my-service:3000
+just cert create proxy-service-example-com service.example.com
 
 # Enable OAuth protection
-just proxy-auth-enable service.example.com
+just proxy auth enable service.example.com
 
 # Configure GitHub user access
-just proxy-auth-config service.example.com "alice,bob,charlie" "" "" "" ""
+just proxy auth config service.example.com --users alice,bob,charlie
 
 # Optional: Configure custom GitHub OAuth App for this proxy
 # just proxy-github-oauth-set service.example.com <client-id> <client-secret>
@@ -445,18 +445,18 @@ just cert-delete <cert-name>
 just proxy-update <hostname> --production-cert
 
 # Or recreate the proxy:
-just proxy-delete <hostname>
-just proxy-create <hostname> <target-url>  # Without --staging flag
+just proxy delete <hostname>
+just proxy create <hostname> <target-url>  # Without --staging flag
 ```
 
 ### Troubleshooting
 
 ```bash
 # Check logs
-just logs                        # Show recent logs (chronological order)
-just logs-follow                 # Follow logs in real-time with ANSI colors
-just logs-errors                 # View recent errors
-just logs-docker                 # View Docker container logs only
+just log search                  # Show recent logs (chronological order)
+just log follow                  # Follow logs in real-time with ANSI colors
+just log errors                  # View recent errors
+just service logs api            # View Docker container logs
 
 # Debug certificate issues
 just cert-show <cert-name>
@@ -465,7 +465,7 @@ just cert-show <cert-name>
 just proxy-show <hostname>
 
 # Monitor OAuth activity
-just logs-oauth <ip>
+just log oauth <ip>
 ```
 
 ### Security Considerations
@@ -489,7 +489,7 @@ The system uses pure OAuth 2.1 authentication with a simplified architecture:
 - **Trust Model**: API reads `X-Auth-User`, `X-Auth-Scopes` headers from proxy
 
 #### Authentication Flow
-1. **OAuth Login**: Use `just oauth-login` for GitHub Device Flow
+1. **OAuth Login**: Use `just oauth login` for GitHub Device Flow
 2. **Proxy Validation**: Proxy validates JWT tokens and extracts user/scopes
 3. **Header Forwarding**: Proxy adds trusted headers for API
 4. **API Trust**: API reads headers without re-validation
@@ -497,7 +497,7 @@ The system uses pure OAuth 2.1 authentication with a simplified architecture:
 #### Getting Started
 ```bash
 # Login via Device Flow (CLI-friendly, no localhost needed)
-just oauth-login
+just oauth login
 
 # Check your token status
 just oauth-status
@@ -519,7 +519,7 @@ OAUTH_LOCALHOST_USER_USERS=*            # User scope for all users
 OAUTH_LOCALHOST_MCP_USERS=charlie,dave  # MCP scope for specific users
 
 # Configure per-proxy user allowlist (who can access):
-just proxy-auth-config api.example.com "alice,bob,charlie" "" "" "" ""
+just proxy auth config api.example.com --users alice,bob,charlie
 
 # Configure per-proxy scope assignment (which users get which scopes) - via API:
 curl -X PUT http://localhost/proxy/targets/api.example.com \
@@ -534,7 +534,7 @@ curl -X PUT http://localhost/proxy/targets/api.example.com \
 #### Configure Proxy Authentication
 ```bash
 # Enable OAuth on a proxy
-just proxy-auth-enable api.example.com auth.example.com forward
+just proxy auth enable api.example.com --auth-proxy auth.example.com --mode forward
 
 # Or configure programmatically
 curl -X POST http://localhost/proxy/targets/api.example.com/auth \
@@ -552,7 +552,7 @@ curl -X POST http://localhost/proxy/targets/api.example.com/auth \
 
 ```bash
 # Create proxy with automatic certificate handling
-just proxy-create api.example.com http://backend:8080
+just proxy create api.example.com http://backend:8080
 
 # The proxy will automatically:
 # - Check for existing certificates and use them
@@ -561,30 +561,30 @@ just proxy-create api.example.com http://backend:8080
 # - Handle certificate generation asynchronously
 
 # For staging/testing (creates staging certificate)
-just proxy-create api.example.com http://backend:8080 staging=true
+just proxy create api.example.com http://backend:8080 --staging
 
 # Common scenarios:
 # 1. First-time proxy with production cert
-just proxy-create echo.example.com http://service:3000
+just proxy create echo.example.com http://service:3000
 
 # 2. Proxy with existing certificate (automatically detected)
-just proxy-create echo.example.com http://service:3000
+just proxy create echo.example.com http://service:3000
 
 # 3. Testing with staging certificate
-just proxy-create echo.example.com http://service:3000 staging=true
+just proxy create echo.example.com http://service:3000 --staging
 
 # 4. HTTP-only proxy (no certificate needed)
-just proxy-create internal.local http://service:3000 staging=false preserve-host=true enable-http=true enable-https=false
+just proxy create internal.local http://service:3000 --preserve-host --enable-http --no-enable-https
 ```
 
 ### Enable OAuth Protection
 
 ```bash
 # Create the auth proxy
-just proxy-create auth.example.com http://localhost:9000
+just proxy create auth.example.com http://localhost:9000
 
 # Enable OAuth on your API proxy
-just proxy-auth-enable api.example.com auth.example.com forward
+just proxy auth enable api.example.com --auth-proxy auth.example.com --mode forward
 ```
 
 ### Docker Service Management
@@ -593,27 +593,27 @@ Create and manage Docker containers with automatic port exposure:
 
 ```bash
 # Create a service with exposed port on localhost
-just service-create-exposed my-app nginx:alpine 8080 127.0.0.1
+just service create-exposed my-app nginx:alpine 8080 --bind-address 127.0.0.1
 
 # Create a service accessible from all interfaces
-just service-create-exposed public-api node:18 3000 0.0.0.0
+just service create-exposed public-api node:18 3000 --bind-address 0.0.0.0
 
 # Real example: Create service on port 3000
-just service-create-exposed my-service my-service-image:latest 3000 127.0.0.1
+just service create-exposed my-service my-service-image:latest 3000 --bind-address 127.0.0.1
 
 # Add additional ports to existing service
-just service-port-add my-app 8081 127.0.0.1
+just service port add my-app 8081 --bind-address 127.0.0.1
 
 # List all services and their ports
-just service-list
-just service-port-list my-app
+just service list
+just service port list my-app
 
 # Create proxy for service (optional) - makes it accessible via HTTPS
-just service-proxy-create my-app hostname=service.example.com enable-https=true
+just service proxy-create my-app --hostname service.example.com --enable-https
 
 # Full example: Service accessible at both localhost:3000 and https://service.example.com
-just service-create-exposed my-service my-service-image:latest 3000 127.0.0.1
-just proxy-create service.example.com http://my-service:3000
+just service create-exposed my-service my-service-image:latest 3000 --bind-address 127.0.0.1
+just proxy create service.example.com http://my-service:3000
 ```
 
 ### Port Management
@@ -622,12 +622,12 @@ Services can expose ports with fine-grained control:
 
 ```bash
 # Check if a port is available
-just service-port-check 8080 bind-address=127.0.0.1
+just service port check 8080 --bind-address 127.0.0.1
 
 # Add/remove ports from services
-just service-port-add <service> <port> bind-address=127.0.0.1
-just service-port-remove <service> <port-name>
-just service-port-list <service>
+just service port add <service> <port> --bind-address 127.0.0.1
+just service port remove <service> <port-name>
+just service port list <service>
 ```
 
 ## Architecture
@@ -745,7 +745,7 @@ Routes are managed dynamically via API/CLI:
 
 ```bash
 # Create a route
-just route-create / service backend-api [token]
+just route create / service backend-api
 
 # List all routes
 just route-list
@@ -794,21 +794,21 @@ This allows different proxies to:
 
 ```bash
 # Create certificate for multiple domains (Note: These commands may not exist in current implementation)
-# Use individual cert-create commands for each domain instead:
-just cert-create api-cert api.domain.com email=admin@domain.com
-just cert-create app-cert app.domain.com email=admin@domain.com
+# Use individual cert create commands for each domain instead:
+just cert create api-cert api.domain.com --email admin@domain.com
+just cert create app-cert app.domain.com --email admin@domain.com
 ```
 
 ### External Service Management
 
 ```bash
 # Register named services for route targeting
-just service-register backend-api http://api:8080 description="Backend API"
-just service-register frontend http://frontend:3000 description="Frontend"
+just service external register backend-api http://api:8080 --description "Backend API"
+just service external register frontend http://frontend:3000 --description "Frontend"
 
 # Create routes targeting services
-just route-create /api/ service backend-api priority=50
-just route-create / service frontend priority=50
+just route create /api/ service backend-api --priority 50
+just route create / service frontend --priority 50
 ```
 
 ### OAuth Client Management
@@ -826,20 +826,20 @@ just oauth-clients-list
 
 ```bash
 # Create a service from Docker image
-just service-create my-nginx nginx:latest port=80 memory=512m cpu=1.0
+just service create my-nginx nginx:latest --port 80 --memory 512m --cpu 1.0
 
 # Manage service lifecycle
-just service-start my-app
-just service-stop my-app
-just service-restart my-app
+just service start my-app
+just service stop my-app
+just service restart my-app
 
 # Monitor services
-just service-list
-just service-logs my-app lines=100
-just service-stats my-app
+just service list
+just service logs my-app --lines 100
+just service stats my-app
 
 # Create proxy for service
-just service-proxy-create my-app hostname=my-app.domain.com enable-https=true
+just service proxy-create my-app --hostname my-app.domain.com --enable-https
 ```
 
 ### Logging and Monitoring
@@ -848,19 +848,19 @@ The proxy includes a high-performance logging system with efficient querying:
 
 ```bash
 # Query logs by client IP
-just logs-ip 192.168.1.100 hours=24
+just log ip 192.168.1.100 --hours 24
 
 # Query logs by proxy hostname  
-just logs-proxy api.domain.com hours=24
+just log proxy api.domain.com --hours 24
 
 # View recent errors
-just logs-errors hours=1 limit=50
+just log errors --hours 1 --limit 50
 
 # Follow logs in real-time
-just logs-follow interval=2
+just log follow --interval 2
 
 # Test logging system
-just logs-test
+just log test
 ```
 
 **Features**:
@@ -1083,7 +1083,7 @@ oauth-https-proxy/
    curl http://example.com/.well-known/acme-challenge/test
    
    # Use staging certificates for testing
-   just cert-create test-cert example.com admin@domain.com [token] [staging]
+   just cert create test-cert example.com --email admin@domain.com --staging
    ```
 
 2. **OAuth Login Issues**
@@ -1101,7 +1101,7 @@ oauth-https-proxy/
    just proxy-show problematic.domain.com
    
    # View service logs
-   just logs api
+   just service logs api
    ```
 
 4. **Docker Service Creation Fails**
@@ -1133,7 +1133,7 @@ oauth-https-proxy/
 ```bash
 just health              # System health check
 just stats               # Resource statistics
-just service-cleanup-orphaned    # Clean up orphaned resources
+just cleanup    # Clean up orphaned resources
 just redis-cli          # Direct Redis access
 just shell              # Shell into api container
 ```

@@ -21,6 +21,112 @@ default:
     @just --list
 
 # ============================================================================
+# UNIFIED COMMAND INTERFACE (NEW - Recommended)
+# ============================================================================
+# These commands provide a cleaner, more intuitive interface to proxy-client
+# Usage: just <command> <action> [args...]
+# Example: just proxy create api.example.com http://localhost:3000
+
+# Unified certificate management
+cert *args:
+    @pixi run proxy-client cert {{args}}
+
+# Unified proxy management
+proxy *args:
+    @pixi run proxy-client proxy {{args}}
+
+# Unified service management
+service *args:
+    @pixi run proxy-client service {{args}}
+
+# Unified route management
+route *args:
+    @pixi run proxy-client route {{args}}
+
+# Unified OAuth management
+oauth *args:
+    @pixi run proxy-client oauth {{args}}
+
+# Unified log management
+log *args:
+    @pixi run proxy-client log {{args}}
+
+# Unified system management
+system *args:
+    @pixi run proxy-client system {{args}}
+
+# Unified workflow commands
+workflow *args:
+    @pixi run proxy-client workflow {{args}}
+
+# Unified resource management
+resource *args:
+    @pixi run proxy-client resource {{args}}
+
+# ============================================================================
+# CONVENIENCE COMMANDS (NEW)
+# ============================================================================
+
+# Show comprehensive system status
+status:
+    @echo "=== System Health ==="
+    @pixi run proxy-client system health
+    @echo ""
+    @echo "=== Active Proxies ==="
+    @pixi run proxy-client proxy list --format table
+    @echo ""
+    @echo "=== Running Services ==="
+    @pixi run proxy-client service list --format table --type docker
+
+# Create full system backup
+backup filename="backup-$(date +%Y%m%d-%H%M%S).yaml":
+    @echo "Creating system backup..."
+    @pixi run proxy-client system config export --output {{filename}} --include-tokens
+    @echo "✓ Backup saved to {{filename}}"
+
+# Restore system from backup
+restore filename:
+    @echo "Restoring from {{filename}}..."
+    @pixi run proxy-client system config import {{filename}} --force
+    @echo "✓ System restored from {{filename}}"
+
+# Initialize system with defaults
+init:
+    @echo "Initializing system with default configuration..."
+    @just up
+    @sleep 5
+    @pixi run proxy-client oauth status --quiet || echo "Note: Run 'just oauth login' to authenticate"
+    @echo "✓ System initialized"
+
+# Validate configuration
+validate:
+    @echo "Validating system configuration..."
+    @pixi run proxy-client system health --check-config
+    @echo "✓ Configuration valid"
+
+# Run system diagnostics
+troubleshoot:
+    @echo "Running system diagnostics..."
+    @echo ""
+    @echo "=== Checking Docker Services ==="
+    @docker compose ps
+    @echo ""
+    @echo "=== Checking System Health ==="
+    @pixi run proxy-client system health || true
+    @echo ""
+    @echo "=== Checking Redis Connection ==="
+    @docker compose exec -T redis redis-cli -a "${REDIS_PASSWORD}" ping || echo "Redis not responding"
+    @echo ""
+    @echo "=== Recent Errors ==="
+    @pixi run proxy-client log errors --hours 1 --limit 5 || true
+    @echo ""
+    @echo "Diagnostics complete. Check output above for issues."
+
+# Quick cleanup of all resources
+cleanup:
+    @pixi run proxy-client workflow cleanup --orphaned-only --force
+
+# ============================================================================
 # SYSTEM MANAGEMENT (Docker Operations - Not Migrated)
 # ============================================================================
 
@@ -86,14 +192,18 @@ help:
 # CERTIFICATE MANAGEMENT (Migrated to proxy-client)
 # ============================================================================
 
+# DEPRECATED: Use 'just cert create ...' instead
 # Create a new certificate
 cert-create name domain staging="false" email=env_var_or_default("ADMIN_EMAIL", ""):
+    @echo "⚠️  DEPRECATED: Use 'just cert create {{name}} {{domain}} $(if [ '{{staging}}' = 'true' ]; then echo '--staging'; fi) --email {{email}}' instead"
     pixi run proxy-client cert create {{name}} {{domain}} \
         {{ if staging == "true" { "--staging" } else { "" } }} \
         --email {{email}}
 
+# DEPRECATED: Use 'just cert list' instead
 # List all certificates
 cert-list:
+    @echo "⚠️  DEPRECATED: Use 'just cert list' instead"
     pixi run proxy-client cert list
 
 # Show certificate details
@@ -119,9 +229,11 @@ cert-convert-to-production name wait="true" force="true":
 # PROXY MANAGEMENT (Migrated to proxy-client)
 # ============================================================================
 
+# DEPRECATED: Use 'just proxy create ...' instead
 # Create a new proxy with automatic certificate handling
 # Will check for existing certificates and create new ones if needed
 proxy-create hostname target-url staging="false" preserve-host="true" enable-http="true" enable-https="true" email=env_var_or_default("ADMIN_EMAIL", ""):
+    @echo "⚠️  DEPRECATED: Use 'just proxy create {{hostname}} {{target-url}} [options]' instead"
     pixi run proxy-client proxy create {{hostname}} {{target-url}} \
         {{ if staging == "true" { "--staging" } else { "" } }} \
         {{ if preserve-host == "false" { "--no-preserve-host" } else { "" } }} \
@@ -129,8 +241,10 @@ proxy-create hostname target-url staging="false" preserve-host="true" enable-htt
         {{ if enable-https == "false" { "--no-enable-https" } else { "" } }} \
         --email {{email}}
 
+# DEPRECATED: Use 'just proxy list' instead
 # List all proxies
 proxy-list:
+    @echo "⚠️  DEPRECATED: Use 'just proxy list' instead"
     pixi run proxy-client --format table proxy list
 
 # Show proxy details
@@ -142,8 +256,10 @@ proxy-delete hostname delete-cert="false" force="true":
     pixi run proxy-client proxy delete {{hostname}} --force \
         {{ if delete-cert == "true" { "--delete-cert" } else { "" } }}
 
+# DEPRECATED: Use 'just proxy auth enable ...' instead
 # Enable authentication for a proxy
 proxy-auth-enable hostname auth-proxy="auth.localhost" mode="forward" allowed-scopes="" allowed-audiences="":
+    @echo "⚠️  DEPRECATED: Use 'just proxy auth enable {{hostname}} [options]' instead"
     pixi run proxy-client proxy auth enable {{hostname}} \
         {{auth-proxy}} \
         {{mode}} \
@@ -219,108 +335,134 @@ proxy-oauth-server-clear hostname:
 proxy-oauth-server-list:
     pixi run proxy-client proxy oauth-server list
 
+# DEPRECATED: Use 'just proxy-github set ...' instead
 # Set GitHub OAuth credentials for a proxy (per-proxy GitHub OAuth App)
 proxy-github-oauth-set hostname client-id client-secret:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    API_URL="${API_URL:-http://localhost:80}"
-    TOKEN="${TOKEN:-${OAUTH_ACCESS_TOKEN:-}}"
-    
-    echo "Setting GitHub OAuth credentials for proxy: {{hostname}}"
-    
-    response=$(curl -s -w "\n%{http_code}" -X POST \
-        "${API_URL}/proxy/targets/{{hostname}}/github-oauth" \
-        -H "Authorization: Bearer ${TOKEN}" \
-        -H "Content-Type: application/json" \
-        -d '{
-            "github_client_id": "{{client-id}}",
-            "github_client_secret": "{{client-secret}}"
-        }')
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n-1)
-    
-    if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 201 ]; then
-        echo "$body" | jq -r '.'
-        echo "✓ GitHub OAuth credentials configured successfully"
-    else
-        echo "Failed to set GitHub OAuth credentials (HTTP $http_code)"
-        echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
-        exit 1
-    fi
+    @echo "⚠️  DEPRECATED: Use 'just proxy-github set {{hostname}} {{client-id}} {{client-secret}}' instead"
+    @just proxy-github set {{hostname}} {{client-id}} {{client-secret}}
 
+# DEPRECATED: Use 'just proxy-github show ...' instead
 # Show GitHub OAuth configuration for a proxy (without revealing the secret)
 proxy-github-oauth-show hostname:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    API_URL="${API_URL:-http://localhost:80}"
-    TOKEN="${TOKEN:-${OAUTH_ACCESS_TOKEN:-}}"
-    
-    echo "Getting GitHub OAuth configuration for proxy: {{hostname}}"
-    
-    response=$(curl -s -w "\n%{http_code}" -X GET \
-        "${API_URL}/proxy/targets/{{hostname}}/github-oauth" \
-        -H "Authorization: Bearer ${TOKEN}")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n-1)
-    
-    if [ "$http_code" -eq 200 ]; then
-        echo "$body" | jq -r '.'
-    else
-        echo "Failed to get GitHub OAuth configuration (HTTP $http_code)"
-        echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
-        exit 1
-    fi
+    @echo "⚠️  DEPRECATED: Use 'just proxy-github show {{hostname}}' instead"
+    @just proxy-github show {{hostname}}
 
+# DEPRECATED: Use 'just proxy-github clear ...' instead
 # Clear GitHub OAuth configuration for a proxy (falls back to environment variables)
 proxy-github-oauth-clear hostname:
-    #!/usr/bin/env bash
-    set -euo pipefail
-    API_URL="${API_URL:-http://localhost:80}"
-    TOKEN="${TOKEN:-${OAUTH_ACCESS_TOKEN:-}}"
-    
-    echo "Clearing GitHub OAuth configuration for proxy: {{hostname}}"
-    
-    response=$(curl -s -w "\n%{http_code}" -X DELETE \
-        "${API_URL}/proxy/targets/{{hostname}}/github-oauth" \
-        -H "Authorization: Bearer ${TOKEN}")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n-1)
-    
-    if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 204 ]; then
-        echo "$body" | jq -r '.'
-        echo "✓ GitHub OAuth configuration cleared - will use environment variables"
-    else
-        echo "Failed to clear GitHub OAuth configuration (HTTP $http_code)"
-        echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
-        exit 1
-    fi
+    @echo "⚠️  DEPRECATED: Use 'just proxy-github clear {{hostname}}' instead"
+    @just proxy-github clear {{hostname}}
 
+# DEPRECATED: Use 'just proxy-github list' instead
 # List all proxies with custom GitHub OAuth configurations
 proxy-github-oauth-list:
+    @echo "⚠️  DEPRECATED: Use 'just proxy-github list' instead"
+    @just proxy-github list
+
+# ============================================================================
+# PROXY GITHUB OAUTH MANAGEMENT (Custom Implementation)
+# ============================================================================
+# These commands manage per-proxy GitHub OAuth credentials
+# Usage: just proxy-github <action> [args...]
+
+# Manage per-proxy GitHub OAuth credentials
+proxy-github action hostname="" client_id="" client_secret="":
     #!/usr/bin/env bash
     set -euo pipefail
     API_URL="${API_URL:-http://localhost:80}"
     TOKEN="${TOKEN:-${OAUTH_ACCESS_TOKEN:-}}"
     
-    echo "Listing proxies with custom GitHub OAuth configurations:"
-    
-    response=$(curl -s -w "\n%{http_code}" -X GET \
-        "${API_URL}/proxy/targets/github-oauth/configured" \
-        -H "Authorization: Bearer ${TOKEN}")
-    
-    http_code=$(echo "$response" | tail -n1)
-    body=$(echo "$response" | head -n-1)
-    
-    if [ "$http_code" -eq 200 ]; then
-        echo "$body" | jq -r '.'
-    else
-        echo "Failed to list GitHub OAuth configurations (HTTP $http_code)"
-        echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
-        exit 1
-    fi
+    case "{{action}}" in
+        set)
+            if [ -z "{{hostname}}" ] || [ -z "{{client_id}}" ] || [ -z "{{client_secret}}" ]; then
+                echo "Usage: just proxy-github set <hostname> <client-id> <client-secret>"
+                exit 1
+            fi
+            echo "Setting GitHub OAuth credentials for proxy: {{hostname}}"
+            response=$(curl -s -w "\n%{http_code}" -X POST \
+                "${API_URL}/proxy/targets/{{hostname}}/github-oauth" \
+                -H "Authorization: Bearer ${TOKEN}" \
+                -H "Content-Type: application/json" \
+                -d '{
+                    "github_client_id": "{{client_id}}",
+                    "github_client_secret": "{{client_secret}}"
+                }')
+            http_code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | head -n-1)
+            if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 201 ]; then
+                echo "$body" | jq -r '.'
+                echo "✓ GitHub OAuth credentials configured successfully"
+            else
+                echo "Failed to set GitHub OAuth credentials (HTTP $http_code)"
+                echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
+                exit 1
+            fi
+            ;;
+        show)
+            if [ -z "{{hostname}}" ]; then
+                echo "Usage: just proxy-github show <hostname>"
+                exit 1
+            fi
+            echo "Getting GitHub OAuth configuration for proxy: {{hostname}}"
+            response=$(curl -s -w "\n%{http_code}" -X GET \
+                "${API_URL}/proxy/targets/{{hostname}}/github-oauth" \
+                -H "Authorization: Bearer ${TOKEN}")
+            http_code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | head -n-1)
+            if [ "$http_code" -eq 200 ]; then
+                echo "$body" | jq -r '.'
+            else
+                echo "Failed to get GitHub OAuth configuration (HTTP $http_code)"
+                echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
+                exit 1
+            fi
+            ;;
+        clear)
+            if [ -z "{{hostname}}" ]; then
+                echo "Usage: just proxy-github clear <hostname>"
+                exit 1
+            fi
+            echo "Clearing GitHub OAuth configuration for proxy: {{hostname}}"
+            response=$(curl -s -w "\n%{http_code}" -X DELETE \
+                "${API_URL}/proxy/targets/{{hostname}}/github-oauth" \
+                -H "Authorization: Bearer ${TOKEN}")
+            http_code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | head -n-1)
+            if [ "$http_code" -eq 200 ] || [ "$http_code" -eq 204 ]; then
+                echo "$body" | jq -r '.'
+                echo "✓ GitHub OAuth configuration cleared - will use environment variables"
+            else
+                echo "Failed to clear GitHub OAuth configuration (HTTP $http_code)"
+                echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
+                exit 1
+            fi
+            ;;
+        list)
+            echo "Listing proxies with custom GitHub OAuth configurations:"
+            response=$(curl -s -w "\n%{http_code}" -X GET \
+                "${API_URL}/proxy/targets/github-oauth/configured" \
+                -H "Authorization: Bearer ${TOKEN}")
+            http_code=$(echo "$response" | tail -n1)
+            body=$(echo "$response" | head -n-1)
+            if [ "$http_code" -eq 200 ]; then
+                echo "$body" | jq -r '.'
+            else
+                echo "Failed to list GitHub OAuth configurations (HTTP $http_code)"
+                echo "$body" | jq -r '.' 2>/dev/null || echo "$body"
+                exit 1
+            fi
+            ;;
+        *)
+            echo "Usage: just proxy-github <action> [args...]"
+            echo ""
+            echo "Actions:"
+            echo "  set <hostname> <client-id> <client-secret>  - Set GitHub OAuth credentials"
+            echo "  show <hostname>                             - Show GitHub OAuth configuration"
+            echo "  clear <hostname>                            - Clear GitHub OAuth configuration"
+            echo "  list                                        - List proxies with custom configs"
+            exit 1
+            ;;
+    esac
 
 # ============================================================================
 # ROUTE MANAGEMENT (Migrated to proxy-client)
@@ -380,10 +522,6 @@ service-create-exposed name image port bind-address="127.0.0.1" memory="512m" cp
     pixi run proxy-client service create-exposed {{name}} {{image}} {{port}} \
         --bind-address {{bind-address}} \
         --memory {{memory}} --cpu {{cpu}}
-
-# List Docker services
-service-list owned-only="false":
-    pixi run proxy-client service list --type docker
 
 # List all services (Docker + external)
 service-list-all type="":
@@ -477,17 +615,14 @@ service-update-external name target-url description="":
     pixi run proxy-client service external update {{name}} {{target-url}} \
         {{ if description != "" { "--description '" + description + "'" } else { "" } }}
 
-# Register OAuth as external service
-service-register-oauth:
-    pixi run proxy-client service external register oauth https://auth.${BASE_DOMAIN} \
-        --description "OAuth 2.1 Authorization Server"
-
 # ============================================================================
 # OAUTH MANAGEMENT (Migrated to proxy-client)
 # ============================================================================
 
+# DEPRECATED: Use 'just oauth login' instead
 # Login via OAuth Device Flow (for SSH/remote sessions)
 oauth-login:
+    @echo "⚠️  DEPRECATED: Use 'just oauth login' instead"
     @pixi run proxy-client oauth login --no-browser
 
 # Check OAuth token status
@@ -497,10 +632,6 @@ oauth-status:
 # Refresh OAuth token
 oauth-refresh:
     @pixi run proxy-client oauth refresh
-
-# Ensure valid OAuth token (helper for other commands)
-_ensure_valid_token:
-    @pixi run proxy-client oauth status --quiet || pixi run proxy-client oauth refresh --quiet
 
 # Register OAuth client
 oauth-client-register name redirect-uri="urn:ietf:wg:oauth:2.0:oob" scope="read write":
@@ -548,8 +679,10 @@ oauth-test-tokens server-url:
 # LOG MANAGEMENT (Migrated to proxy-client)
 # ============================================================================
 
+# DEPRECATED: Use 'just log search ...' instead
 # Search logs
 logs hours="1" event="" level="" hostname="" limit="50":
+    @echo "⚠️  DEPRECATED: Use 'just log search [options]' instead"
     pixi run proxy-client log search \
         --hours {{hours}} --limit {{limit}} \
         {{ if hostname != "" { "--hostname " + hostname } else { "" } }}
@@ -570,18 +703,16 @@ logs-hostname hostname hours="1" limit="100":
 logs-oauth-client client-id hours="1" event="" level="" limit="100":
     pixi run proxy-client log oauth-client {{client-id}} --hours {{hours}} --limit {{limit}}
 
+# DEPRECATED: Use 'just log errors ...' instead
 # Show errors
 logs-errors hours="1" limit="20":
+    @echo "⚠️  DEPRECATED: Use 'just log errors [options]' instead"
     pixi run proxy-client log errors --hours {{hours}} --limit {{limit}}
 
-# Debug errors
-logs-errors-debug hours="1" include-warnings="false" limit="50":
-    pixi run proxy-client log errors --hours {{hours}} \
-        {{ if include-warnings == "true" { "--include-warnings" } else { "" } }} \
-        --limit {{limit}}
-
+# DEPRECATED: Use 'just log follow ...' instead
 # Follow logs
 logs-follow interval="2" event="" level="" hostname="":
+    @echo "⚠️  DEPRECATED: Use 'just log follow [options]' instead"
     pixi run proxy-client log follow --interval {{interval}} \
         {{ if hostname != "" { "--hostname " + hostname } else { "" } }}
 
@@ -646,10 +777,6 @@ logs-path pattern hours="1" limit="100":
 # Query logs by OAuth username
 logs-oauth-user username hours="1" limit="100":
     pixi run proxy-client log oauth-user {{username}} --hours {{hours}} --limit {{limit}}
-
-# Docker container logs only
-logs-docker lines="50" follow="false":
-    {{ if follow == "true" { "docker-compose logs --tail=" + lines + " --follow" } else { "docker-compose logs --tail=" + lines } }}
 
 # Docker service logs (not migrated - Docker specific)
 logs-service service="" lines="100":
