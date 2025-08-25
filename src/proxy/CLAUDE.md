@@ -218,41 +218,41 @@ When enabled, the proxy automatically serves:
 
 ```bash
 # Create proxy with automatic certificate handling
-just proxy-create <hostname> <target-url> [staging] [preserve-host] [enable-http] [enable-https] [email] [token]
-just proxy-delete <hostname> [delete-cert] [force] [token]
-just proxy-list [token]
-just proxy-show <hostname> [token]
+just proxy create <hostname> <target-url> [staging] [preserve-host] [enable-http] [enable-https] [email] [token]
+just proxy delete <hostname> [delete-cert] [force] [token]
+just proxy list [token]
+just proxy show <hostname> [token]
 
 # OAuth proxy authentication
-just proxy-auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]
-just proxy-auth-disable <hostname> [token]
-just proxy-auth-config <hostname> [users] [emails] [groups] [allowed-scopes] [allowed-audiences] [token]
-just proxy-auth-show <hostname> [token]
+just proxy auth-enable <hostname> [auth-proxy] [mode] [allowed-scopes] [allowed-audiences] [token]
+just proxy auth-disable <hostname> [token]
+just proxy auth-config <hostname> [users] [emails] [groups] [allowed-scopes] [allowed-audiences] [token]
+just proxy auth-show <hostname> [token]
 
 # Examples of per-proxy user configuration:
 # Allow specific GitHub users:
-just proxy-auth-config api.example.com "alice,bob,charlie" "" "" "" "" $TOKEN
+just proxy auth-config api.example.com "alice,bob,charlie" "" "" "" "" $TOKEN
 # Allow all GitHub users:
-just proxy-auth-config api.example.com "*" "" "" "" "" $TOKEN
+just proxy auth-config api.example.com "*" "" "" "" "" $TOKEN
 # Use global default (OAUTH_ALLOWED_GITHUB_USERS):
-just proxy-auth-config api.example.com "" "" "" "" "" $TOKEN
+just proxy auth-config api.example.com "" "" "" "" "" $TOKEN
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)
-just proxy-resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]
-just proxy-resource-clear <hostname> [token]
-just proxy-resource-show <hostname> [token]
-just proxy-resource-list [token]           # List protected resources
+just proxy resource-set <hostname> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] [hacker-one-research] [token]
+just proxy resource-clear <hostname> [token]
+just proxy resource-show <hostname> [token]
+just proxy resource-list [token]           # List protected resources
 
 # OAuth authorization server metadata configuration (per-proxy)
-just proxy-oauth-server-set <hostname> [issuer] [scopes] [grant-types] [response-types] [token-auth-methods] [claims] [pkce-required] [custom-metadata] [override-defaults] [token]
-just proxy-oauth-server-clear <hostname> [token]
-just proxy-oauth-server-show <hostname> [token]
+just proxy oauth-server-set <hostname> [issuer] [scopes] [grant-types] [response-types] [token-auth-methods] [claims] [pkce-required] [custom-metadata] [override-defaults] [token]
+just proxy oauth-server-clear <hostname> [token]
+just proxy oauth-server-show <hostname> [token]
 
 # GitHub OAuth credentials configuration (per-proxy)
-just proxy-github-oauth-set <hostname> <client-id> <client-secret> [token]
-just proxy-github-oauth-show <hostname> [token]
-just proxy-github-oauth-clear <hostname> [token]
-just proxy-github-oauth-list [token]
+just proxy github-oauth-set <hostname> <client-id> <client-secret> [token]
+just proxy github-oauth-show <hostname> [token]
+just proxy github-oauth-clear <hostname> [token]
+just proxy github-oauth-list [token]
 ```
 
 ## Proxy Architecture: Simple and Secure

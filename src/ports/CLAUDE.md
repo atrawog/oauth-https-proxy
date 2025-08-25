@@ -90,7 +90,7 @@ port_configs = [
 ### Example Usage
 ```bash
 # Create service with protected port
-just service-port-add my-app 3001 0.0.0.0 "secret_token"
+just service port-add my-app 3001 0.0.0.0 "secret_token"
 
 # Access requires token in header/query
 curl -H "X-Source-Token: secret_token" http://host:3001
@@ -124,32 +124,32 @@ Services can expose multiple ports for different purposes:
 
 ```bash
 # Web interface on localhost
-just service-port-add my-app 8080 127.0.0.1
+just service port-add my-app 8080 127.0.0.1
 
 # API on all interfaces with token
-just service-port-add my-app 8081 0.0.0.0 "api_token"
+just service port-add my-app 8081 0.0.0.0 "api_token"
 
 # Admin interface on localhost
-just service-port-add my-app 8082 127.0.0.1
+just service port-add my-app 8082 127.0.0.1
 ```
 
 ## Port Management Commands
 
 ```bash
 # Add port to service
-just service-port-add <name> <port> [bind-address] [source-token] [token]
+just service port-add <name> <port> [bind-address] [source-token] [token]
 
 # Remove port from service
-just service-port-remove <name> <port-name> [token]
+just service port-remove <name> <port-name> [token]
 
 # List service ports
-just service-port-list <name> [token]
+just service port-list <name> [token]
 
 # Check port availability
-just service-port-check <port> [bind-address] [token]
+just service port-check <port> [bind-address] [token]
 
 # View all allocated ports
-just service-ports-global [available-only] [token]
+just service ports-global [available-only] [token]
 ```
 
 ## Python-on-whales Integration
@@ -168,7 +168,7 @@ Ports are automatically released when:
 
 Manual cleanup available via:
 ```bash
-just service-cleanup [token]
+just cleanup [token]
 ```
 
 ## Best Practices
@@ -192,13 +192,13 @@ just service-cleanup [token]
 
 ```bash
 # Check what's using a port
-just service-port-check 3000
+just service port-check 3000
 
 # View all port allocations
-just service-ports-global
+just service ports-global
 
 # Check available ranges
-just service-ports-global true
+just service ports-global true
 ```
 
 ## Redis Storage

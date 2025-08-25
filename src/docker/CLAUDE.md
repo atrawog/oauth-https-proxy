@@ -108,40 +108,40 @@ The system automatically registers these internal services:
 
 ```bash
 # Docker service management
-just service-create <name> [image] [dockerfile] [port] [memory] [cpu] [auto-proxy] [token]
-just service-create-exposed <name> <image> <port> [bind-address] [memory] [cpu] [token]  # Create with exposed port
-just service-list [owned-only] [token]  # List Docker services
-just service-show <name> [token]
-just service-delete <name> [force] [delete-proxy] [token]
-just service-start <name> [token]
-just service-stop <name> [token]
-just service-restart <name> [token]
+just service create <name> [image] [dockerfile] [port] [memory] [cpu] [auto-proxy] [token]
+just service create-exposed <name> <image> <port> [bind-address] [memory] [cpu] [token]  # Create with exposed port
+just service list [owned-only] [token]  # List Docker services
+just service show <name> [token]
+just service delete <name> [force] [delete-proxy] [token]
+just service start <name> [token]
+just service stop <name> [token]
+just service restart <name> [token]
 
 # External service management
-just service-register <name> <target-url> [description] [token]  # Register external service
-just service-list-external [token]                               # List external services
-just service-show-external <name> [token]                        # Show external service details
-just service-update-external <name> <target-url> [description] [token]  # Update external service
-just service-unregister <name> [token]                          # Delete external service
-just service-register-oauth [token]                              # Register OAuth as external service
+just service register <name> <target-url> [description] [token]  # Register external service
+just service list-external [token]                               # List external services
+just service show-external <name> [token]                        # Show external service details
+just service update-external <name> <target-url> [description] [token]  # Update external service
+just service unregister <name> [token]                          # Delete external service
+just service register-oauth [token]                              # Register OAuth as external service
 
 # Unified service views
-just service-list-all [type] [token]                             # List all services (Docker + external)
+just service list-all [type] [token]                             # List all services (Docker + external)
 
 # Service monitoring
-just service-logs <name> [lines] [timestamps] [token]
-just service-stats <name> [token]
+just service logs <name> [lines] [timestamps] [token]
+just service stats <name> [token]
 
 # Service proxy management
-just service-proxy-create <name> [hostname] [enable-https] [token]
-just service-cleanup [token]
+just service proxy-create <name> [hostname] [enable-https] [token]
+just cleanup [token]
 
 # Port management
-just service-port-add <name> <port> [bind-address] [source-token] [token]
-just service-port-remove <name> <port-name> [token]
-just service-port-list <name> [token]
-just service-port-check <port> [bind-address] [token]
-just service-ports-global [available-only] [token]
+just service port-add <name> <port> [bind-address] [source-token] [token]
+just service port-remove <name> <port-name> [token]
+just service port-list <name> [token]
+just service port-check <port> [bind-address] [token]
+just service ports-global [available-only] [token]
 ```
 
 ## Container Lifecycle Management
@@ -246,16 +246,16 @@ Services are discoverable by name through:
 
 ```bash
 # Check service status
-just service-show <name> | jq .status
+just service show <name> | jq .status
 
 # View service logs
-just service-logs <name> 100 true
+just service logs <name> 100 true
 
 # Check port allocation
-just service-ports-global
+just service ports-global
 
 # Monitor resource usage
-just service-stats <name>
+just service stats <name>
 ```
 
 ## Related Documentation

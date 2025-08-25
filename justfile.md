@@ -20,6 +20,11 @@ just oauth status        # Check authentication status
 # Quick setup
 just quickstart api.example.com http://localhost:3000  # Create proxy with certificate
 just init                # Initialize system with defaults
+
+# Development
+just shell               # Open bash shell in container
+just python              # Start Python REPL with pixi
+just redis-cli           # Open Redis CLI with password
 ```
 
 ## Unified Command Interface (NEW - Recommended)
@@ -214,6 +219,56 @@ just test [files]        # Run tests
 just test-all           # Run comprehensive test suite
 just docs-build         # Build documentation
 just dry-run <command>  # Test command without execution
+```
+
+## Developer Tools
+
+### Python Execution
+```bash
+# Run Python interactively with pixi environment
+just python
+
+# Run Python code directly
+just python "print('Hello from container')"
+just python "import redis; print(redis.VERSION)"
+
+# Run a Python script
+just script /app/src/test_script.py
+just script /app/src/scripts/migrate.py --verbose
+
+# Start REPL with project context loaded
+just repl
+# Now you can: from storage import RedisStorage
+```
+
+### Redis Commands
+```bash
+# Interactive Redis CLI (password auto-configured)
+just redis-cli
+
+# Execute single Redis command
+just redis "KEYS *"                          # List all keys
+just redis "GET proxy:localhost"             # Get specific key
+just redis "HGETALL proxy:ports:mappings"    # Get hash contents
+just redis "ZRANGE log:recent 0 10"          # Get sorted set range
+just redis "INFO"                            # Server info
+just redis "PING"                            # Test connection
+
+# Utility commands
+just redis-keys "proxy:*"                    # List keys by pattern
+just redis-info                              # Show memory usage
+just redis-flush                             # Clear all data (with confirmation)
+```
+
+### Container Execution
+```bash
+# Run any command in container with pixi environment
+just exec pytest tests/test_proxy.py
+just exec python -m pip list
+just exec redis-cli -h redis -a $REDIS_PASSWORD
+
+# Open interactive shell
+just shell
 ```
 
 ## Command Patterns

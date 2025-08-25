@@ -16,7 +16,7 @@ This document provides comprehensive development and testing guidelines for the 
 - **Command execution**: ONLY via `just` commands - no direct Python/bash or docker exec execution
 - **Configuration**: Single source `.env` file loaded by `just` - all environment variables are documented in their relevant sections
 - **Python environment**: `pixi` exclusively
-- **Testing**: Real systems only - no mocks, stubs, or simulations via `just test-*` commands
+- **Testing**: Real systems only - no mocks, stubs, or simulations via `just test` commands
 - **Debugging**: All debugging via `just` commands (logs, shell, redis-cli)
 - **Database**: Redis for everything (key-value, caching, queues, pub/sub, persistence)
 
@@ -47,6 +47,191 @@ This means when testing, you must either:
 - ACME URLs can be switched between staging and production for testing
 - HTTP routing configuration is managed via Redis, not environment variables
 - Docker socket access requires appropriate group permissions (DOCKER_GID)
+
+### System Diagnostics and Debugging
+
+When diagnosing issues or accessing the system for debugging, use these `just` commands to interact with different system layers:
+
+#### Understanding the Two Logging Systems
+
+The system has two distinct logging mechanisms that serve different purposes:
+
+1. **Docker/Container Logs** (stdout/stderr):
+   - Raw output from container processes
+   - Accessed via `docker logs` or `just service logs <name>`
+   - Contains startup messages, crash reports, uncaught exceptions
+   - Useful for: Container health, startup issues, fatal errors
+   - Limited retention (based on Docker logging driver)
+   - Unstructured text format
+
+2. **Redis Application Logs** (Structured Logs):
+   - Application-level logs written to Redis Streams
+   - Accessed via `just log` commands
+   - Contains HTTP requests, OAuth flows, proxy operations, API calls
+   - Useful for: Request tracing, performance analysis, security auditing
+   - Persistent storage with configurable retention
+   - Structured with multiple indexes (IP, hostname, user, status, etc.)
+   - Supports real-time following with color output
+
+#### Log Commands for Diagnostics
+
+```bash
+# View recent application logs (Redis-based)
+just log show                     # Last 100 logs chronologically
+just log errors                   # Recent errors only
+just log follow                   # Real-time log following with colors
+
+# Search logs by various criteria
+just log ip 192.168.1.1          # Logs from specific IP
+just log hostname api.example.com # Logs for specific hostname
+just log user alice              # Logs for specific user
+just log status 401              # Logs with specific HTTP status
+just log path /oauth/token       # Logs for specific path
+just log method POST             # Logs for specific HTTP method
+
+# OAuth-specific debugging
+just log oauth                   # All OAuth-related logs
+just log oauth-flow              # OAuth flow tracking
+just log oauth-debug             # Detailed OAuth debugging
+just log oauth-user bob          # OAuth logs for specific user
+
+# Performance analysis
+just log slow                    # Slow requests (>1s)
+just log stats                   # Request statistics and analytics
+
+# Container logs (Docker-based)
+just service logs api            # Docker logs for API container
+just service logs redis          # Docker logs for Redis container
+```
+
+#### Redis Commands for State Inspection
+
+```bash
+# Interactive Redis CLI (with password authentication)
+just redis-cli                   # Opens Redis interactive shell
+
+# Direct Redis commands
+just redis 'KEYS proxy:*'        # List all proxy-related keys
+just redis 'GET proxy:localhost' # Get specific proxy configuration
+just redis 'HGETALL proxy:ports:mappings' # View port allocations
+just redis 'ZRANGE log:recent 0 10' # View recent log entries
+just redis 'INFO memory'         # Check Redis memory usage
+
+# Utility commands
+just redis-keys 'oauth:*'        # List keys matching pattern
+just redis-info                  # Show Redis server stats
+```
+
+#### Python Commands for Advanced Debugging
+
+```bash
+# Interactive Python shell in container environment
+just python                      # Starts Python REPL with full environment
+
+# Execute Python code directly
+just python "import redis; print('Connected')"
+just python "from src.storage import RedisStorage; print(RedisStorage())"
+
+# Run diagnostic scripts
+just script scripts/test_oauth.py
+just script scripts/check_proxies.py --verbose
+```
+
+#### Shell Access for Direct Investigation
+
+```bash
+# Open bash shell in API container
+just shell                       # Full shell access with pixi environment
+
+# Execute commands in container
+just exec ls -la /app           # List application files
+just exec cat /app/.env         # View environment (be careful with secrets!)
+just exec pixi run pip list     # List installed packages
+```
+
+#### Common Diagnostic Workflows
+
+##### 1. OAuth Authentication Issues
+```bash
+# Check OAuth configuration
+just oauth status                # View current token status
+just log oauth-debug             # Detailed OAuth logs
+just redis 'KEYS oauth:*'        # Inspect OAuth state in Redis
+just python "from src.api.oauth import *; print(get_oauth_config())"
+```
+
+##### 2. Proxy Not Working
+```bash
+# Check proxy configuration
+just proxy show <hostname>       # View proxy configuration
+just log hostname <hostname>     # View logs for this proxy
+just redis "GET proxy:<hostname>" # Check Redis state
+just service logs api | grep <hostname> # Check container logs
+```
+
+##### 3. Certificate Issues
+```bash
+# Check certificate status
+just cert list                   # List all certificates
+just cert show <name>           # View specific certificate
+just log search "acme"          # ACME-related logs
+just redis 'KEYS cert:*'        # Certificate keys in Redis
+```
+
+##### 4. Performance Problems
+```bash
+# Analyze performance
+just log stats                  # Overall statistics
+just log slow                   # Identify slow requests
+just redis-info | grep memory   # Check memory usage
+just service stats api          # Container resource usage
+```
+
+##### 5. Startup Issues
+```bash
+# Debug startup problems
+just service logs api | head -100  # Initial startup logs
+just shell                         # Interactive debugging
+cat /var/log/supervisor/*.log     # Supervisor logs (if applicable)
+just python "from src.main import *" # Test imports
+```
+
+#### Best Practices for Diagnostics
+
+1. **Start with Application Logs**: Use `just log` commands first - they contain structured, searchable information
+2. **Check Container Logs for Crashes**: Use `just service logs` when services won't start or crash
+3. **Use Redis CLI for State**: Inspect actual stored state when configuration seems wrong
+4. **Python REPL for Complex Debugging**: Import modules and test functionality interactively
+5. **Correlate Log Sources**: Match timestamps between Redis logs and Docker logs for full picture
+6. **Follow Real-Time During Testing**: Use `just log follow` while reproducing issues
+7. **Export Logs for Analysis**: Pipe log output to files for detailed analysis
+
+#### Example: Complete Diagnostic Session
+```bash
+# 1. Check system health
+just health
+
+# 2. View recent errors
+just log errors --limit 50
+
+# 3. Check specific user's activity
+just log user alice --hours 1
+
+# 4. Inspect OAuth state
+just redis 'KEYS oauth:session:*' 
+
+# 5. Test in Python environment
+just python
+>>> from src.storage import RedisStorage
+>>> storage = RedisStorage()
+>>> await storage.get_proxy("localhost")
+
+# 6. Monitor live traffic
+just log follow | grep POST
+
+# 7. Check container health
+just service stats api
+```
 
 ### OAuth Authentication Requirements (CRITICAL)
 **Circular Dependency Prevention**: The following OAuth endpoints MUST be excluded from authentication on the localhost proxy to prevent circular dependencies:
@@ -495,18 +680,16 @@ just up
 # Run locally without Docker
 pixi run python src/main.py
 
-# Shell into container for debugging
-just shell
-
-# Access Redis CLI
-just redis-cli
-
-# View logs
-just log search                # Show recent logs (chronological order)
+# Common development commands (see "System Diagnostics and Debugging" section for comprehensive guide)
+just shell                     # Shell into container for debugging
+just redis-cli                 # Access Redis CLI
+just python                    # Interactive Python REPL
 just log follow                # Follow logs in real-time with ANSI colors
 just log errors                # Show recent errors
 just service logs api          # View Docker container logs
 ```
+
+For comprehensive debugging and diagnostic commands, see the **[System Diagnostics and Debugging](#system-diagnostics-and-debugging)** section above.
 
 ## Testing Guidelines
 
@@ -528,13 +711,13 @@ just test-all
 just test tests/test_oauth.py
 
 # Test with verbose output
-just test-verbose
+LOG_LEVEL=DEBUG just test
 
 # Specific test categories
-just test-proxy-all      # All proxy tests
-just test-auth          # OAuth tests
-just test-certificates  # Certificate tests
-just test-docker        # Docker service tests
+just test tests/test_proxy.py      # All proxy tests
+just test tests/test_oauth.py      # OAuth tests  
+just test tests/test_certificates.py  # Certificate tests
+just test tests/test_docker.py     # Docker service tests
 ```
 
 ### Test Configuration
@@ -646,12 +829,12 @@ Token refresh failed - please run: proxy-client oauth login
 2. **Environment Variables Not Loaded**
    - **Cause**: Running commands outside project root or `.env` not found
    - **Solution**: Always run `just` commands from project root directory
-   - **Test**: `just echo-tokens` should show both OAUTH_ACCESS_TOKEN and OAUTH_REFRESH_TOKEN
+   - **Test**: Check `.env` file contains both OAUTH_ACCESS_TOKEN and OAUTH_REFRESH_TOKEN
 
 3. **Token Actually Expired**
    - **Cause**: Refresh token has expired (1 year lifetime)
    - **Solution**: Run `just oauth login` to get new tokens
-   - **Test**: Check token expiry with `just oauth-status`
+   - **Test**: Check token expiry with `just oauth status`
 
 4. **API Connection Issues**
    - **Cause**: API service not running or not accessible
@@ -660,8 +843,8 @@ Token refresh failed - please run: proxy-client oauth login
 
 #### Prevention
 - Always configure `auth_excluded_paths` for OAuth endpoints on localhost proxy
-- Use `just oauth-status` to monitor token validity
-- Run `just oauth-refresh` proactively before tokens expire
+- Use `just oauth status` to monitor token validity
+- Run `just oauth refresh` proactively before tokens expire
 - Ensure `.env` file has valid OAUTH_ACCESS_TOKEN and OAUTH_REFRESH_TOKEN
 
 ### Testing OAuth Token Refresh
@@ -670,10 +853,10 @@ Token refresh failed - please run: proxy-client oauth login
 curl -X POST http://localhost/token -d "grant_type=refresh_token&refresh_token=${OAUTH_REFRESH_TOKEN}&client_id=device_flow_client"
 
 # Test token refresh via client
-just oauth-refresh
+just oauth refresh
 
 # Verify new token works
-just proxy-list
+just proxy list
 ```
 
 ## Contributing
@@ -696,6 +879,6 @@ When contributing to this project:
 For issues or questions:
 - Review component documentation in respective CLAUDE.md files
 - Check [justfile.md](justfile.md) for available commands
-- Examine logs with `just logs` commands
+- Examine logs with `just log` commands
 
 ---

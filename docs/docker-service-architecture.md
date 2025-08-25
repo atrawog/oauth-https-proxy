@@ -100,7 +100,7 @@ curl -X POST http://localhost/api/v1/services \
   }'
 
 # Via just command
-just service-create my-nginx image=nginx:alpine
+just service create my-nginx nginx:alpine
 ```
 
 ### How It Works Internally

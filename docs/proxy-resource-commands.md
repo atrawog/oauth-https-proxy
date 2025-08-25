@@ -6,12 +6,12 @@ The `proxy-resource-*` commands manage the OAuth 2.0 Protected Resource Metadata
 
 ## Commands
 
-### proxy-resource-set
+### proxy resource-set
 
 Set protected resource metadata for a proxy.
 
 ```bash
-just proxy-resource-set <hostname> [token] [options]
+just proxy resource-set <hostname> [token] [options]
 ```
 
 **Parameters:**
@@ -30,12 +30,12 @@ just proxy-resource-set <hostname> [token] [options]
 
 Basic usage:
 ```bash
-just proxy-resource-set example.com
+just proxy resource-set example.com
 ```
 
 Full configuration:
 ```bash
-just proxy-resource-set example.com ADMIN \
+just proxy resource-set example.com ADMIN \
   endpoint="/api/mcp" \
   scopes="mcp:read mcp:write mcp:admin" \
   stateful="true" \
@@ -45,12 +45,12 @@ just proxy-resource-set example.com ADMIN \
   custom-metadata='{"custom_field":"value"}'
 ```
 
-### proxy-resource-clear
+### proxy resource-clear
 
 Clear protected resource metadata for a proxy.
 
 ```bash
-just proxy-resource-clear <hostname> [token]
+just proxy resource-clear <hostname> [token]
 ```
 
 **Parameters:**
@@ -59,15 +59,15 @@ just proxy-resource-clear <hostname> [token]
 
 **Example:**
 ```bash
-just proxy-resource-clear example.com
+just proxy resource-clear example.com
 ```
 
-### proxy-resource-show
+### proxy resource-show
 
 Show the current protected resource metadata configuration.
 
 ```bash
-just proxy-resource-show <hostname>
+just proxy resource-show <hostname>
 ```
 
 **Parameters:**
@@ -75,7 +75,7 @@ just proxy-resource-show <hostname>
 
 **Example:**
 ```bash
-just proxy-resource-show example.com
+just proxy resource-show example.com
 ```
 
 Output includes:
@@ -90,12 +90,12 @@ Output includes:
 - resource_documentation_suffix - Documentation URL suffix
 - custom_metadata - Custom metadata fields
 
-### test-proxy-resource
+### test tests/test_proxy_resource.py
 
 Test the protected resource metadata endpoint for a proxy.
 
 ```bash
-just test-proxy-resource <hostname>
+just test tests/test_proxy_resource.py <hostname>
 ```
 
 **Parameters:**
@@ -103,7 +103,7 @@ just test-proxy-resource <hostname>
 
 **Example:**
 ```bash
-just test-proxy-resource example.com
+just test tests/test_proxy_resource.py example.com
 ```
 
 This command:
@@ -132,7 +132,7 @@ The `/.well-known/oauth-protected-resource` endpoint returns:
 
 ### Basic MCP Resource
 ```bash
-just proxy-resource-set mcp.example.com
+just proxy resource-set mcp.example.com
 ```
 
 Result at `https://mcp.example.com/.well-known/oauth-protected-resource`:
@@ -149,7 +149,7 @@ Result at `https://mcp.example.com/.well-known/oauth-protected-resource`:
 
 ### Advanced Configuration
 ```bash
-just proxy-resource-set api.example.com ADMIN \
+just proxy resource-set api.example.com ADMIN \
   endpoint="/v1" \
   scopes="read write admin" \
   bearer-methods="header query" \
@@ -178,9 +178,9 @@ Result:
 
 The `proxy-mcp-*` commands have been renamed to `proxy-resource-*` to better reflect their purpose of managing OAuth 2.0 Protected Resource Metadata:
 
-- `proxy-mcp-enable` → `proxy-resource-set`
-- `proxy-mcp-disable` → `proxy-resource-clear`
-- `proxy-mcp-show` → `proxy-resource-show`
-- `test-proxy-mcp` → `test-proxy-resource`
+- `proxy-mcp-enable` → `proxy resource-set`
+- `proxy-mcp-disable` → `proxy resource-clear`
+- `proxy-mcp-show` → `proxy resource-show`
+- `test tests/test_proxy_resource.py` → `test tests/test_proxy_resource.py`
 
 All existing parameters are supported, with additional parameters for full metadata control.

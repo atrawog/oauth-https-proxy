@@ -69,9 +69,9 @@ if not is_admin:
 ```
 
 ### OAuth Commands
-- `just oauth-login` - Login via GitHub Device Flow
-- `just oauth-status` - Check token status  
-- `just oauth-refresh` - Refresh access token
+- `just oauth login` - Login via GitHub Device Flow
+- `just oauth status` - Check token status  
+- `just oauth refresh` - Refresh access token
 
 ## Route Management API
 

@@ -25,13 +25,13 @@ Successfully implemented the X-HackerOne-Research header feature that adds this 
   - All error responses
 
 ### 4. Command Updates (justfile)
-- Updated `proxy-resource-set` command to accept `hacker-one-research` parameter
+- Updated `proxy resource-set` command to accept `hacker-one-research` parameter
 - Fixed jq syntax error (missing `end` statement)
 
 ## Usage
 To set the X-HackerOne-Research header on a proxy:
 ```bash
-just proxy-resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] "your-email@example.com"
+just proxy resource-set <hostname> <token> [endpoint] [scopes] [stateful] [override-backend] [bearer-methods] [doc-suffix] [server-info] [custom-metadata] "your-email@example.com"
 ```
 
 ## Testing Results

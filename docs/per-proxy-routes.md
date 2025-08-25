@@ -30,11 +30,11 @@ Modified `UnifiedDispatcher.handle_http_connection()` to:
 
 ### 4. CLI Commands
 
-- `just proxy-routes-show <hostname>` - View current configuration
-- `just proxy-routes-mode <hostname> <token> <mode>` - Set route mode
-- `just proxy-route-enable <hostname> <route-id> <token>` - Enable route
-- `just proxy-route-disable <hostname> <route-id> <token>` - Disable route
-- `just proxy-routes-set <hostname> <token> <enabled> <disabled>` - Bulk update
+- `just proxy routes-show <hostname>` - View current configuration
+- `just proxy routes-mode <hostname> <token> <mode>` - Set route mode
+- `just proxy route-enable <hostname> <route-id> <token>` - Enable route
+- `just proxy route-disable <hostname> <route-id> <token>` - Disable route
+- `just proxy routes-set <hostname> <token> <enabled> <disabled>` - Bulk update
 
 ### 5. Route Modes Explained
 
@@ -57,7 +57,7 @@ Modified `UnifiedDispatcher.handle_http_connection()` to:
 
 Run comprehensive tests with:
 ```bash
-just test-proxy-routes
+just test tests/test_proxy_routes.py
 ```
 
 Tests cover:

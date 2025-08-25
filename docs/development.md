@@ -139,7 +139,7 @@ pixi run pytest tests/test_integration.py::TestHealthCheck
 pixi run pytest --cov=acme_certmanager tests/
 
 # Run against Docker services
-just test-docker
+just test tests/test_docker.py
 ```
 
 ### Writing Tests

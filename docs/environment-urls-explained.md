@@ -81,7 +81,7 @@ just token-list  # Uses API_URL internally
 ```bash
 # Use TEST_API_URL and TEST_DOMAIN
 export CERT_DOMAIN=test.atradev.org
-just cert-create test-cert $CERT_DOMAIN admin@example.com token
+just cert create test-cert $CERT_DOMAIN admin@example.com token
 ```
 
 ### For Container-to-Container
@@ -94,7 +94,7 @@ environment:
 ### For OAuth Setup
 ```bash
 # Uses BASE_DOMAIN to create auth.atradev.org
-just oauth-routes-setup atradev.org token
+just oauth routes-setup atradev.org token
 ```
 
 ## Best Practices
@@ -140,4 +140,4 @@ TEST_DOMAIN_BASE (atradev.org)
 ### "SSL certificate errors"
 - Using http:// URL where https:// is expected
 - Certificate not generated for domain
-- Check with: `just cert-list`
+- Check with: `just cert list`

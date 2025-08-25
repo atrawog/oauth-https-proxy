@@ -269,10 +269,10 @@ The OAuth service provides authentication and authorization for MCP endpoints:
 ### Configuration for MCP
 ```bash
 # Create route for MCP endpoint
-just route-create mcp-route /mcp service api 85
+just route create mcp-route /mcp service api 85
 
 # Configure OAuth for MCP (optional)
-just route-update mcp-route auth_type oauth
+just route update mcp-route auth_type oauth
 ```
 
 ### Claude.ai OAuth Flow
@@ -286,25 +286,25 @@ just route-update mcp-route auth_type oauth
 
 ```bash
 # OAuth authentication
-just oauth-login                                  # Login via GitHub Device Flow
-just oauth-status                                 # Check OAuth token status
-just oauth-refresh                                # Refresh OAuth token
+just oauth login                                  # Login via GitHub Device Flow
+just oauth status                                 # Check OAuth token status
+just oauth refresh                                # Refresh OAuth token
 
 # OAuth setup and management
-just oauth-key-generate                           # Generate RSA key for JWT signing
-just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client
+just oauth key-generate                           # Generate RSA key for JWT signing
+just oauth client-register <name> [redirect-uri] [scope]  # Register OAuth client
 
 # OAuth monitoring
-just oauth-clients-list [active-only] [page] [per-page]  # List OAuth clients
-just oauth-token-list [token-type] [client-id] [username] [page] [per-page] [include-expired]  # List OAuth tokens
-just oauth-sessions-list                          # List active sessions
-just oauth-test-tokens <server-url>               # Test OAuth configuration
+just oauth clients-list [active-only] [page] [per-page]  # List OAuth clients
+just oauth token-list [token-type] [client-id] [username] [page] [per-page] [include-expired]  # List OAuth tokens
+just oauth sessions-list                          # List active sessions
+just oauth test-tokens <server-url>               # Test OAuth configuration
 
 # Per-proxy GitHub OAuth configuration
-just proxy-github-oauth-set <hostname> <client-id> <client-secret>  # Set GitHub OAuth credentials
-just proxy-github-oauth-show <hostname>           # Show GitHub OAuth config (without secret)
-just proxy-github-oauth-clear <hostname>          # Clear GitHub OAuth config (use env vars)
-just proxy-github-oauth-list                      # List proxies with custom GitHub OAuth
+just proxy github-oauth-set <hostname> <client-id> <client-secret>  # Set GitHub OAuth credentials
+just proxy github-oauth-show <hostname>           # Show GitHub OAuth config (without secret)
+just proxy github-oauth-clear <hostname>          # Clear GitHub OAuth config (use env vars)
+just proxy github-oauth-list                      # List proxies with custom GitHub OAuth
 ```
 
 ## Protected Resource Configuration
@@ -349,6 +349,6 @@ The system is **FULLY COMPLIANT** with MCP authorization specification:
 - Per-resource access control
 
 To ensure MCP compliance for any proxy:
-1. Set protected resource metadata: `just proxy-resource-set <hostname> [endpoint] [scopes]`
-2. Enable auth on proxy: `just proxy-auth-enable <hostname> [auth-proxy] [mode]`
+1. Set protected resource metadata: `just proxy resource-set <hostname> [endpoint] [scopes]`
+2. Enable auth on proxy: `just proxy auth-enable <hostname> [auth-proxy] [mode]`
 3. Verify metadata endpoint: `curl https://<proxy>/.well-known/oauth-protected-resource`

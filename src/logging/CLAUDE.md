@@ -120,31 +120,31 @@ Access logs via the `/logs` endpoints:
 ## Log Query Commands
 
 ```bash
-just logs [hours] [event] [level] [hostname] [limit] [token]  # Show recent logs (oldest to newest)
-just logs-ip <ip> [hours] [event] [level] [limit] [token]    # Query logs by client IP
-just logs-proxy <hostname> [hours] [limit] [token]            # Query logs by proxy hostname
-just logs-hostname <hostname> [hours] [limit] [token]         # Query logs by hostname
-just logs-oauth-client <client-id> [hours] [event] [level] [limit] [token]  # Query logs by OAuth client
-just logs-search [query] [hours] [event] [level] [hostname] [limit] [token]  # Search logs with filters
-just logs-errors [hours] [limit] [token]                      # Show recent errors
-just logs-errors-debug [hours] [include-warnings] [limit] [token]  # Detailed errors with debugging
-just logs-follow [interval] [event] [level] [hostname] [token] # Follow logs in real-time with ANSI colors
-just logs-oauth <ip> [hours] [limit] [token]                  # OAuth activity summary
-just logs-oauth-debug <ip> [hours] [limit] [token]            # Full OAuth flow debugging
-just logs-oauth-flow [client-id] [username] [hours] [token]   # Track OAuth flows
-just logs-stats [hours] [token]                               # Show event statistics
-just logs-test [token]                                        # Test logging system
-just logs-user <user-id> [hours] [limit] [token]              # Query logs by user ID
-just logs-session <session-id> [hours] [limit] [token]        # Query logs by session ID
-just logs-method <method> [hours] [limit] [token]             # Query logs by HTTP method
-just logs-status <code> [hours] [limit] [token]               # Query logs by status code
-just logs-slow [threshold-ms] [hours] [limit] [token]         # Query slow requests
-just logs-path <pattern> [hours] [limit] [token]              # Query logs by path pattern
-just logs-oauth-user <username> [hours] [limit] [token]       # Query logs by OAuth username
-just logs-docker [lines] [follow]                             # Docker container logs only
-just logs-service [service] [lines]                           # Service-specific Docker logs
-just logs-clear [token]                                       # Clear all log entries from Redis
-just logs-help                                                # Show logging commands help
+just log show [hours] [event] [level] [hostname] [limit] [token]  # Show recent logs (oldest to newest)
+just log ip <ip> [hours] [event] [level] [limit] [token]    # Query logs by client IP
+just log proxy <hostname> [hours] [limit] [token]            # Query logs by proxy hostname
+just log hostname <hostname> [hours] [limit] [token]         # Query logs by hostname
+just log oauth-client <client-id> [hours] [event] [level] [limit] [token]  # Query logs by OAuth client
+just log search [query] [hours] [event] [level] [hostname] [limit] [token]  # Search logs with filters
+just log errors [hours] [limit] [token]                      # Show recent errors
+just log errors-debug [hours] [include-warnings] [limit] [token]  # Detailed errors with debugging
+just log follow [interval] [event] [level] [hostname] [token] # Follow logs in real-time with ANSI colors
+just log oauth <ip> [hours] [limit] [token]                  # OAuth activity summary
+just log oauth-debug <ip> [hours] [limit] [token]            # Full OAuth flow debugging
+just log oauth-flow [client-id] [username] [hours] [token]   # Track OAuth flows
+just log stats [hours] [token]                               # Show event statistics
+just log test [token]                                        # Test logging system
+just log user <user-id> [hours] [limit] [token]              # Query logs by user ID
+just log session <session-id> [hours] [limit] [token]        # Query logs by session ID
+just log method <method> [hours] [limit] [token]             # Query logs by HTTP method
+just log status <code> [hours] [limit] [token]               # Query logs by status code
+just log slow [threshold-ms] [hours] [limit] [token]         # Query slow requests
+just log path <pattern> [hours] [limit] [token]              # Query logs by path pattern
+just log oauth-user <username> [hours] [limit] [token]       # Query logs by OAuth username
+just log docker [lines] [follow]                             # Docker container logs only
+just log service [service] [lines]                           # Service-specific Docker logs
+just log clear [token]                                       # Clear all log entries from Redis
+just log help                                                # Show logging commands help
 ```
 
 ### Key Features
@@ -403,13 +403,13 @@ async def export_metrics():
 redis-cli ZCARD idx:req:ip:192.168.1.1
 
 # View recent errors
-just logs-errors 1 10
+just log errors 1 10
 
 # Check unique visitor count
 redis-cli PFCOUNT stats:unique_ips:api.example.com:20240115:10
 
 # Monitor real-time logs
-just logs-follow api
+just log follow api
 ```
 
 ## Related Documentation

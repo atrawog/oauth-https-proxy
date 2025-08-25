@@ -52,22 +52,22 @@ When attaching a multi-domain certificate to a proxy:
 
 #### Create Multi-Domain Certificate
 ```bash
-just cert-create-multi <cert-name> <domain1,domain2,domain3> <email> <token> [staging]
+just cert create-multi <cert-name> <domain1,domain2,domain3> <email> <token> [staging]
 # Example:
-just cert-create-multi echo-services "echo-stateful.atradev.org,echo-stateless.atradev.org" admin@example.com admin
+just cert create-multi echo-services "echo-stateful.atradev.org,echo-stateless.atradev.org" admin@example.com admin
 ```
 
 #### Create Wildcard Certificate
 ```bash
-just cert-create-wildcard <cert-name> <base-domain> <email> <token> [staging]
+just cert create-wildcard <cert-name> <base-domain> <email> <token> [staging]
 # Example:
-just cert-create-wildcard atradev-wildcard atradev.org admin@example.com admin
+just cert create-wildcard atradev-wildcard atradev.org admin@example.com admin
 # Creates cert for: *.atradev.org and atradev.org
 ```
 
 #### List Certificate Coverage
 ```bash
-just cert-coverage <cert-name>
+just cert coverage <cert-name>
 # Shows which proxies could use this certificate
 ```
 
@@ -82,7 +82,7 @@ When creating a new proxy, check existing certificates:
 #### Manual Grouping
 Allow users to specify certificate groups:
 ```bash
-just proxy-create-group <group-name> <hostnames...> <target-url> <token>
+just proxy create-group <group-name> <hostnames...> <target-url> <token>
 # Creates multiple proxies sharing one certificate
 ```
 
@@ -101,9 +101,9 @@ just proxy-create-group <group-name> <hostnames...> <target-url> <token>
    - Update manager to handle domain lists
 
 2. **CLI Commands** (High Priority)
-   - cert-create-multi command
-   - cert-create-wildcard command
-   - Update proxy-cert-attach to show domain coverage
+   - cert create-multi command
+   - cert create-wildcard command
+   - Update proxy cert-attach to show domain coverage
 
 3. **Validation & Safety** (High Priority)
    - Domain validation in proxy attachment
@@ -111,13 +111,13 @@ just proxy-create-group <group-name> <hostnames...> <target-url> <token>
    - Certificate compatibility checks
 
 4. **User Experience** (Medium Priority)
-   - cert-coverage command
+   - cert coverage command
    - Suggestions for certificate consolidation
-   - Enhanced proxy-list showing certificate efficiency
+   - Enhanced proxy list showing certificate efficiency
 
 5. **Advanced Features** (Low Priority)
    - Automatic certificate grouping
-   - proxy-create-group command
+   - proxy create-group command
    - Certificate consolidation tool
 
 ## Challenges & Solutions
@@ -132,7 +132,7 @@ just proxy-create-group <group-name> <hostnames...> <target-url> <token>
 
 ### Challenge 3: Domain Changes
 **Problem**: Adding/removing domains requires new certificate
-**Solution**: Provide cert-add-domain and cert-remove-domain commands
+**Solution**: Provide cert add-domain and cert remove-domain commands
 
 ### Challenge 4: Wildcard DNS
 **Problem**: Wildcard certificates require DNS-01 challenge
@@ -148,24 +148,24 @@ proxy-echo-stateless.atradev.org -> cert2
 proxy-fetcher.atradev.org -> cert3
 
 # New: 1 certificate
-just cert-create-multi services "echo-stateful.atradev.org,echo-stateless.atradev.org,fetcher.atradev.org" admin@example.com admin
-just proxy-cert-attach echo-stateful.atradev.org services
-just proxy-cert-attach echo-stateless.atradev.org services
-just proxy-cert-attach fetcher.atradev.org services
+just cert create-multi services "echo-stateful.atradev.org,echo-stateless.atradev.org,fetcher.atradev.org" admin@example.com admin
+just proxy cert-attach echo-stateful.atradev.org services
+just proxy cert-attach echo-stateless.atradev.org services
+just proxy cert-attach fetcher.atradev.org services
 ```
 
 ### Wildcard Setup
 ```bash
 # Create wildcard certificate
-just cert-create-wildcard myapp-wildcard myapp.com admin@example.com admin
+just cert create-wildcard myapp-wildcard myapp.com admin@example.com admin
 # Covers: *.myapp.com and myapp.com
 
 # Use for any subdomain
-just proxy-create api.myapp.com http://api:3000 admin
-just proxy-cert-attach api.myapp.com myapp-wildcard
+just proxy create api.myapp.com http://api:3000 admin
+just proxy cert-attach api.myapp.com myapp-wildcard
 
-just proxy-create app.myapp.com http://app:3000 admin
-just proxy-cert-attach app.myapp.com myapp-wildcard
+just proxy create app.myapp.com http://app:3000 admin
+just proxy cert-attach app.myapp.com myapp-wildcard
 ```
 
 ## Success Metrics

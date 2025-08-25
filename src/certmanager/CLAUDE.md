@@ -76,10 +76,10 @@ The Certificate Manager provides automated SSL/TLS certificate management using 
 
 ```bash
 # Certificate operations
-just cert-create <name> <domain> [staging] [email] [token]
-just cert-delete <name> [force] [token]
-just cert-list [token]
-just cert-show <name> [pem] [token]
+just cert create <name> <domain> [staging] [email] [token]
+just cert delete <name> [force] [token]
+just cert list [token]
+just cert show <name> [pem] [token]
 ```
 
 ## Key Features
@@ -93,14 +93,14 @@ just cert-show <name> [pem] [token]
 ### Multi-Domain Support
 Certificates can cover multiple domains:
 ```bash
-just cert-create services-cert "api.example.com,app.example.com,www.example.com"
+just cert create services-cert "api.example.com,app.example.com,www.example.com"
 ```
 
 ### Staging vs Production
 Use staging for testing to avoid rate limits:
 ```bash
-just cert-create test-cert example.com true  # Uses staging
-just cert-create prod-cert example.com false # Uses production
+just cert create test-cert example.com true  # Uses staging
+just cert create prod-cert example.com false # Uses production
 ```
 
 ### Certificate Ownership
@@ -156,10 +156,10 @@ Certificates are automatically used by proxies:
 
 ```bash
 # Check certificate status
-just cert-show <name> | jq .status
+just cert show <name> | jq .status
 
 # View certificate details
-just cert-show <name> true  # Shows PEM data
+just cert show <name> true  # Shows PEM data
 
 # Check ACME challenge endpoint
 curl http://yourdomain/.well-known/acme-challenge/test
