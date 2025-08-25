@@ -1,5 +1,6 @@
 """Protected Resource management API endpoints."""
 
+import json
 import logging
 from typing import List, Optional, Dict, Any, Tuple
 from fastapi import APIRouter, HTTPException, Depends, Request
@@ -61,23 +62,44 @@ def create_router(storage):
             raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
-        # Get all resources from Redis using SCAN for production safety
-        resources = []
-        cursor = 0
+        # Get async storage from request
+        async_storage = request.app.state.async_storage if hasattr(request.app.state, 'async_storage') else storage
         
-        while True:
-            cursor, keys = storage.redis_client.scan(cursor, match="resource:*", count=100)
-            for key in keys:
-                resource_data = storage.redis_client.get(key)
-                if resource_data:
-                    try:
-                        resource = json.loads(resource_data)
-                        resources.append(ProtectedResource(**resource))
-                    except Exception as e:
-                        logger.error(f"Failed to parse resource {key}: {e}")
-            
-            if cursor == 0:
-                break
+        # Get all resources from Redis using async operations
+        resources = []
+        
+        # Use async Redis if available
+        if hasattr(async_storage, 'redis_client') and hasattr(async_storage.redis_client, 'scan'):
+            cursor = 0
+            while True:
+                cursor, keys = await async_storage.redis_client.scan(cursor, match="resource:*", count=100)
+                for key in keys:
+                    resource_data = await async_storage.redis_client.get(key)
+                    if resource_data:
+                        try:
+                            resource = json.loads(resource_data)
+                            resources.append(ProtectedResource(**resource))
+                        except Exception as e:
+                            logger.error(f"Failed to parse resource {key}: {e}")
+                
+                if cursor == 0:
+                    break
+        else:
+            # Fallback to sync if async not available
+            cursor = 0
+            while True:
+                cursor, keys = storage.redis_client.scan(cursor, match="resource:*", count=100)
+                for key in keys:
+                    resource_data = storage.redis_client.get(key)
+                    if resource_data:
+                        try:
+                            resource = json.loads(resource_data)
+                            resources.append(ProtectedResource(**resource))
+                        except Exception as e:
+                            logger.error(f"Failed to parse resource {key}: {e}")
+                
+                if cursor == 0:
+                    break
         
         return resources
     

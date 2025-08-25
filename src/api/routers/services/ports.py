@@ -53,6 +53,10 @@ def create_ports_router(async_storage) -> APIRouter:
         """List all allocated ports across all services."""
         manager = await get_docker_manager(request)
         
+        # Check if docker manager is available
+        if manager is None:
+            return {}  # Return empty dict if no docker manager
+        
         try:
             ports = await manager.get_all_allocated_ports()
             return ports
@@ -66,6 +70,10 @@ def create_ports_router(async_storage) -> APIRouter:
     ):
         """Get available port ranges."""
         manager = await get_docker_manager(request)
+        
+        # Check if docker manager is available
+        if manager is None:
+            return []  # Return empty list if no docker manager
         
         try:
             ranges = await manager.get_available_port_ranges()
@@ -82,6 +90,15 @@ def create_ports_router(async_storage) -> APIRouter:
     ):
         """Check if a specific port is available."""
         manager = await get_docker_manager(request)
+        
+        # Check if docker manager is available
+        if manager is None:
+            return {
+                "port": port,
+                "bind_address": bind_address,
+                "available": False,
+                "message": "Docker manager not available"
+            }
         
         try:
             is_available = await manager.is_port_available(port, bind_address)

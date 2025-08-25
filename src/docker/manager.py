@@ -26,7 +26,7 @@ logger = logging.getLogger(__name__)
 class DockerManager:
     """Manages Docker services through the Docker API."""
     
-    def __init__(self, storage: RedisStorage, docker_host: str = None):
+    def __init__(self, storage: UnifiedStorage, docker_host: str = None):
         """Initialize Docker manager.
         
         Args:

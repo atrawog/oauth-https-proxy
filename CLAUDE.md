@@ -33,12 +33,107 @@ This means when testing, you must either:
 - Use absolute paths in `set dotenv-path`
 - Create test justfiles with proper dotenv-path settings
 
+### Code Change Verification (CRITICAL - Required After EVERY Change)
+
+**ALWAYS follow these steps after ANY code change, no matter how small:**
+
+1. **Restart the API Service**
+   ```bash
+   just restart  # or docker compose restart api
+   ```
+   - Code changes are NOT hot-reloaded
+   - The container must be restarted to load new code
+   - Verify restart completed: `just health`
+
+2. **Test the Changed Component**
+   ```bash
+   # Example: After changing proxy code
+   just proxy list
+   just proxy show localhost
+   
+   # Example: After changing services code
+   just service list
+   just status
+   ```
+
+3. **Check All Affected Services**
+   ```bash
+   just status        # Overall system health
+   just health        # API health check
+   just log errors    # Check for new errors
+   ```
+
+4. **Verify with the Actual Commands That Failed**
+   - Re-run the EXACT command that was failing
+   - Don't assume it works - VERIFY it works
+   - Test with proper authentication (Bearer tokens)
+
+5. **Check for Side Effects**
+   ```bash
+   # Check logs for errors or warnings
+   just log errors --limit 20
+   
+   # Monitor real-time logs while testing
+   just log follow
+   
+   # Check specific component logs
+   docker compose logs api --tail=100 | grep -i error
+   ```
+
+**Common Mistakes to Avoid:**
+- ❌ Making multiple changes without testing each one
+- ❌ Assuming the change works without verification
+- ❌ Testing with cached tokens - always refresh: `just oauth refresh`
+- ❌ Not checking logs for hidden errors
+- ❌ Forgetting that Docker doesn't hot-reload Python code
+
+**Why This Matters:**
+- Docker containers cache the code at startup
+- Import errors might only appear after restart
+- Dependencies between modules can cause cascade failures
+- Authentication state might be cached
+- A "small" change can break unrelated functionality
+
 ### Root Cause Analysis (Required Before any Code or Configuration Change)
 1. Why did it fail? (surface symptom)
 2. Why did that condition exist? (enabling circumstance)
 3. Why was it allowed? (systemic failure)
 4. Why wasn't it caught? (testing blindness)
 5. Why will it never happen again? (prevention fix)
+
+### Quick Verification Checklist
+
+**After EVERY code change, run these commands in order:**
+
+```bash
+# 1. Restart the API service
+just restart
+
+# 2. Wait for service to be ready
+sleep 5
+
+# 3. Check system health
+just health
+
+# 4. Verify overall status
+just status
+
+# 5. Check for recent errors
+just log errors --limit 10
+
+# 6. Test the specific feature you changed
+# (Replace with appropriate command for your change)
+just proxy list  # for proxy changes
+just service list  # for service changes
+just cert list  # for certificate changes
+```
+
+**If ANY step fails:**
+- Check logs: `docker compose logs api --tail=200`
+- Look for import errors or exceptions
+- Verify your code changes are correct
+- Check if dependencies are properly imported
+- Ensure type hints match actual types (e.g., UnifiedStorage vs RedisStorage)
 
 ### Security Best Practices
 - All sensitive values (tokens, passwords, secrets) should be generated securely

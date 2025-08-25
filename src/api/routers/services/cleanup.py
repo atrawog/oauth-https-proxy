@@ -66,6 +66,15 @@ def create_cleanup_router(storage) -> APIRouter:
         
         manager = await get_docker_manager(request)
         
+        # Check if docker manager is available
+        if manager is None:
+            return {
+                "message": "Docker manager not available - skipping container cleanup",
+                "containers_removed": 0,
+                "services_cleaned": 0,
+                "ports_released": 0
+            }
+        
         try:
             result = await manager.cleanup_orphaned_services()
             

@@ -8,8 +8,9 @@ and less error-prone.
 import logging
 from typing import List, Tuple, Optional
 from fastapi import FastAPI, APIRouter
+from src.shared.logger import log_info, log_debug, log_warning, log_error
 
-logger = logging.getLogger(__name__)
+logger = logging.getLogger(__name__)  # Keep for backward compat, but use log_* functions
 
 
 def register_all_routers(app: FastAPI) -> None:
@@ -25,7 +26,7 @@ def register_all_routers(app: FastAPI) -> None:
         ImportError: If a router module cannot be imported
         Exception: If router registration fails
     """
-    logger.info("Starting unified router registration...")
+    log_info("Starting unified router registration...", component="registry")
     
     # Validate required components are available
     required_components = [
@@ -58,7 +59,21 @@ def register_all_routers(app: FastAPI) -> None:
         "Certificate management endpoints"
     ))
     
-    # Token management removed - OAuth only authentication
+    # Token information endpoints
+    routers_config.append((
+        "tokens",
+        lambda: _create_tokens_router(async_storage),
+        "/tokens",
+        "Token information endpoints"
+    ))
+    
+    # System information endpoints
+    routers_config.append((
+        "system",
+        lambda: _create_system_router(),
+        "/system",
+        "System information and version"
+    ))
     
     # Proxy management
     routers_config.append((
@@ -88,14 +103,15 @@ def register_all_routers(app: FastAPI) -> None:
     
     # ========== OPTIONAL ROUTERS ===========
     
-    # Docker service management (optional)
-    if hasattr(app.state, 'docker_manager'):
-        routers_config.append((
-            "services",
-            lambda: _create_services_router(async_storage),
-            "/services",
-            "Docker service management"
-        ))
+    # Docker service management - always register it
+    # The docker_manager should be available at runtime
+    log_info("Registering services router (docker_manager will be checked at runtime)", component="registry")
+    routers_config.append((
+        "services",
+        lambda: _create_services_router(async_storage),
+        "/services",
+        "Docker service management"
+    ))
     
     # OAuth status endpoints (optional)
     if hasattr(app.state, 'oauth_components'):
@@ -207,6 +223,18 @@ def _create_certificates_router(storage, cert_manager) -> APIRouter:
     """Create certificates router."""
     from .certificates.certificates import create_router
     return create_router(storage, cert_manager)
+
+
+def _create_tokens_router(async_storage) -> APIRouter:
+    """Create tokens router."""
+    from .tokens.tokens import create_router
+    return create_router(async_storage)
+
+
+def _create_system_router() -> APIRouter:
+    """Create system router."""
+    from .system.system import create_router
+    return create_router()
 
 
 def _create_proxy_router(async_storage, cert_manager) -> APIRouter:

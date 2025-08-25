@@ -142,10 +142,10 @@ status:
     @pixi run proxy-client system health
     @echo ""
     @echo "=== Active Proxies ==="
-    @pixi run proxy-client proxy list --format table
+    @pixi run proxy-client --format table proxy list
     @echo ""
     @echo "=== Running Services ==="
-    @pixi run proxy-client service list --format table --type docker
+    @pixi run proxy-client --format table service list --type docker
 
 # Create full system backup
 backup filename="backup-$(date +%Y%m%d-%H%M%S).yaml":

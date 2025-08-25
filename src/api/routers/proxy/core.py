@@ -244,7 +244,7 @@ def create_core_router(storage, cert_manager):
         from tabulate import tabulate
         
         # Get proxy targets using existing endpoint logic
-        targets = await list_proxy_targets(request, auth)
+        targets = await list_proxy_targets(request)
         
         if format == "json":
             # Return standard JSON response
