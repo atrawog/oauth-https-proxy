@@ -57,7 +57,7 @@ def log_debug(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        asyncio.create_task(_logger.debug(message, component=component, **kwargs))
+        _logger.debug(message, component=component, **kwargs)
 
 
 def log_info(message: str, component: Optional[str] = None, **kwargs):
@@ -69,7 +69,7 @@ def log_info(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        asyncio.create_task(_logger.info(message, component=component, **kwargs))
+        _logger.info(message, component=component, **kwargs)
 
 
 def log_warning(message: str, component: Optional[str] = None, **kwargs):
@@ -81,7 +81,7 @@ def log_warning(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        asyncio.create_task(_logger.warning(message, component=component, **kwargs))
+        _logger.warning(message, component=component, **kwargs)
 
 
 def log_error(message: str, component: Optional[str] = None, error: Optional[Exception] = None, trace_id: Optional[str] = None, **kwargs):
@@ -102,7 +102,7 @@ def log_error(message: str, component: Optional[str] = None, error: Optional[Exc
         if trace_id:
             kwargs['trace_id'] = trace_id
         
-        asyncio.create_task(_logger.error(message, component=component, **kwargs))
+        _logger.error(message, component=component, **kwargs)
 
 
 def log_critical(message: str, component: Optional[str] = None, **kwargs):
@@ -114,7 +114,7 @@ def log_critical(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        asyncio.create_task(_logger.critical(message, component=component, **kwargs))
+        _logger.critical(message, component=component, **kwargs)
 
 
 def log_trace(message: str, component: Optional[str] = None, **kwargs):
@@ -126,7 +126,7 @@ def log_trace(message: str, component: Optional[str] = None, **kwargs):
         **kwargs: Additional structured data
     """
     if _logger:
-        asyncio.create_task(_logger.trace(message, component=component, **kwargs))
+        _logger.trace(message, component=component, **kwargs)
 
 
 # Specialized logging helpers

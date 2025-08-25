@@ -43,7 +43,9 @@ def create_external_router(async_storage) -> APIRouter:
         This creates a named service that routes to an external URL.
         """
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -95,7 +97,9 @@ def create_external_router(async_storage) -> APIRouter:
     ):
         """List all external services."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         try:
@@ -138,7 +142,9 @@ def create_external_router(async_storage) -> APIRouter:
     ):
         """Delete an external service registration."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         try:
@@ -177,7 +183,9 @@ def create_external_router(async_storage) -> APIRouter:
     ):
         """Get details of a specific external service."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         try:
@@ -218,7 +226,9 @@ def create_external_router(async_storage) -> APIRouter:
     ):
         """List all services (Docker and external)."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         try:

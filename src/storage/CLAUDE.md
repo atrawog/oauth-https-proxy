@@ -60,10 +60,64 @@ oauth:refresh:{token}       # OAuth refresh token data
 oauth:user_tokens:{user}    # Set of token JTIs for user
 ```
 
-### Port Management Keys
+### Port Management Keys (Redis-Based PortManager)
+
+The system uses Redis-based port management for persistence across restarts and atomic allocation:
+
 ```
-port:{port}                 # Port allocation data
+proxy:ports:mappings        # Hash of hostname to port mapping {hostname: {"http": 12001, "https": 13001}}
+port:{port}                 # Port allocation data {"port": 12001, "purpose": "proxy_http", "bind_address": "127.0.0.1"}
+ports:allocated             # Set of all allocated ports
+ports:proxy:http            # Set of allocated HTTP proxy ports (12000-12999)
+ports:proxy:https           # Set of allocated HTTPS proxy ports (13000-13999)
+ports:hypercorn:http        # Set of internal Hypercorn HTTP ports (22000-22999)
+ports:hypercorn:https       # Set of internal Hypercorn HTTPS ports (23000-23999)
+ports:internal              # Set of internal service ports (9000-10999)
+ports:exposed               # Set of exposed user service ports (14000+)
 service:ports:{service}     # Hash of service port configurations
+```
+
+#### Why Redis Port Management is Critical
+
+**Old Problem (In-Memory Tracking):**
+- Ports lost on restart → services fail to bind
+- Race conditions → multiple services claim same port
+- No visibility → can't debug port conflicts
+- Memory leaks → orphaned port allocations
+
+**Solution (Redis PortManager):**
+- **Persistent**: Port mappings survive restarts
+- **Atomic**: Redis SETNX ensures no duplicates
+- **Visible**: All allocations queryable via redis-cli
+- **Clean**: Proper cleanup on proxy deletion
+- **Deterministic**: Hash-based preferred ports for consistency
+
+#### Port Allocation Flow
+```python
+# 1. Check for existing mapping
+mapping = await redis.hget("proxy:ports:mappings", hostname)
+if mapping:
+    return json.loads(mapping)
+
+# 2. Calculate preferred port (deterministic)
+preferred_port = 13000 + (hash(hostname) % 1000)
+
+# 3. Try to allocate preferred port
+if await redis.setnx(f"port:{preferred_port}", allocation_data):
+    # Got preferred port
+    await redis.sadd("ports:proxy:https", preferred_port)
+else:
+    # Find next available port
+    for port in range(13000, 13999):
+        if await redis.setnx(f"port:{port}", allocation_data):
+            break
+
+# 4. Store mapping for persistence
+await redis.hset("proxy:ports:mappings", hostname, json.dumps({
+    "http": http_port,
+    "https": https_port,
+    "starlette": starlette_port
+}))
 ```
 
 ### Resource Keys (MCP)
@@ -305,6 +359,103 @@ async def health_check():
         "keys": await storage.dbsize()
     }
 ```
+
+## Port Management Operations
+
+### Debugging Port Allocations
+
+```bash
+# View all proxy port mappings
+redis-cli hgetall proxy:ports:mappings
+
+# Check specific proxy ports
+redis-cli hget proxy:ports:mappings localhost
+# Returns: {"http": 12000, "https": 13000, "starlette": 23000}
+
+# List all allocated ports
+redis-cli smembers ports:allocated
+
+# List HTTPS proxy ports
+redis-cli smembers ports:proxy:https
+
+# Check port allocation details
+redis-cli get port:13000
+# Returns: {"port": 13000, "purpose": "proxy_https", "hostname": "localhost"}
+
+# Find orphaned ports (allocated but no proxy)
+for port in $(redis-cli smembers ports:allocated); do
+  if ! redis-cli exists port:$port > /dev/null; then
+    echo "Orphaned: $port"
+  fi
+done
+```
+
+### Fixing Port Conflicts
+
+```bash
+# If port conflict occurs, clean up specific port
+redis-cli del port:13000
+redis-cli srem ports:allocated 13000
+redis-cli srem ports:proxy:https 13000
+
+# Force proxy to get new ports
+redis-cli hdel proxy:ports:mappings localhost
+
+# Restart to trigger reallocation
+just restart
+```
+
+### Port Ranges and Purpose
+
+- **9000-9999**: Internal services (API, etc.)
+- **12000-12999**: HTTP proxy instances (HypercornInstance with PROXY protocol)
+- **13000-13999**: HTTPS proxy instances (HypercornInstance with PROXY protocol + SSL)
+- **22000-22999**: Internal HTTP Hypercorn ports (12xxx + 10000)
+- **23000-23999**: Internal HTTPS Hypercorn ports with SSL (13xxx + 10000)
+- **14000+**: User service exposed ports
+
+## Migrating to Redis Port Management
+
+When upgrading to the Redis-based port management system:
+
+### 1. Backup Current State
+```bash
+redis-cli --rdb backup.rdb
+```
+
+### 2. Stop All Services
+```bash
+just down
+```
+
+### 3. Clear Old Port Allocations
+```bash
+redis-cli del ports:*
+redis-cli del proxy:ports:*
+redis-cli del port:*
+```
+
+### 4. Deploy New Code
+Deploy the updated codebase with Redis-based PortManager.
+
+### 5. Start Services
+```bash
+just up
+```
+
+### 6. Verify Port Mappings
+```bash
+# Check proxy port mappings
+redis-cli hgetall proxy:ports:mappings
+
+# Check allocated ports
+redis-cli smembers ports:allocated
+
+# Check specific proxy mapping
+redis-cli hget proxy:ports:mappings localhost
+```
+
+The system will automatically allocate ports for all proxies during startup reconciliation.
 
 ## Related Documentation
 

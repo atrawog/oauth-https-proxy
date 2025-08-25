@@ -2,6 +2,48 @@
 
 A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic ACME certificate management, and unified event-driven architecture. This proxy provides secure, authenticated access to backend services with automatic SSL/TLS certificate provisioning and zero-restart dynamic configuration.
 
+## Production Configuration Example
+
+The system is currently running with the following configuration:
+
+### Auto-Generated Components (Created on Startup)
+
+1. **localhost proxy**
+   - Target: http://api:9000 (internal API)
+   - Authentication: Disabled by default
+   - Purpose: Internal API access and web UI
+   - Auto-created from DEFAULT_PROXIES in src/proxy/models.py
+
+2. **Default Routes** (ACME and OAuth endpoints)
+   - `/.well-known/acme-challenge/` → API service (ACME certificate validation)
+   - `/.well-known/oauth-protected-resource` → API service (MCP OAuth metadata)
+   - `/.well-known/oauth-authorization-server` → API service (OAuth server metadata)
+   - Auto-created from DEFAULT_ROUTES in src/proxy/routes.py
+
+### Manually Configured Proxies (Example Production Setup)
+
+1. **auth.example.com** (OAuth Server)
+   ```bash
+   # Create OAuth server proxy
+   just proxy-create auth.example.com http://127.0.0.1:9000
+   just cert-create proxy-auth-example-com auth.example.com
+   ```
+   - Purpose: OAuth authentication server
+   - Endpoints: /authorize, /token, /callback, /device/*, /mcp
+
+2. **claude.example.com** (Application Proxy)
+   ```bash
+   # Create application proxy with OAuth protection
+   just proxy-create claude.example.com http://127.0.0.1:9000
+   just cert-create proxy-claude-example-com claude.example.com
+   just proxy-auth-enable claude.example.com
+   
+   # Configure GitHub user access (optional)
+   just proxy-auth-config claude.example.com "alice,bob" "" "" "" ""
+   ```
+   - Purpose: OAuth-protected application endpoint
+   - Authentication: OAuth required
+
 ## Features
 
 ### Core Proxy Capabilities
@@ -15,7 +57,8 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 - **Route Management**: Priority-based path routing with regex support
 - **External Service Management**: Named service registration for external URLs
 - **Docker Service Management**: Create and manage Docker containers dynamically
-- **Port Management**: Comprehensive port allocation with bind address control
+- **Redis-Based Port Management**: Persistent port allocation with atomic operations
+- **Deterministic Port Assignment**: Hash-based preferred ports for consistency
 - **Multi-Port Services**: Services can expose multiple ports with access controls
 - **Non-Blocking Operations**: All operations use async/await for maximum performance
 
@@ -36,7 +79,7 @@ A production-ready HTTP/HTTPS proxy with integrated OAuth 2.1 server, automatic 
 ### Developer Experience
 - **Web UI**: Built-in management interface at http://localhost
 - **Comprehensive API**: RESTful API for all operations at root level
-- **API Documentation**: Interactive Swagger UI at https://yourdomain.com/docs
+- **API Documentation**: Interactive Swagger UI at https://example.com/docs
 - **Health Monitoring**: Service health checks and metrics
 - **Hot Reload**: Update certificates and routes without downtime
 
@@ -89,13 +132,95 @@ curl -X PUT http://localhost/proxy/targets/api.example.com \
   -d '{"oauth_admin_users": ["alice"], "oauth_user_users": ["*"], "oauth_mcp_users": ["bob"]}'
 ```
 
+## System Bootstrapping
+
+### Automatic Localhost Proxy
+
+The system automatically creates a localhost proxy on startup to provide unified access to the API:
+
+1. **Why Localhost Proxy Exists**:
+   - **Unified Architecture**: ALL traffic goes through dispatcher → proxy → backend
+   - **No Direct API Access**: Port 9000 is internal only (Docker service communication)
+   - **Consistent Routing**: Localhost follows same path as all other proxies
+   - **Web UI Access**: Provides http://localhost for management interface
+   - **OAuth Ready**: Can be configured with authentication if needed
+
+2. **Automatic Creation**:
+   - Created during `initialize_default_proxies()` on startup
+   - Points to `http://127.0.0.1:9000` (API service)
+   - Gets port 12000 (first HTTP proxy port) via PortManager
+   - Configuration stored in Redis and survives restarts
+
+3. **OAuth Scope Configuration**:
+   ```bash
+   # Configure in .env before starting:
+   OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope
+   OAUTH_LOCALHOST_USER_USERS=*              # User scope for all
+   OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope
+   ```
+
+## Internal PROXY Protocol Architecture
+
+This system uses PROXY protocol **internally only** for preserving real client IPs:
+
+### How It Works
+
+```
+INTERNAL PROXY PROTOCOL FLOW (Dispatcher to Proxy Instances):
+
+Client → Dispatcher (80/443) → [PROXY protocol] → Proxy Instance (12000+)
+                            ↓
+                  Proxy validates OAuth
+                            ↓
+                  Forwards to target (API/Backend)
+
+**CRITICAL**: PROXY protocol is used INTERNALLY between dispatcher and proxy instances only!
+There are NO external load balancers using PROXY protocol.
+```
+
+### Port Architecture
+
+The system uses Redis-based PortManager for persistent port allocation:
+
+- **80/443**: Public-facing dispatcher
+- **9000**: Internal API (Docker service name: api)
+- **12000-12999**: HTTP proxy instances (Redis-allocated, persistent)
+- **13000-13999**: HTTPS proxy instances (Redis-allocated, persistent)
+- **14000+**: User services (exposed ports)
+
+Port mappings are stored in Redis (`proxy:ports:mappings`) and survive restarts. Each proxy gets deterministic ports based on hostname hash for consistency.
+
+### Docker Networking
+
+Services communicate using Docker service names:
+- API: `http://api:9000`
+- Redis: `redis:6379`
+
+This ensures proper container networking and future scalability.
+
+### Request Flow
+
+ALL requests follow the same path:
+1. Client connects to Dispatcher (port 80/443)
+2. Dispatcher routes to appropriate Proxy Instance (12000+)
+3. Proxy Instance validates OAuth
+4. Proxy Instance adds auth headers
+5. Proxy Instance forwards to target (API or external service)
+
+Localhost is NOT special - it follows the same flow through port 12000.
+
+### Client IP Preservation
+
+The PROXY protocol (used internally between dispatcher and proxy instances) preserves real client IPs for logging, rate limiting, and security purposes without requiring external load balancers.
+
 ## Quick Start
 
 ### Prerequisites
 - Docker and Docker Compose
-- A domain pointing to your server (for HTTPS)
-- GitHub OAuth App with Device Flow enabled (for authentication)
+- A domain pointing to your server (e.g., example.com)
+- GitHub OAuth App with Device Flow enabled
 - Docker socket access (for container management features)
+- Redis password (32+ random bytes recommended)
 
 **Important**: Your GitHub OAuth App MUST have Device Flow enabled:
 1. Go to GitHub Settings → Developer Settings → OAuth Apps
@@ -131,14 +256,17 @@ base64 -w 0 private.pem
 ```bash
 # Start all services (api and redis)
 just up
+# This automatically creates:
+# - localhost proxy → API (http://api:9000)
+# - Default ACME/OAuth routes
+
+# Create OAuth server proxy (required for OAuth functionality)
+just proxy-create auth.example.com http://127.0.0.1:9000
+just cert-create proxy-auth-example-com auth.example.com
 
 # Login via OAuth (device flow)
 just oauth-login
-
-# The system uses OAuth-only authentication:
-# - No bearer tokens (acm_*) 
-# - Proxy validates OAuth, API trusts headers
-# - Configure user access via environment variables
+# Follow the prompts to authenticate with GitHub
 ```
 
 ### 4. Access the Web UI
@@ -150,9 +278,9 @@ Open http://localhost in your browser to access the management interface.
 This guide walks you through deploying a complete OAuth-protected infrastructure with automatic SSL certificates.
 
 ### Prerequisites
-1. A domain name (e.g., `yourdomain.com`) with DNS control
+1. A domain name (e.g., `example.com`) with DNS control
 2. Server with Docker and Docker Compose installed
-3. GitHub OAuth App credentials
+3. GitHub OAuth App credentials (with Device Flow enabled)
 4. Ports 80 and 443 open for HTTP/HTTPS traffic
 
 ### Step 1: Environment Setup
@@ -176,7 +304,7 @@ REDIS_PASSWORD=$REDIS_PASSWORD
 # Server configuration
 HTTP_PORT=80
 HTTPS_PORT=443
-BASE_DOMAIN=yourdomain.com
+BASE_DOMAIN=example.com
 
 # ACME configuration
 ACME_DIRECTORY_URL=https://acme-v02.api.letsencrypt.org/directory
@@ -204,7 +332,7 @@ OAUTH_LOCALHOST_USER_USERS=*              # User scope for all
 OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope
 
 # Admin configuration
-ADMIN_EMAIL=admin@yourdomain.com
+ADMIN_EMAIL=admin@example.com
 
 # Docker configuration
 DOCKER_GID=$DOCKER_GID
@@ -234,22 +362,22 @@ just oauth-login
 
 ```bash
 # Create OAuth server proxy with staging certificate (for testing)
-just proxy-create auth.yourdomain.com "http://127.0.0.1:9000" staging=true
+just proxy-create auth.example.com "http://127.0.0.1:9000" staging=true
 
 # Once verified working, recreate with production certificate
-just proxy-delete auth.yourdomain.com
-just proxy-create auth.yourdomain.com "http://127.0.0.1:9000"
+just proxy-delete auth.example.com
+just proxy-create auth.example.com "http://127.0.0.1:9000"
 ```
 
 ### Step 4: Create Main Website Proxy
 
 ```bash
 # Create main website proxy with staging certificate
-just proxy-create yourdomain.com "http://127.0.0.1:9000" staging=true
+just proxy-create example.com "http://127.0.0.1:9000" staging=true
 
 # Once verified, switch to production
-just proxy-delete yourdomain.com
-just proxy-create yourdomain.com "http://127.0.0.1:9000"
+just proxy-delete example.com
+just proxy-create example.com "http://127.0.0.1:9000"
 ```
 
 ### Step 5: Deploy Protected Services
@@ -266,18 +394,18 @@ docker run -d --name my-service \
 # Register as external service
 just service-register my-service "http://my-service:3000" "My Service"
 
-# Create proxy with staging certificate
-just proxy-create service.yourdomain.com "http://my-service:3000" staging=true
+# Create proxy for the service
+just proxy-create service.example.com http://my-service:3000
+just cert-create proxy-service-example-com service.example.com
 
 # Enable OAuth protection
-just proxy-auth-enable service.yourdomain.com auth.yourdomain.com redirect
+just proxy-auth-enable service.example.com
+
+# Configure GitHub user access
+just proxy-auth-config service.example.com "alice,bob,charlie" "" "" "" ""
 
 # Optional: Configure custom GitHub OAuth App for this proxy
-# just proxy-github-oauth-set service.yourdomain.com <client-id> <client-secret>
-
-# Once verified, switch to production certificate
-just cert-delete proxy-service-yourdomain-com
-just proxy-update service.yourdomain.com --production-cert
+# just proxy-github-oauth-set service.example.com <client-id> <client-secret>
 ```
 
 ### Step 6: DNS Configuration
@@ -300,11 +428,11 @@ just health
 just proxy-list
 
 # Test OAuth flow
-curl https://echo.yourdomain.com
+curl https://echo.example.com
 # Should redirect to GitHub OAuth
 
 # Check OAuth metadata
-curl https://auth.yourdomain.com/.well-known/oauth-authorization-server
+curl https://auth.example.com/.well-known/oauth-authorization-server
 ```
 
 ### Migration from Staging to Production
@@ -406,14 +534,14 @@ curl -X PUT http://localhost/proxy/targets/api.example.com \
 #### Configure Proxy Authentication
 ```bash
 # Enable OAuth on a proxy
-just proxy-auth-enable api.yourdomain.com auth.yourdomain.com forward
+just proxy-auth-enable api.example.com auth.example.com forward
 
 # Or configure programmatically
-curl -X POST http://localhost/proxy/targets/api.yourdomain.com/auth \
+curl -X POST http://localhost/proxy/targets/api.example.com/auth \
   -H "Authorization: Bearer $OAUTH_ACCESS_TOKEN" \
   -d '{
     "enabled": true,
-    "auth_proxy": "auth.yourdomain.com",
+    "auth_proxy": "auth.example.com",
     "mode": "redirect",
     "required_users": ["alice", "bob"],
     "allowed_scopes": ["api:read", "api:write"]
@@ -424,7 +552,7 @@ curl -X POST http://localhost/proxy/targets/api.yourdomain.com/auth \
 
 ```bash
 # Create proxy with automatic certificate handling
-just proxy-create api.yourdomain.com http://backend:8080
+just proxy-create api.example.com http://backend:8080
 
 # The proxy will automatically:
 # - Check for existing certificates and use them
@@ -433,17 +561,17 @@ just proxy-create api.yourdomain.com http://backend:8080
 # - Handle certificate generation asynchronously
 
 # For staging/testing (creates staging certificate)
-just proxy-create api.yourdomain.com http://backend:8080 staging=true
+just proxy-create api.example.com http://backend:8080 staging=true
 
 # Common scenarios:
 # 1. First-time proxy with production cert
-just proxy-create echo.yourdomain.com http://service:3000
+just proxy-create echo.example.com http://service:3000
 
 # 2. Proxy with existing certificate (automatically detected)
-just proxy-create echo.yourdomain.com http://service:3000
+just proxy-create echo.example.com http://service:3000
 
 # 3. Testing with staging certificate
-just proxy-create echo.yourdomain.com http://service:3000 staging=true
+just proxy-create echo.example.com http://service:3000 staging=true
 
 # 4. HTTP-only proxy (no certificate needed)
 just proxy-create internal.local http://service:3000 staging=false preserve-host=true enable-http=true enable-https=false
@@ -453,10 +581,10 @@ just proxy-create internal.local http://service:3000 staging=false preserve-host
 
 ```bash
 # Create the auth proxy
-just proxy-create auth.yourdomain.com http://localhost:9000
+just proxy-create auth.example.com http://localhost:9000
 
 # Enable OAuth on your API proxy
-just proxy-auth-enable api.yourdomain.com auth.yourdomain.com forward
+just proxy-auth-enable api.example.com auth.example.com forward
 ```
 
 ### Docker Service Management
@@ -481,11 +609,11 @@ just service-list
 just service-port-list my-app
 
 # Create proxy for service (optional) - makes it accessible via HTTPS
-just service-proxy-create my-app hostname=service.yourdomain.com enable-https=true
+just service-proxy-create my-app hostname=service.example.com enable-https=true
 
-# Full example: Service accessible at both localhost:3000 and https://service.yourdomain.com
+# Full example: Service accessible at both localhost:3000 and https://service.example.com
 just service-create-exposed my-service my-service-image:latest 3000 127.0.0.1
-just proxy-create service.yourdomain.com http://my-service:3000
+just proxy-create service.example.com http://my-service:3000
 ```
 
 ### Port Management
@@ -526,25 +654,26 @@ just service-port-list <service>
               └──────────┘     └──────────┘    └──────────┘
 ```
 
-#### PROXY Protocol Support
+#### Internal PROXY Protocol Architecture
 
 ```
 ┌───────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│ External LB   │───▶│ Port 10001      │───▶│ Port 9000       │
-│ w/ PROXY v1   │     │ PROXY Handler   │     │ Hypercorn/API   │
+│   Client      │───▶│ Dispatcher      │───▶│ Proxy Instance  │
+│               │     │ (80/443)        │     │ (12xxx/13xxx)   │
 └───────────────┘     └─────────────────┘     └─────────────────┘
                               │
+                     [PROXY protocol header]
+                              │
                               ▼
-                          Redis Cache
-                     (Client IP storage)
+                      Preserves real client IP
 ```
 
-The PROXY protocol handler:
-- Listens on port 10001 for connections with PROXY headers
-- Parses and strips PROXY protocol v1 headers
-- Stores real client IP in Redis with connection identifiers
-- Forwards clean traffic to port 9000 (Hypercorn)
-- ASGI middleware retrieves client IP and injects headers
+The PROXY protocol is used INTERNALLY only:
+- Dispatcher adds PROXY headers when forwarding to proxy instances
+- Proxy instances (HypercornInstance) parse PROXY headers
+- Real client IPs are preserved for logging and security
+- No external load balancers required
+- Essential for client IP preservation (without it, all requests appear from 127.0.0.1)
 
 - **Unified Dispatcher**: Single component handling HTTP/HTTPS gateway, event processing, OAuth server, and certificate management
 - **Redis Storage/Events**: Stores all configuration, certificates, tokens, and processes events via Redis Streams
@@ -561,14 +690,14 @@ The PROXY protocol handler:
 5. **Forward** → Proxies request to backend service
 6. **Response** → Returns backend response to client
 
-### PROXY Protocol Flow (for Load Balancers)
+### Internal PROXY Protocol Flow
 
-1. **LB Connection** → External LB connects to port 10001 with PROXY header
-2. **Header Parsing** → PROXY handler extracts real client IP from header
-3. **IP Storage** → Client info stored in Redis with connection identifiers
-4. **Clean Forward** → Strips PROXY header, forwards to port 9000
-5. **Middleware** → ASGI middleware retrieves client IP from Redis
-6. **Header Injection** → Adds X-Real-IP and X-Forwarded-For headers
+1. **Client Connection** → Client connects to Dispatcher on port 80/443
+2. **Route Resolution** → Dispatcher determines target proxy instance
+3. **PROXY Header Addition** → Dispatcher adds PROXY protocol header with real client IP
+4. **Forward to Proxy** → Connection forwarded to proxy instance (12xxx/13xxx)
+5. **Header Parsing** → HypercornInstance extracts real client IP
+6. **OAuth Validation** → Proxy validates authentication with real client context
 
 ## Configuration
 
@@ -578,8 +707,8 @@ Key configuration in `.env`:
 
 ```bash
 # Domain Configuration
-BASE_DOMAIN=yourdomain.com          # Your base domain
-ADMIN_EMAIL=admin@yourdomain.com   # Email for certificates
+BASE_DOMAIN=example.com          # Your base domain
+ADMIN_EMAIL=admin@example.com   # Email for certificates
 API_URL=http://localhost:9000       # Base URL for API endpoints
 
 # Security
@@ -590,10 +719,10 @@ GITHUB_CLIENT_ID=<github-client-id>         # GitHub OAuth App Client ID
 GITHUB_CLIENT_SECRET=<github-client-secret> # GitHub OAuth App Client Secret
 OAUTH_JWT_PRIVATE_KEY_B64=<base64-key>      # RSA key for JWT signing
 
-# OAuth Bootstrap Users (configure which GitHub users get which scopes)
-OAUTH_LOCALHOST_ADMIN_USERS=     # Admin scope users (e.g., "alice,bob")
-OAUTH_LOCALHOST_USER_USERS=*     # User scope (* = all users)
-OAUTH_LOCALHOST_MCP_USERS=       # MCP scope users
+# OAuth Bootstrap Users for localhost proxy (configure which GitHub users get which scopes)
+OAUTH_LOCALHOST_ADMIN_USERS=alice,bob   # Admin scope users
+OAUTH_LOCALHOST_USER_USERS=*            # User scope (* = all users)
+OAUTH_LOCALHOST_MCP_USERS=charlie       # MCP scope users
 
 # Docker Management
 DOCKER_GID=999                      # Docker group GID (varies by OS)
@@ -605,9 +734,9 @@ HTTP_PORT=80
 HTTPS_PORT=443
 LOG_LEVEL=INFO
 
-# Internal Ports (for PROXY protocol support)
-# Port 9000: Direct API access (localhost-only)
-# Port 10001: PROXY protocol endpoint (accepts connections from load balancers)
+# Internal Architecture Notes
+# Port 9000: API service (internal only, accessed via Docker service name)
+# Ports 12xxx/13xxx: Proxy instances with PROXY protocol support
 ```
 
 ### Route Configuration
@@ -636,8 +765,8 @@ Each proxy can serve its own OAuth authorization server metadata with custom con
 
 ```bash
 # Configure custom OAuth server metadata for a proxy
-just proxy-oauth-server-set service.yourdomain.com \
-  "https://auth.yourdomain.com" \                    # Custom issuer
+just proxy-oauth-server-set service.example.com \
+  "https://auth.example.com" \                    # Custom issuer
   "read,write,admin" \                               # Custom scopes
   "authorization_code,refresh_token" \               # Grant types
   "code" \                                           # Response types
@@ -649,10 +778,10 @@ just proxy-oauth-server-set service.yourdomain.com \
   [token]
 
 # View OAuth server configuration
-just proxy-oauth-server-show everything.yourdomain.com
+just proxy-oauth-server-show everything.example.com
 
 # Clear custom OAuth server metadata (revert to defaults)
-just proxy-oauth-server-clear everything.yourdomain.com
+just proxy-oauth-server-clear everything.example.com
 ```
 
 This allows different proxies to:
@@ -855,7 +984,7 @@ Authorization: Bearer your-oauth-access-token
 Access the full interactive API documentation at:
 - Local: http://localhost:9000/docs (direct API access)
 - Local via proxy: http://localhost/docs
-- Production: https://yourdomain.com/docs
+- Production: https://example.com/docs
 
 ## Development
 
@@ -917,13 +1046,13 @@ oauth-https-proxy/
 - **Custom Issuers**: Override the default issuer URL per proxy
 - **Flexible Configuration**: Mix and match OAuth settings across different proxies
 
-### PROXY Protocol Support (NEW)
-- **Client IP Preservation**: HAProxy PROXY protocol v1 support for real client IPs
-- **Unified HTTP/HTTPS**: Same mechanism works for both HTTP and HTTPS traffic
-- **Redis Side Channel**: Connection-based client info storage with 60s TTL
-- **TCP-Level Handler**: Parses and strips PROXY headers before forwarding
-- **ASGI Middleware**: Automatically injects X-Real-IP and X-Forwarded-For headers
-- **Port Configuration**: Port 10001 accepts PROXY protocol, forwards to port 9000
+### Internal PROXY Protocol Support
+- **Client IP Preservation**: PROXY protocol v1 used internally between dispatcher and proxy instances
+- **Essential for Security**: Without it, all connections appear from 127.0.0.1
+- **HypercornInstance**: Handles both PROXY protocol parsing and SSL termination
+- **No External LB Required**: PROXY protocol is internal-only architecture
+- **Unified Handling**: Same mechanism for both HTTP (12xxx) and HTTPS (13xxx) proxy instances
+- **Real IPs for OAuth**: Enables proper rate limiting, logging, and security
 
 ### Port Management System (NEW)
 - **Multi-Port Services**: Services can now expose multiple ports with different bind addresses
@@ -951,10 +1080,10 @@ oauth-https-proxy/
 1. **Certificate Generation Fails**
    ```bash
    # Check ACME challenge accessibility
-   curl http://yourdomain.com/.well-known/acme-challenge/test
+   curl http://example.com/.well-known/acme-challenge/test
    
    # Use staging certificates for testing
-   just cert-create test-cert yourdomain.com admin@domain.com [token] [staging]
+   just cert-create test-cert example.com admin@domain.com [token] [staging]
    ```
 
 2. **OAuth Login Issues**

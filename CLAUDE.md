@@ -44,6 +44,7 @@ The system provides a complete reverse proxy solution with:
 - **ACME Certificate Manager**: Automatic SSL from Let's Encrypt
 - **Docker Service Management**: Container lifecycle and port management
 - **Redis Storage**: All configuration and state in Redis
+- **Redis-Based Port Management**: Persistent port allocation with atomic operations
 - **Zero-Restart Operations**: Dynamic updates without service restarts
 
 ### High-Level Components
@@ -55,11 +56,11 @@ The system provides a complete reverse proxy solution with:
 │           Event-Driven Dynamic Proxy Manager            │
 ├─────────────────────────────────────────────────────────┤
 │                                                         │
-│  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │   API    │  │  Proxy   │  │    OAuth Server      │ │
-│  │  (9000)  │  │ Instances│  │  (auth.domain.com)   │ │
-│  └──────────┘  └──────────┘  └──────────────────────┘ │
-│                                                         │
+│  ┌──────────┐  ┌──────────────┐  ┌──────────────────┐ │
+│  │   API    │  │ Proxy        │  │  OAuth Server    │ │
+│  │  (9000)  │  │ Instances    │  │(auth.domain.com) │ │
+│  └──────────┘  │(12000-13999) │  └──────────────────┘ │
+│                └──────────────┘                        │
 │  ┌──────────────────────────────────────────────────┐ │
 │  │           MCP Server (/mcp endpoint)             │ │
 │  │      Streamable HTTP Transport (SSE/JSON)        │ │
@@ -67,15 +68,44 @@ The system provides a complete reverse proxy solution with:
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │  ┌──────────┐  ┌──────────┐  ┌──────────────────────┐ │
-│  │   Cert   │  │  Docker  │  │   Redis Streams      │ │
-│  │  Manager │  │ Services │  │   Event Consumer     │ │
+│  │   Cert   │  │  Docker  │  │    Port Manager      │ │
+│  │  Manager │  │ Services │  │  (Redis-backed)      │ │
 │  └──────────┘  └──────────┘  └──────────────────────┘ │
 │                                                         │
 ├─────────────────────────────────────────────────────────┤
 │                    Redis Storage                        │
-│         (Configuration, State, Logs, Events)           │
+│    (Configuration, State, Logs, Events, Port Maps)     │
 └─────────────────────────────────────────────────────────┘
 ```
+
+## Current Architecture
+
+### The Proven Architecture Flow
+```
+Dispatcher → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Backend
+(Port 80/443) (PROXY + SSL)      (Starlette)    (OAuth + Routing)
+```
+
+### How It Works
+1. **Dispatcher** (Ports 80/443): Routes requests to proxy instances based on hostname (SNI for HTTPS)
+2. **HypercornInstance**: 
+   - Handles PROXY protocol (preserves client IPs)
+   - Terminates SSL with certificates from Redis
+   - Runs on ports 12xxx (HTTP) and 13xxx (HTTPS)
+3. **ProxyOnlyApp**: Minimal Starlette app that forwards all requests to UnifiedProxyHandler
+4. **UnifiedProxyHandler**: 
+   - Complete OAuth validation with scope checking
+   - Route matching and backend selection
+   - User allowlist enforcement
+   - 912 lines of battle-tested logic
+
+### Why This Architecture Works
+1. **PROXY Protocol is Essential**: Without it, we lose client IPs (everything would be 127.0.0.1)
+2. **SSL at Hypercorn**: Has access to certificates and application context
+3. **OAuth in UnifiedProxyHandler**: Full context for validation (routes, scopes, backends)
+4. **Clear Separation**: Each component has one responsibility
+5. **Standard Headers**: X-Forwarded-* headers are industry standard
+6. **Secure Trust Boundaries**: External X-Auth-* headers are never trusted
 
 ## Documentation Structure
 
@@ -230,9 +260,114 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 11. **Smart Certificate Handling**: Automatic detection and creation of certificates
 12. **Per-Proxy User Allowlists**: Granular GitHub user access control per proxy
 13. **Per-Proxy GitHub OAuth Apps**: Each proxy can have its own GitHub OAuth credentials
-14. **PROXY Protocol Support**: Preserves real client IPs through load balancers
+14. **PROXY Protocol Support**: Internal use only - preserves real client IPs between dispatcher and proxy instances
 15. **Unified Async Logging**: Fire-and-forget logging with Redis Streams, multiple indexes
 16. **Trust-Based API**: API endpoints read auth headers without validation
+17. **Redis-Based Port Management**: All port allocations stored persistently in Redis with atomic operations
+18. **Deterministic Port Allocation**: Hash-based preferred ports ensure consistency across restarts
+
+## Port Configuration
+
+The system uses Redis-based PortManager for all port allocations:
+
+### Port Ranges
+- **80/443**: Dispatcher (public-facing)
+- **9000**: API (internal only, accessed via Docker service name)
+- **12000-12999**: HTTP proxy instances (Redis-allocated, persistent)
+- **13000-13999**: HTTPS proxy instances (Redis-allocated, persistent)
+- **14000+**: User services (exposed ports)
+
+### Redis Port Management
+- **Persistent Mappings**: Stored in `proxy:ports:mappings` Redis hash
+- **Atomic Allocation**: No conflicts via Redis locks
+- **Deterministic**: Hash-based preferred ports for consistency
+- **Auto-Recovery**: Port mappings survive service restarts
+
+## System Bootstrapping and Initialization
+
+### Automatic Localhost Proxy Creation
+
+The system automatically creates a localhost proxy during startup to ensure the API is always accessible:
+
+1. **On System Start** (`src/main.py`):
+   - `initialize_default_proxies()` is called during component initialization
+   - This function is defined in `src/storage/redis_storage.py`
+
+2. **Default Proxy Configuration** (`src/proxy/models.py:DEFAULT_PROXIES`):
+   ```python
+   {
+       "proxy_hostname": "localhost",
+       "target_url": "http://127.0.0.1:9000",  # Points to API service
+       "enable_http": True,
+       "enable_https": False,
+       "auth_enabled": False,  # No auth by default for local access
+       "resource_scopes": ["admin", "user", "mcp"],
+       # Protected resource metadata for OAuth compliance
+   }
+   ```
+
+3. **Why Localhost Proxy is Essential**:
+   - **Unified Architecture**: ALL traffic goes through the dispatcher → proxy flow
+   - **No Direct Access**: Port 9000 (API) is internal only
+   - **Consistent Behavior**: Localhost follows same path as all other proxies
+   - **OAuth Ready**: Can enable OAuth protection if needed
+   - **MCP Support**: Provides protected resource metadata
+
+4. **Port Allocation**:
+   - Localhost proxy typically gets port 12000 (first HTTP proxy port)
+   - Port mapping stored in Redis: `proxy:ports:mappings`
+   - Survives restarts due to Redis persistence
+
+### Startup Sequence
+
+1. **Initialize Components** (`src/main.py:initialize_components()`):
+   - Redis storage connection
+   - Certificate manager
+   - Async components (logger, metrics, etc.)
+   
+2. **Initialize Default Routes** (`storage.initialize_default_routes()`):
+   - OAuth endpoints (`/authorize`, `/token`, `/callback`)
+   - ACME challenges (`/.well-known/acme-challenge/*`)
+   - Well-known endpoints (`/.well-known/*`)
+
+3. **Initialize Default Proxies** (`storage.initialize_default_proxies()`):
+   - Creates localhost proxy if missing
+   - Updates existing proxy with latest metadata
+   - Preserves user modifications (auth settings, etc.)
+
+4. **Start Dispatcher** (`src/dispatcher/unified_dispatcher.py`):
+   - Reconciles all proxies from Redis
+   - Creates HypercornInstance for each proxy
+   - Allocates ports via PortManager
+   - Starts event consumer for dynamic updates
+
+5. **API Registration** (`src/api/routers/registry.py`):
+   - All routers registered on single FastAPI app
+   - OAuth endpoints available immediately
+   - Web UI accessible at http://localhost
+
+### OAuth Bootstrap Configuration
+
+For localhost proxy, OAuth scopes are configured via environment variables:
+
+```bash
+# Who gets which scopes on localhost proxy
+OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope
+OAUTH_LOCALHOST_USER_USERS=*              # User scope for all
+OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope
+
+# Global default for new proxies
+OAUTH_ALLOWED_GITHUB_USERS=*              # Who can authenticate
+```
+
+This configuration is read during OAuth callback to determine scope assignment.
+
+## Docker Best Practices
+
+- Services reference each other by name (api, redis)
+- No hardcoded IPs for internal communication
+- API binds to 0.0.0.0:9000 for container access
+- Environment-aware configuration via RUNNING_IN_DOCKER
 
 ## Environment Configuration
 
@@ -263,8 +398,8 @@ TEST_EMAIL=test@example.com
 The system runs two Docker services:
 
 ### api Service
-- **Ports**: 80, 443, 9000 (API), 10001 (PROXY protocol)
-- **Functions**: Proxy, OAuth, certificates, API, web GUI
+- **Ports**: 80, 443 (Dispatcher), 9000 (API - internal only)
+- **Functions**: Dispatcher, Proxy instances, OAuth, certificates, API, web GUI
 - **Networks**: proxy_network
 
 ### redis Service  
@@ -387,6 +522,49 @@ oauth-https-proxy/
 ├── .env.example           # Example configuration
 └── CLAUDE.md files        # Component documentation
 ```
+
+## Architecture Decisions and Lessons Learned
+
+### Why We Don't Do "OAuth at the Edge"
+
+We attempted to implement OAuth validation at the TCP/SSL termination layer (EnhancedProxyInstance) but discovered this approach is fundamentally flawed:
+
+1. **Incomplete Context**: The edge layer doesn't know:
+   - Which backend to route to
+   - What scopes are required for each path
+   - User allowlists per proxy
+   - Route-specific authentication overrides
+   
+2. **Security Hole**: Partial validation creates vulnerabilities:
+   - Basic JWT validation (is token valid?) isn't enough
+   - You need scope checking (does user have required permissions?)
+   - You need user allowlists (is this user allowed for this proxy?)
+   - Trusting partially-validated headers is dangerous
+   
+3. **Duplication**: To do OAuth properly at the edge would require:
+   - Duplicating all routing logic
+   - Duplicating all scope requirements
+   - Duplicating all backend configurations
+   - This creates maintenance nightmares and bugs
+
+### The Correct Architecture
+
+```
+Dispatcher → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Backend
+             (PROXY + SSL)        (Starlette)    (OAuth + Routing)
+```
+
+- **HypercornInstance**: Handles PROXY protocol and SSL termination
+- **ProxyOnlyApp**: Minimal Starlette wrapper
+- **UnifiedProxyHandler**: Complete OAuth validation with full context
+- **Single Responsibility**: Each component does one thing well
+
+### Key Lessons Learned
+
+1. **Authentication needs context**: You can't validate OAuth without knowing the application requirements
+2. **Trust boundaries matter**: Never trust partial validation - either fully validate or don't
+3. **Working code > clever architecture**: The simpler solution that works is better than complex ideas
+4. **Security first**: A security hole from incomplete validation is worse than slightly later validation
 
 ## Contributing
 

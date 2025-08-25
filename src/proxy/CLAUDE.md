@@ -256,6 +256,65 @@ just proxy-github-oauth-clear <hostname> [token]
 just proxy-github-oauth-list [token]
 ```
 
+## Proxy Architecture: Simple and Secure
+
+### Component Responsibilities
+
+**HypercornInstance** (Infrastructure Layer):
+- PROXY protocol parsing for client IP preservation
+- SSL/TLS termination with certificates from Redis
+- HTTP server hosting the Starlette app
+- Manages temporary certificate files (Python SSL limitation)
+
+**ProxyOnlyApp** (Application Layer):
+- Minimal Starlette application
+- Routes all requests to UnifiedProxyHandler
+- No authentication logic (delegates to handler)
+- Handles OAuth metadata endpoint
+
+**UnifiedProxyHandler** (Security & Routing Layer):
+- Complete OAuth validation with scope checking
+- User allowlist enforcement
+- Route matching and backend selection
+- Request forwarding with proper headers
+- 912 lines of battle-tested logic
+
+### Why Not "OAuth at the Edge"?
+
+We learned that OAuth cannot be properly validated at the TCP/SSL layer because:
+
+1. **You need the full HTTP request to determine required scopes**
+   - Different paths require different scopes (/admin/* vs /api/*)
+   - Method matters (GET vs POST)
+   - Route-specific auth overrides
+
+2. **Path-based routing rules affect authentication requirements**
+   - Some paths may be public
+   - Others require specific scopes
+   - Routes can override proxy-level auth
+
+3. **Different backends may have different auth configurations**
+   - Each proxy has its own user allowlists
+   - Different OAuth configurations per proxy
+   - Backend URLs are determined by routing logic
+
+The handler needs full context to make security decisions.
+
+### The Failed EnhancedProxyInstance Experiment
+
+We tried to create EnhancedProxyInstance that would:
+- Parse PROXY protocol at TCP layer
+- Terminate SSL
+- Validate OAuth
+- Forward to Starlette
+
+This failed because:
+- It could only do basic JWT validation (is token valid?)
+- It couldn't check scopes (no path context)
+- It couldn't enforce user allowlists properly
+- It didn't know which backend to forward to
+- UnifiedProxyHandler had to trust its headers blindly, creating a security hole
+
 ## Proxy App Architecture
 
 ### Proxy App (Minimal ASGI)
@@ -283,6 +342,55 @@ Proxy creation automatically:
 1. Checks for existing certificates matching the hostname
 2. Creates new certificate if none exists (using environment defaults)
 3. Associates certificate with proxy for SSL termination
+
+## Port Allocation Lifecycle
+
+Each proxy instance gets persistent ports allocated via PortManager:
+
+1. **Check Redis**: Look for existing mapping in `proxy:ports:mappings`
+2. **Allocate Ports**: If no mapping, allocate from appropriate range
+   - HTTP: 12000-12999 (hash-based preferred port)
+   - HTTPS: 13000-13999 (hash-based preferred port)
+3. **Store Mapping**: Save allocation to Redis for persistence
+4. **Register Routes**: Register with dispatcher for traffic routing
+5. **Release on Delete**: Return ports to pool when proxy deleted
+
+### Benefits
+- **Persistent**: Same ports across restarts
+- **Deterministic**: Hash ensures similar ports for same proxy
+- **No Conflicts**: Atomic Redis operations prevent duplicates
+- **Debuggable**: All mappings visible via `redis-cli`
+
+## Localhost Proxy Configuration
+
+Localhost is treated exactly like any other proxy:
+- Gets dynamically allocated ports via PortManager (typically 12000+ range)
+- Validates OAuth tokens
+- Forwards to API at http://api:9000 (Docker service name)
+- Port mappings persist in Redis across restarts
+- NO special bypass or direct access
+
+### Docker Networking
+- Uses Docker service discovery
+- Target URL: http://api:9000 (NOT 127.0.0.1:9000)
+- Works across container boundaries
+
+## Certificate Handling for HTTPS
+
+**How Certificates Work:**
+1. Certificates are stored in Redis (no filesystem storage)
+2. When HTTPS is needed, certificates are written to temporary files
+3. Hypercorn loads certificates from these temp files via `config.certfile` and `config.keyfile`
+4. The PROXY protocol layer does NOT handle certificates or SSL
+5. Temp files are cleaned up when the instance stops
+
+**Note**: Using temporary files is a Python SSL module limitation - it cannot load certificates from memory directly.
+
+### SSL Architecture for Proxy Instances
+- **Hypercorn** handles all SSL termination internally
+- **PROXY protocol handler** is just a TCP forwarder (no SSL)
+- **Certificates** flow: Redis → Temp Files → Hypercorn config
+- **Client connections**: Go through PROXY handler as plain TCP, then Hypercorn terminates SSL
 
 ## Related Documentation
 

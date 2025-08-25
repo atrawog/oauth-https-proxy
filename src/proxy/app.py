@@ -11,6 +11,7 @@ from starlette.responses import Response, PlainTextResponse, JSONResponse
 from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.exceptions import HTTPException
 from .unified_handler import UnifiedProxyHandler
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, set_global_logger
 from ..shared.unified_logger import UnifiedAsyncLogger
@@ -42,13 +43,19 @@ class ProxyOnlyApp:
             log_warning("Proxy instance running without Redis storage", component="proxy_app")
             
         # Store async_storage for proxy handler
+        # CRITICAL: Track whether we created it or it was shared!
+        self.owns_handler_storage = False
         if async_storage:
             self.handler_storage = async_storage
+            # This is a SHARED instance - we must NOT close it!
+            self.owns_handler_storage = False
         else:
             # Create async storage from regular storage for the handler
             from ..storage.async_redis_storage import AsyncRedisStorage
             from ..shared.config import Config
             self.handler_storage = AsyncRedisStorage(Config.REDIS_URL)
+            # We created this instance - we should close it
+            self.owns_handler_storage = True
         
         # Proxy handler will be created on first request after redis_clients initialization
         self.proxy_handler = None
@@ -112,10 +119,12 @@ class ProxyOnlyApp:
             await self.redis_clients.close()
             log_info("Redis clients closed for proxy instance", component="proxy_app")
         
-        # Close async storage if we created it
-        if hasattr(self, 'handler_storage') and hasattr(self.handler_storage, 'close'):
+        # CRITICAL: Only close async storage if we created it (not if it's shared!)
+        if self.owns_handler_storage and hasattr(self, 'handler_storage') and hasattr(self.handler_storage, 'close'):
             await self.handler_storage.close()
-            log_info("Async storage closed for proxy instance", component="proxy_app")
+            log_info("Async storage closed for proxy instance (owned)", component="proxy_app")
+        elif not self.owns_handler_storage and hasattr(self, 'handler_storage'):
+            log_info("Skipping async storage close (shared instance)", component="proxy_app")
     
     async def _ensure_initialized(self):
         """Ensure the proxy handler is initialized."""
@@ -170,23 +179,37 @@ class ProxyOnlyApp:
     
     async def handle_proxy(self, request: Request) -> Response:
         """Handle all proxy requests."""
+        print(f"PROXY APP: Received request to {request.url.path}")
         try:
             # Initialize proxy handler on first request if needed
             if not self.proxy_handler:
+                print(f"PROXY APP: Initializing proxy handler")
                 await self._ensure_initialized()
                 if not self.proxy_handler:
+                    print(f"PROXY APP: Failed to initialize proxy handler")
                     return PlainTextResponse(
                         "Service initialization failed",
                         status_code=503
                     )
             # Use the enhanced proxy handler
+            print(f"PROXY APP: Calling proxy_handler.handle_request")
             return await self.proxy_handler.handle_request(request)
+        except HTTPException as he:
+            # Handle HTTPException from the proxy handler
+            print(f"PROXY APP: Caught HTTPException status={he.status_code} detail={he.detail}")
+            return PlainTextResponse(
+                str(he.detail),
+                status_code=he.status_code
+            )
         except httpx.HTTPStatusError as e:
             return PlainTextResponse(
                 f"Proxy error: {e.response.status_code}",
                 status_code=e.response.status_code
             )
         except Exception as e:
+            print(f"PROXY APP: Caught exception type={type(e).__name__}, msg={str(e)}")
+            import traceback
+            print(f"PROXY APP: Traceback: {traceback.format_exc()}")
             # Handle exceptions that might contain async generators
             try:
                 error_msg = str(e)

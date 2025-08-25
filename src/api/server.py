@@ -84,9 +84,9 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         # Initialize OAuth Redis connection
         await oauth_redis_manager.initialize()
         
-        # Initialize OAuth resource protector for unified auth
+        # Initialize OAuth resource protector (not stored in app.state)
         from .oauth.async_resource_protector import create_async_resource_protector
-        app.state.oauth_components['resource_protector'] = create_async_resource_protector(
+        resource_protector = create_async_resource_protector(
             oauth_settings,
             oauth_redis_manager.client,
             auth_manager.key_manager
@@ -110,13 +110,8 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     app.state.cert_manager = cert_manager
     app.state.scheduler = scheduler
     
-    # Store OAuth components for unified auth
-    app.state.oauth_components = {
-        'settings': oauth_settings,
-        'redis_manager': oauth_redis_manager,
-        'auth_manager': auth_manager,
-        'resource_protector': None  # Will be initialized later if needed
-    }
+    # OAuth components are initialized but not stored in app.state
+    # They're only used during startup for initialization
     
     # CRITICAL: Add ProxyHeadersMiddleware FIRST to fix redirect URLs
     # This must be added before any other middleware to ensure request.url

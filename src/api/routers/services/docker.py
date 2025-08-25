@@ -65,7 +65,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """List all Docker services."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -87,7 +89,9 @@ def create_docker_router(async_storage) -> APIRouter:
         """Create a new Docker service.
         
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -155,7 +159,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Get information about a specific service."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -175,7 +181,9 @@ def create_docker_router(async_storage) -> APIRouter:
         """Update a Docker service configuration.
         
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -209,7 +217,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Delete a Docker service and cleanup resources."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -251,7 +261,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Start a stopped service."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -280,7 +292,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Stop a running service."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -309,7 +323,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Restart a service."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -340,7 +356,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Get service logs."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
@@ -375,7 +393,9 @@ def create_docker_router(async_storage) -> APIRouter:
     ):
         """Get service resource statistics."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)

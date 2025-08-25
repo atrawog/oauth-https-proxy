@@ -22,7 +22,9 @@ def create_router(async_storage):
     ):
         """Create a new routing rule."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -158,7 +160,9 @@ def create_router(async_storage):
     ):
         """Update an existing route."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -203,7 +207,9 @@ def create_router(async_storage):
     ):
         """Delete a route."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         

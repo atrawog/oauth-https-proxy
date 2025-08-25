@@ -5,6 +5,7 @@ from typing import List, Optional
 from fastapi import APIRouter, HTTPException, Depends, BackgroundTasks, Query, Request
 
 from src.shared.logger import log_info, log_debug, log_error, log_warning
+from src.api.auth_utils import check_auth_and_scopes, require_admin, require_user
 
 
 def create_router(storage, cert_manager):
@@ -24,9 +25,8 @@ def create_router(storage, cert_manager):
         """Create a new certificate (async operation)."""
         from src.certmanager.models import CertificateRequest
         
-        # Get auth info from headers (set by proxy)
-        auth_user = req.headers.get("X-Auth-User", "system")
-        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        # Check authentication and require admin scope for certificate creation
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(req, required_scopes=["admin"])
         
         try:
             # Add cert_name if not provided
@@ -101,9 +101,8 @@ def create_router(storage, cert_manager):
         """Create a multi-domain certificate (async operation)."""
         from src.certmanager.models import MultiDomainCertificateRequest
         
-        # Get auth info from headers (set by proxy)
-        auth_user = req.headers.get("X-Auth-User", "system")
-        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
+        # Check authentication and require admin scope for certificate creation
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(req, required_scopes=["admin"])
         
         try:
             cert_request = MultiDomainCertificateRequest(**request)
@@ -179,10 +178,8 @@ def create_router(storage, cert_manager):
         req: Request
     ):
         """List all certificates."""
-        # Get auth info from headers (set by proxy)
-        auth_user = req.headers.get("X-Auth-User", "system")
-        auth_scopes = req.headers.get("X-Auth-Scopes", "").split()
-        is_admin = "admin" in auth_scopes
+        # Check authentication and require user scope for reading
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(req, required_scopes=["user"], allow_any=True)
         try:
             # Debug: Check if auth_service exists
             has_auth_service = hasattr(req.app.state, 'auth_service')

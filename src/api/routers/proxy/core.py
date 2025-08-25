@@ -17,6 +17,7 @@ from tabulate import tabulate
 # Authentication is handled by proxy, API trusts headers
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
+from src.api.auth_utils import check_auth_and_scopes, require_admin, require_user
 
 logger = logging.getLogger(__name__)
 
@@ -42,11 +43,8 @@ def create_core_router(storage, cert_manager):
         background_tasks: BackgroundTasks,
     ):
         """Create a new proxy target with optional certificate generation."""
-        # Get auth info from headers (set by proxy)
-        auth_user = req.headers.get("X-Auth-User", "system")
-        auth_scopes_header = req.headers.get("X-Auth-Scopes", "")
-        auth_scopes = auth_scopes_header.split() if auth_scopes_header else []
-        is_admin = "admin" in auth_scopes
+        # Check authentication and require admin scope for creation
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(req, required_scopes=["admin"])
         
         # Debug logging
         logger.info(f"Auth check - User: {auth_user}, Scopes header: '{auth_scopes_header}', Parsed scopes: {auth_scopes}, Is admin: {is_admin}")
@@ -216,10 +214,8 @@ def create_core_router(storage, cert_manager):
         request: Request,
     ):
         """List all proxy targets."""
-        # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
-        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
-        is_admin = "admin" in auth_scopes
+        # Check authentication and require user scope for reading
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(request, required_scopes=["user"], allow_any=True)
         
         import logging
         logger = logging.getLogger(__name__)
@@ -239,9 +235,8 @@ def create_core_router(storage, cert_manager):
         format: str = Query("table", description="Output format", enum=["table", "json", "csv"]),
     ):
         """List proxy targets with formatted output."""
-        # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
-        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
+        # Check authentication and require user scope for reading
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(request, required_scopes=["user"], allow_any=True)
         is_admin = "admin" in auth_scopes
         from fastapi.responses import PlainTextResponse
         import csv
@@ -298,6 +293,9 @@ def create_core_router(storage, cert_manager):
         proxy_hostname: str
     ):
         """Get specific proxy target details."""
+        # Check authentication and require user scope for reading
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(request, required_scopes=["user"], allow_any=True)
+        
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
         target = await async_storage.get_proxy_target(proxy_hostname)
@@ -313,10 +311,8 @@ def create_core_router(storage, cert_manager):
         updates: ProxyTargetUpdate,
     ):
         """Update proxy target configuration - admin only."""
-        # Authentication is handled by proxy, API trusts headers
-        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
-        if "admin" not in auth_scopes:
-            raise HTTPException(403, "Admin scope required for proxy updates")
+        # Check authentication and require admin scope for updates
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(request, required_scopes=["admin"])
         
         # Get async_storage from app state
         async_storage = request.app.state.async_storage
@@ -354,10 +350,8 @@ def create_core_router(storage, cert_manager):
         delete_certificate: bool = False,
     ):
         """Delete proxy target and optionally its certificate."""
-        # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
-        auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
-        is_admin = "admin" in auth_scopes
+        # Check authentication and require admin scope for deletion
+        auth_user, auth_scopes, is_admin = check_auth_and_scopes(request, required_scopes=["admin"])
         
         # Check permissions - admin scope required for mutations
         if not is_admin:

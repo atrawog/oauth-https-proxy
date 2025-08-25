@@ -418,8 +418,8 @@ class RedisStorage:
                 # Decode bytes to string if needed
                 if isinstance(key, bytes):
                     key = key.decode('utf-8')
-                # Skip client info keys (proxy:client:*) and event streams
-                if ":client:" in key or key == "proxy:events:stream":
+                # Skip client info keys (proxy:client:*), port mappings, and event streams
+                if ":client:" in key or ":ports:" in key or key == "proxy:events:stream":
                     continue
                 proxy_hostname = key.split(":", 1)[1]
                 target = self.get_proxy_target(proxy_hostname)

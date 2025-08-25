@@ -17,6 +17,9 @@ from ..storage.redis_clients import RedisClients
 from ..storage.unified_stream_publisher import UnifiedStreamPublisher
 from ..shared.dns_resolver import get_dns_resolver
 from ..shared.log_levels import TRACE, setup_trace_logging
+from ..logging.level_manager import AsyncLogLevelManager
+from ..logging.filters import AsyncLogFilter
+from ..logging.trace_context import AsyncTraceManager, get_trace_id
 
 # Set up TRACE logging level
 setup_trace_logging()
@@ -70,6 +73,11 @@ class UnifiedAsyncLogger:
         
         # Active traces for correlation
         self.active_traces: Dict[str, Dict[str, Any]] = {}
+        
+        # Initialize async managers
+        self.level_manager = AsyncLogLevelManager(redis_clients.stream_redis)
+        self.filter = AsyncLogFilter(redis_clients.stream_redis)
+        self.trace_manager = AsyncTraceManager(redis_clients.stream_redis)
     
     @property
     def component(self) -> str:
@@ -217,7 +225,7 @@ class UnifiedAsyncLogger:
                  trace_id: Optional[str] = None,
                  component: Optional[str] = None,
                  **kwargs) -> Optional[str]:
-        """Publish a log entry.
+        """Publish a log entry - never call this directly, use fire-and-forget wrappers.
         
         Args:
             level: Log level (TRACE, DEBUG, INFO, WARNING, ERROR, CRITICAL)
@@ -244,31 +252,76 @@ class UnifiedAsyncLogger:
             **kwargs
         )
     
+    async def _log_if_enabled(self, level: str, message: str,
+                             component: Optional[str] = None,
+                             trace_id: Optional[str] = None,
+                             **kwargs) -> None:
+        """Check level and filters, then log if enabled.
+        
+        This is the core async method that runs in the background.
+        """
+        try:
+            # Use provided component or instance component
+            log_component = component if component else self._component
+            
+            # Check log level (async, no caching)
+            should_log = await self.level_manager.should_log(level, log_component)
+            if not should_log:
+                return
+            
+            # Check filters (async, no caching)
+            should_filter = await self.filter.should_filter(level, message, log_component, **kwargs)
+            if should_filter:
+                return
+            
+            # Use current trace if not provided
+            if not trace_id:
+                trace_id = get_trace_id()
+            
+            # Log passed all checks
+            await self.log(level, message, trace_id, log_component, **kwargs)
+            
+        except Exception:
+            # Never let logging errors affect the application
+            pass
+    
     # Convenience methods for different log levels
     
-    async def debug(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
-        """Log a debug message."""
-        return await self.log("DEBUG", message, trace_id, component, **kwargs)
+    def debug(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Fire-and-forget debug log."""
+        asyncio.create_task(
+            self._log_if_enabled("DEBUG", message, component, trace_id, **kwargs)
+        )
     
-    async def info(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
-        """Log an info message."""
-        return await self.log("INFO", message, trace_id, component, **kwargs)
+    def info(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Fire-and-forget info log."""
+        asyncio.create_task(
+            self._log_if_enabled("INFO", message, component, trace_id, **kwargs)
+        )
     
-    async def warning(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
-        """Log a warning message."""
-        return await self.log("WARNING", message, trace_id, component, **kwargs)
+    def warning(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Fire-and-forget warning log."""
+        asyncio.create_task(
+            self._log_if_enabled("WARNING", message, component, trace_id, **kwargs)
+        )
     
-    async def error(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
-        """Log an error message."""
-        return await self.log("ERROR", message, trace_id, component, **kwargs)
+    def error(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Fire-and-forget error log."""
+        asyncio.create_task(
+            self._log_if_enabled("ERROR", message, component, trace_id, **kwargs)
+        )
     
-    async def critical(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
-        """Log a critical message."""
-        return await self.log("CRITICAL", message, trace_id, component, **kwargs)
+    def critical(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Fire-and-forget critical log."""
+        asyncio.create_task(
+            self._log_if_enabled("CRITICAL", message, component, trace_id, **kwargs)
+        )
     
-    async def trace(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
-        """Log a trace message (very verbose debugging)."""
-        return await self.log("TRACE", message, trace_id, component, **kwargs)
+    def trace(self, message: str, trace_id: Optional[str] = None, component: Optional[str] = None, **kwargs):
+        """Fire-and-forget trace log (very verbose debugging)."""
+        asyncio.create_task(
+            self._log_if_enabled("TRACE", message, component, trace_id, **kwargs)
+        )
     
     # Specialized logging methods
     

@@ -6,25 +6,57 @@ The middleware layer provides request/response processing, including PROXY proto
 
 ## PROXY Protocol Support
 
-The system supports HAProxy PROXY protocol v1 for preserving real client IPs across load balancers and reverse proxies.
+The system uses HAProxy PROXY protocol v1 INTERNALLY to preserve real client IPs between components. This is essential for security, logging, and rate limiting.
 
-### Architecture
+### Why PROXY Protocol is Essential
+
+Without PROXY protocol, all connections to proxy instances would appear to come from 127.0.0.1 (the dispatcher). This would break:
+- **Security**: Can't identify real attackers
+- **Rate Limiting**: Would rate-limit the dispatcher, not clients
+- **Logging**: All logs would show 127.0.0.1 as the source
+- **OAuth Validation**: Can't track client sessions properly
+- **Analytics**: No way to count unique visitors
+
+### The Correct Architecture
 
 ```
-External LB → Port 10001 (PROXY handler) → Port 9000 (Hypercorn)
-              ↓
-        Parses & strips PROXY header
-        Stores client info in Redis
-              ↓
-        ASGI middleware retrieves client IP
-        Injects X-Real-IP/X-Forwarded-For headers
+INTERNAL PROXY PROTOCOL FLOW:
+
+Client → Dispatcher (80/443) → [PROXY header] → HypercornInstance (12xxx/13xxx)
+                                                 ├─ PROXY Handler
+                                                 │  • Parse PROXY header
+                                                 │  • Store client IP in Redis
+                                                 └─ Hypercorn (22xxx/23xxx)
+                                                    • Terminate SSL
+                                                    • Run ProxyOnlyApp
+                                                    • UnifiedProxyHandler validates OAuth
+
+The architecture correctly separates concerns:
+1. PROXY Handler: Parses PROXY header, stores client IP in Redis
+2. Hypercorn: Terminates SSL, runs Starlette app
+3. UnifiedProxyHandler: Complete OAuth validation with full application context
+4. Clean separation: Each component does one thing well
+
+Note: PROXY protocol is used INTERNALLY between dispatcher and proxy instances only!
+There are NO external load balancers using PROXY protocol.
 ```
+
+#### Why This Architecture Works
+1. **PROXY protocol preserves client IPs**: Without it, all connections appear from 127.0.0.1
+2. **Hypercorn terminates SSL**: It has the certificates and application context
+3. **UnifiedProxyHandler validates OAuth**: It knows routes, scopes, and backends (912 lines of battle-tested logic)
+4. **Clear separation of concerns**: Each layer does one thing well
+5. **No "OAuth at the edge"**: OAuth needs full application context, not just TCP/SSL layer
 
 ### Ports
 
-- Port 9000: Direct API access (localhost-only, no PROXY protocol)
-- Port 10001: PROXY protocol v1 enabled (for external load balancers/reverse proxies)
-- Client IP preservation through Redis side channel for unified HTTP/HTTPS handling
+- Port 9000: Direct API access (internal only, Docker service)
+- Port 12000+: HTTP proxy instances with PROXY protocol
+- Port 13000+: HTTPS proxy instances with PROXY protocol
+- Port 22000+: Internal HTTP Hypercorn (12xxx + 10000)
+- Port 23000+: Internal HTTPS Hypercorn with SSL (13xxx + 10000)
+
+**CRITICAL**: PROXY protocol is only used internally for client IP preservation between dispatcher and proxy instances
 
 ## Key Components
 
@@ -103,13 +135,14 @@ Components:
 
 ### Connection Flow
 
-1. **External Load Balancer** connects to port 10001
-2. **PROXY Protocol Handler** reads and parses header
-3. **Client Info Stored** in Redis with connection details
-4. **Connection Forwarded** to port 9000 without PROXY header
-5. **ASGI Middleware** retrieves client info from Redis
-6. **Headers Injected** into HTTP request
-7. **Application** sees real client IP
+1. **Client** connects to Dispatcher on port 80 or 443
+2. **Dispatcher** determines target proxy instance based on hostname
+3. **Dispatcher** adds PROXY protocol header with real client IP
+4. **Proxy Instance** (port 12000+) receives connection with PROXY header
+5. **Proxy Instance** parses PROXY header to get real client IP
+6. **Proxy Instance** validates OAuth token if auth is enabled
+7. **Proxy Instance** forwards request to target with auth headers
+8. **Target Application** sees real client IP and auth info
 
 ### TTL Management
 
@@ -165,7 +198,7 @@ class ErrorHandlingMiddleware:
 ## Configuration
 
 ### Environment Variables
-- `PROXY_PROTOCOL_ENABLED` - Enable PROXY protocol support (default: true on port 10001)
+- `PROXY_PROTOCOL_ENABLED` - Enable PROXY protocol support (default: true for proxy instances)
 - `PROXY_CLIENT_TTL` - Redis TTL for client info (default: 60 seconds)
 
 ## Security Considerations
@@ -213,25 +246,13 @@ redis-cli KEYS "proxy:client:*"
 tail -f logs/proxy_protocol.log
 ```
 
-## Integration with Load Balancers
+## Internal PROXY Protocol Usage
 
-### HAProxy Configuration
-```
-backend api_backend
-    mode tcp
-    server api1 api.example.com:10001 send-proxy
-```
+The PROXY protocol is used INTERNALLY only between:
+- **Dispatcher** (ports 80/443): Receives client connections
+- **Proxy Instances** (ports 12000+): Process requests with OAuth validation
 
-### NGINX Configuration
-```
-stream {
-    server {
-        listen 443;
-        proxy_pass backend:10001;
-        proxy_protocol on;
-    }
-}
-```
+This is NOT for external load balancers. The dispatcher acts as the entry point and routes to appropriate proxy instances using PROXY protocol to preserve the real client IP.
 
 ## Unified IP Handling
 
@@ -239,6 +260,33 @@ The same mechanism works for both HTTP and HTTPS:
 - HTTP: Headers directly accessible
 - HTTPS: Headers injected after TLS termination
 - Consistent client IP across protocols
+
+## PROXY Protocol and SSL
+
+**CRITICAL**: The PROXY protocol handler does NOT handle SSL/TLS!
+
+- PROXY protocol is a TCP-level protocol for preserving client IPs
+- It operates BEFORE SSL termination
+- SSL is handled by the backend service (Hypercorn in our case)
+
+### Function Signature
+```python
+async def create_proxy_protocol_server(
+    backend_host: str,
+    backend_port: int, 
+    listen_host: str,
+    listen_port: int,
+    redis_client: Optional[redis.Redis] = None
+) -> asyncio.Server:
+    # Note: NO ssl_context parameter!
+```
+
+The PROXY handler simply:
+1. Accepts TCP connections
+2. Reads the PROXY protocol header
+3. Stores client info in Redis
+4. Forwards the raw TCP stream to the backend
+5. The backend (Hypercorn) handles SSL termination
 
 ## Best Practices
 

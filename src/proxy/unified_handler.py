@@ -1,9 +1,9 @@
 """Unified proxy handler - THE ONLY handler for all proxy requests with full MCP compliance."""
 import json
+import traceback
 import httpx
 import jwt
 import re
-import traceback
 from typing import Optional, List, Dict, Any
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -57,19 +57,17 @@ class UnifiedProxyHandler:
         (r".*", r"/.well-known/.*", None),
     ]
     
-    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients, oauth_components=None, proxy_hostname=None):
+    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients, proxy_hostname=None):
         """Initialize unified proxy handler.
         
         Args:
             storage: Async storage instance
             redis_clients: Redis clients for operations
-            oauth_components: OAuth components (optional)
             proxy_hostname: Hostname this handler is serving (for route filtering)
         """
         self.storage = storage
         self.redis_clients = redis_clients
         self.proxy_hostname = proxy_hostname
-        self.oauth_components = oauth_components
         
         # Initialize unified routing components
         self.normalizer = RequestNormalizer()
@@ -95,7 +93,8 @@ class UnifiedProxyHandler:
         """Extract bearer token from Authorization header."""
         auth_header = request.headers.get('authorization', '')
         if auth_header.startswith('Bearer '):
-            return auth_header[7:]
+            token = auth_header[7:]
+            return token
         return None
     
     async def _get_proxy_resource_uri(self, proxy_hostname: str) -> str:
@@ -186,19 +185,14 @@ class UnifiedProxyHandler:
         try:
             log_info(f"Starting OAuth JWT validation", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN", **log_ctx)
             
-            # Get public key for validation
-            public_key = None
-            if self.oauth_components and hasattr(self.oauth_components, 'public_key'):
-                log_info("Using public key from oauth_components", component="proxy_handler", **log_ctx)
-                public_key = self.oauth_components.public_key
-            else:
-                log_info("Attempting to get public key from Redis storage", component="proxy_handler", **log_ctx)
-                public_key = await self.storage.get_value("oauth:public_key")
-                if not public_key:
-                    log_error("CRITICAL: No OAuth public key found in Redis at oauth:public_key", component="proxy_handler", **log_ctx)
-                    return None
-                
-                log_info(f"Retrieved public key from Redis, length: {len(public_key) if public_key else 0} chars", component="proxy_handler", **log_ctx)
+            # Get public key for validation from Redis (single source of truth)
+            log_info("Getting OAuth public key from Redis", component="proxy_handler", **log_ctx)
+            public_key = await self.storage.get("oauth:public_key")
+            if not public_key:
+                log_error("No OAuth public key found in Redis at oauth:public_key", component="proxy_handler", **log_ctx)
+                return None
+            
+            log_info(f"Retrieved public key from Redis, length: {len(public_key)} chars", component="proxy_handler", **log_ctx)
             
             if public_key:
                 key_preview = public_key[:50] if len(public_key) > 50 else public_key
@@ -210,7 +204,7 @@ class UnifiedProxyHandler:
                 token,
                 public_key or Config.OAUTH_JWT_SECRET,
                 algorithms=["RS256", "HS256"],
-                options={"verify_exp": True}
+                options={"verify_exp": True, "verify_aud": False}  # We validate audience manually below
             )
             
             # Validate audience if configured
@@ -266,9 +260,16 @@ class UnifiedProxyHandler:
         return ["user"]
     
     def validate_scopes(self, token_scopes: List[str], required_scopes: List[str]) -> bool:
-        """Check if token has required scopes."""
+        """Check if token has required scopes.
+        
+        Admin scope implicitly includes user scope.
+        """
         if not required_scopes:
             return True  # No scopes required (public endpoint)
+        
+        # Admin scope includes all other scopes
+        if "admin" in token_scopes:
+            return True
         
         # Check if user has at least one required scope
         return any(scope in token_scopes for scope in required_scopes)
@@ -330,6 +331,9 @@ class UnifiedProxyHandler:
     async def _check_auth(self, request: Request, proxy_hostname: str, decision=None, log_ctx=None) -> Response:
         """Check OAuth authentication with scope validation.
         
+        NOTE: With the enhanced proxy architecture, auth is already validated at the edge.
+        This method now primarily trusts X-Auth-* headers if present.
+        
         Args:
             request: The incoming request
             proxy_hostname: The proxy hostname
@@ -341,6 +345,34 @@ class UnifiedProxyHandler:
         """
         if log_ctx is None:
             log_ctx = {}
+        
+        # Check if auth headers are already present (only trust from internal API service)
+        auth_user = request.headers.get('X-Auth-User')
+        auth_scopes = request.headers.get('X-Auth-Scopes')
+        auth_email = request.headers.get('X-Auth-Email')
+        
+        # Only trust headers from internal API service (not from external requests)
+        # This prevents security holes where external clients could bypass OAuth
+        if auth_user and request.headers.get('X-Internal-Request') == 'true':
+            # Trust the headers from internal API service only
+            log_info(f"Trusting auth headers from internal API: user={auth_user}", component="proxy_handler", **log_ctx)
+            request.state.auth_user = auth_user
+            request.state.auth_scopes = auth_scopes or ''
+            request.state.auth_email = auth_email or ''
+            
+            # Update log context
+            log_ctx.update({
+                'auth_user': auth_user,
+                'auth_scopes': auth_scopes,
+                'auth_source': 'internal_api'
+            })
+            
+            return None  # Already authenticated
+        elif auth_user:
+            # External request trying to use auth headers - security violation!
+            log_warning(f"SECURITY: External request attempted to use X-Auth headers: user={auth_user}", 
+                       component="proxy_handler", **log_ctx)
+            # Ignore the headers and continue with normal OAuth validation
             
         log_info(f"OAuth auth check for {proxy_hostname}{request.url.path}", component="proxy_handler", **log_ctx)
         
@@ -388,8 +420,9 @@ class UnifiedProxyHandler:
             log_info("No bearer token found in request", component="proxy_handler", **log_ctx)
             return await self._return_auth_error(request, proxy_target, log_ctx)
         
-        # Validate OAuth JWT
-        token_info = await self.validate_oauth_jwt(token, log_ctx)
+        # Validate OAuth JWT (add proxy_hostname to log_ctx for audience validation)
+        auth_log_ctx = {**log_ctx, 'proxy_hostname': proxy_hostname}
+        token_info = await self.validate_oauth_jwt(token, auth_log_ctx)
         if not token_info:
             log_warning("Invalid or expired OAuth token", component="proxy_handler", **log_ctx)
             return await self._return_auth_error(request, proxy_target, log_ctx, error={'error': 'invalid_token', 'error_description': 'Token is invalid or expired'})
@@ -531,8 +564,13 @@ class UnifiedProxyHandler:
         # Import the improved client IP extraction function
         from ..shared.client_ip import get_real_client_ip
         
-        # Get real client IP using improved extraction
-        client_ip = get_real_client_ip(request)
+        # Get real client IP - prefer X-Forwarded-For from enhanced proxy handler
+        if request.headers.get('X-Forwarded-For'):
+            # Trust X-Forwarded-For from enhanced proxy handler
+            client_ip = request.headers.get('X-Forwarded-For').split(',')[0].strip()
+        else:
+            # Fallback to standard extraction
+            client_ip = get_real_client_ip(request)
         
         # Get proxy hostname from request
         proxy_hostname = request.headers.get("host", "unknown").split(":")[0]
@@ -618,10 +656,10 @@ class UnifiedProxyHandler:
                     log_info("Authentication failed, returning auth error", component="proxy_handler", **log_ctx)
                     return auth_response  # Return auth error or redirect
             except Exception as e:
-                log_warning(f"Auth check failed: {e}", component="proxy_handler", **log_ctx)
-                log_warning(f"Auth check traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
-                # Continue without auth on error for now to debug
-                pass
+                log_error(f"Auth check failed with exception type: {type(e).__name__}, message: {e}", component="proxy_handler", **log_ctx)
+                log_error(f"Auth check traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
+                # Return 500 error instead of continuing without auth
+                raise HTTPException(500, f"Authentication check failed: {str(e)}")
             
             log_info(
                 f"Routing decision for {normalized.hostname}{normalized.path}: type={decision.type}, target={decision.target}, route_id={decision.route_id}",
@@ -717,6 +755,9 @@ class UnifiedProxyHandler:
             custom_headers["X-Auth-User"] = request.state.auth_user
             custom_headers["X-Auth-Scopes"] = request.state.auth_scopes
             custom_headers["X-Auth-Email"] = request.state.auth_email
+            log_info(f"Added auth headers - User: {request.state.auth_user}, Scopes: {request.state.auth_scopes}", component="proxy_handler", **log_ctx)
+        else:
+            log_warning("No auth_user in request.state, not adding auth headers", component="proxy_handler", **log_ctx)
         
         # Forward request
         return await self._make_backend_request(
@@ -724,7 +765,7 @@ class UnifiedProxyHandler:
             target_url, 
             preserve_host=decision.preserve_host,
             custom_headers=custom_headers,
-            custom_response_headers=decision.custom_response_headers,
+            custom_response_headers=getattr(decision, 'custom_response_headers', None),
             log_ctx=log_ctx
         )
     
@@ -822,6 +863,10 @@ class UnifiedProxyHandler:
                     response_headers.pop(header, None)
                 
                 log_info(f"Backend response: {response.status_code}", component="proxy_handler", **log_ctx)
+                
+                # Log error responses for debugging
+                if response.status_code >= 400:
+                    log_warning(f"Backend error response {response.status_code}: {response.text[:200]}", component="proxy_handler", **log_ctx)
                 
                 return Response(
                     content=response.content,

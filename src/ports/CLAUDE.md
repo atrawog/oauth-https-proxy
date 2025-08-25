@@ -19,9 +19,11 @@ The port management system provides comprehensive control over port allocation a
 
 ## Port Ranges
 
-- **Internal HTTP**: 9000-9999 (for internal services)
-- **Internal HTTPS**: 10000-10999 (for internal SSL services)  
-- **Exposed Ports**: 11000-65535 (for user services)
+- **Internal HTTP**: 9000-9999 (API and internal services)
+- **Internal HTTPS**: 10000-10999 (internal SSL services)
+- **Proxy HTTP**: 12000-12999 (HTTP proxy instances)
+- **Proxy HTTPS**: 13000-13999 (HTTPS proxy instances with SSL)
+- **Exposed Ports**: 14000-65535 (user-facing services)
 - **Restricted Ports**: 22, 25, 53, 80, 443, 3306, 5432, 6379, 27017 (system reserved)
 
 ## Port Schema
@@ -94,10 +96,23 @@ just service-port-add my-app 3001 0.0.0.0 "secret_token"
 curl -H "X-Source-Token: secret_token" http://host:3001
 ```
 
+## Port Purposes
+
+The PortManager supports different purpose types for allocation:
+
+- `internal_http`: Internal API services (9000-9999)
+- `internal_https`: Internal SSL services (10000-10999)  
+- `proxy_http`: HTTP proxy instances (12000-12999)
+- `proxy_https`: HTTPS proxy instances (13000-13999)
+- `exposed`: User-facing services (14000-65535)
+
 ## Port Allocation Process
 
-1. **Availability Check**: Verify port not in use
-2. **Range Validation**: Ensure port in allowed range
+1. **Check Redis Mapping**: Look for existing allocation
+2. **Availability Check**: Verify port not in use
+3. **Range Validation**: Ensure port in allowed range
+4. **Atomic Allocation**: Use Redis lock to prevent conflicts
+5. **Persistence**: Store mapping in Redis
 3. **Atomic Allocation**: Redis atomic operation prevents races
 4. **Ownership Assignment**: Port linked to service
 5. **Configuration Storage**: Port config saved to Redis

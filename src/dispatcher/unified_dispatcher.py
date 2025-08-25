@@ -12,6 +12,7 @@ import tempfile
 import struct
 import json
 import time
+import traceback
 import httpx
 from typing import Dict, Optional, List, Tuple, Set, Union
 from datetime import datetime, timezone
@@ -27,6 +28,7 @@ from .models import DomainService
 from ..shared.logger import log_info, log_warning, log_error, log_debug, log_trace
 from ..shared.config import Config
 from ..shared.unified_logger import UnifiedAsyncLogger
+from ..ports.manager import PortManager
 from ..shared.dns_resolver import get_dns_resolver
 
 # Removed correlation ID generator - using IP as primary identifier
@@ -35,8 +37,16 @@ from ..shared.dns_resolver import get_dns_resolver
 unified_server_instance = None
 
 
+# DEPRECATED: Replaced by EnhancedProxyInstance
+# This class is kept temporarily for reference but is no longer used
 class HypercornInstance:
-    """Represents a Hypercorn instance serving a specific set of domains."""
+    """Hypercorn instance serving proxy domains with SSL termination.
+    
+    This is the correct architecture where:
+    - Hypercorn handles SSL termination (it has the application context)
+    - PROXY protocol preserves client IPs
+    - UnifiedProxyHandler does complete OAuth validation with scopes
+    """
     
     def __init__(self, app, domains: List[str], http_port: int, https_port: int, 
                  cert=None, proxy_configs: Dict = None, storage=None, async_components=None):
@@ -101,8 +111,9 @@ class HypercornInstance:
             if not log_level:
                 raise ValueError("LOG_LEVEL not set in environment - required for server configuration")
             
-            # Start internal Hypercorn on a different port
-            internal_port = self.http_port + 2000  # e.g., 10002 -> 12002
+            # Start Hypercorn on a slightly different port for PROXY protocol handling
+            # Use port + 10000 to avoid conflicts (12000 -> 22000)
+            internal_port = self.http_port + 10000
             config = HypercornConfig()
             config.bind = [f"127.0.0.1:{internal_port}"]
             config.loglevel = log_level.upper()
@@ -112,8 +123,8 @@ class HypercornInstance:
             # Start internal server
             self.http_process = asyncio.create_task(serve(self.app, config))
             
-            # Start PROXY protocol handler
-            log_info(f"Starting PROXY protocol handler on port {self.http_port} -> {internal_port}", component="dispatcher")
+            # Start PROXY protocol handler that receives from dispatcher
+            log_info(f"Starting PROXY protocol receiver on port {self.http_port} -> {internal_port}", component="dispatcher")
             proxy_server = await create_proxy_protocol_server(
                 backend_host="127.0.0.1",
                 backend_port=internal_port,
@@ -143,8 +154,9 @@ class HypercornInstance:
             if not log_level:
                 raise ValueError("LOG_LEVEL not set in environment - required for server configuration")
             
-            # Start internal Hypercorn on a different port 
-            internal_port = self.https_port + 2000  # e.g., 11000 -> 13000
+            # Start Hypercorn on a slightly different port for PROXY protocol handling
+            # Use port + 10000 to avoid conflicts (13000 -> 23000)
+            internal_port = self.https_port + 10000
             config = HypercornConfig()
             config.bind = [f"127.0.0.1:{internal_port}"]
             config.certfile = self.cert_file
@@ -153,11 +165,12 @@ class HypercornInstance:
             
             log_info(f"Starting internal HTTPS instance on port {internal_port} for domains: {self.domains}", component="dispatcher")
             
-            # Start internal server
+            # Start internal server (Hypercorn handles SSL termination)
             self.https_process = asyncio.create_task(serve(self.app, config))
             
-            # Start PROXY protocol handler
-            log_info(f"Starting PROXY protocol handler on port {self.https_port} -> {internal_port}", component="dispatcher")
+            # Start PROXY protocol handler that receives from dispatcher
+            # Note: PROXY handler is just a TCP forwarder, no SSL needed here
+            log_info(f"Starting PROXY protocol receiver on port {self.https_port} -> {internal_port}", component="dispatcher")
             proxy_server = await create_proxy_protocol_server(
                 backend_host="127.0.0.1",
                 backend_port=internal_port,
@@ -284,15 +297,21 @@ class UnifiedDispatcher:
     def register_domain(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
         """Register a domain instance for specific domains and protocols."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Python logging: register_domain called for {domains}, HTTP:{http_port}, HTTPS:{https_port}, enable_http:{enable_http}, enable_https:{enable_https}")
+        
         for domain in domains:
             if enable_http:
                 # Register port for dispatcher connections (all have PROXY protocol)
                 self.hostname_to_http_port[domain] = http_port
                 log_info(f"Registered {domain} -> HTTP:{http_port}", component="dispatcher")
+                logger.info(f"Python logging: Registered {domain} -> HTTP:{http_port}")
             if enable_https:
                 # Register port for dispatcher connections (all have PROXY protocol)
                 self.hostname_to_https_port[domain] = https_port
                 log_info(f"Registered {domain} -> HTTPS:{https_port}", component="dispatcher")
+                logger.info(f"Python logging: Registered {domain} -> HTTPS:{https_port}")
             if not enable_http and not enable_https:
                 log_warning(f"Domain {domain} has no protocols enabled!", component="dispatcher")
     
@@ -681,9 +700,15 @@ class UnifiedDispatcher:
                         proxy_data = json.loads(proxy_json)
                         proxy_config = ProxyTarget(**proxy_data)
                     else:
+                        if proxy_hostname == 'localhost':
+                            log_error(f"CRITICAL: localhost proxy MUST exist but was not found in HTTP handler", component="dispatcher")
+                            raise RuntimeError("localhost proxy configuration is missing - system not properly initialized")
                         log_debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)", component="dispatcher")
                 except Exception as e:
-                    log_debug(f"Error loading proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    log_error(f"Error loading proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    if proxy_hostname == 'localhost':
+                        raise RuntimeError(f"CRITICAL: Cannot load localhost proxy config: {e}")
+                    raise
             elif self.storage:
                 # Fallback to sync storage
                 try:
@@ -692,9 +717,15 @@ class UnifiedDispatcher:
                         proxy_data = json.loads(proxy_json)
                         proxy_config = ProxyTarget(**proxy_data)
                     else:
+                        if proxy_hostname == 'localhost':
+                            log_error(f"CRITICAL: localhost proxy MUST exist but was not found in HTTP handler", component="dispatcher")
+                            raise RuntimeError("localhost proxy configuration is missing - system not properly initialized")
                         log_debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)", component="dispatcher")
                 except Exception as e:
-                    log_debug(f"Error loading proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    log_error(f"Error loading proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    if proxy_hostname == 'localhost':
+                        raise RuntimeError(f"CRITICAL: Cannot load localhost proxy config: {e}")
+                    raise
             
             # Apply route filtering based on proxy configuration
             applicable_routes = self.get_applicable_routes(proxy_config)
@@ -773,21 +804,29 @@ class UnifiedDispatcher:
             # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_http_port.get(proxy_hostname)
             if not target_port:
-                # Log available instances for debugging
-                available_http_hosts = list(self.hostname_to_http_port.keys())[:10]  # First 10
-                log_debug(
-                    "No HTTP instance found for hostname (may still be initializing)", proxy_hostname=proxy_hostname,
-                    available_http_hosts=available_http_hosts,
-                    total_http_hosts=len(self.hostname_to_http_port),
-                    named_services=list(self.named_services.keys())[:10]
-                )
-                # Send 404 response
-                response = b"HTTP/1.1 404 Not Found\r\nContent-Length: 0\r\n\r\n"
-                writer.write(response)
+                # This should NEVER happen if instances are created properly
+                available_http_hosts = list(self.hostname_to_http_port.keys())
+                log_error(f"CRITICAL: No HTTP port mapping for {proxy_hostname}", component="dispatcher")
+                log_error(f"Available mappings: {available_http_hosts}", component="dispatcher")
+                log_error(f"Total mappings: {len(self.hostname_to_http_port)}", component="dispatcher")
+                
+                # Special error for localhost
+                if proxy_hostname == 'localhost':
+                    error_msg = f"CRITICAL: localhost has no port mapping - UnifiedMultiInstanceServer not properly initialized?"
+                else:
+                    error_msg = f"CRITICAL: No port mapping for {proxy_hostname} - instance not created? This is a BUG!"
+                
+                log_error(error_msg, component="dispatcher")
+                
+                # Send 500 error response - this is a system failure
+                error_response = f"HTTP/1.1 500 Internal Server Error\r\nContent-Type: text/plain\r\nContent-Length: {len(error_msg)}\r\n\r\n{error_msg}"
+                writer.write(error_response.encode())
                 await writer.drain()
                 writer.close()
                 await writer.wait_closed()
-                return
+                
+                # Also raise to ensure it's logged
+                raise RuntimeError(error_msg)
             
             
             # Inject X-Trace-Id header into the HTTP request if we have a trace_id
@@ -871,15 +910,21 @@ class UnifiedDispatcher:
                 # Resolve client hostname
                 client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
             
-            # Get proxy config if this is a proxy domain
+            # Get proxy config for ALL domains including localhost
             proxy_config = None
-            if (self.storage or self.async_storage) and proxy_hostname not in ['localhost', '127.0.0.1']:
+            if (self.storage or self.async_storage):
                 try:
                     proxy_config = await self._get_proxy_target(proxy_hostname)
                     if proxy_config is None:
+                        if proxy_hostname == 'localhost':
+                            log_error(f"CRITICAL: localhost proxy MUST exist but was not found", component="dispatcher")
+                            raise RuntimeError("localhost proxy configuration is missing - database corrupted?")
                         log_debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)", component="dispatcher")
                 except Exception as e:
-                    log_debug(f"Error getting proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    log_error(f"Error getting proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    if proxy_hostname == 'localhost':
+                        raise RuntimeError(f"CRITICAL: Cannot get localhost proxy config: {e}")
+                    raise
             
             # For HTTPS, we cannot parse HTTP request info from TLS handshake data
             # Route matching must be handled by the proxy instances after TLS termination
@@ -894,26 +939,29 @@ class UnifiedDispatcher:
                     wildcard = f"*.{'.'.join(parts[1:])}"
                     target_port = self.hostname_to_https_port.get(wildcard)
             
-            # Special handling for localhost - route to API instance
-            if not target_port and proxy_hostname in ['localhost', '127.0.0.1']:
-                # Route localhost to the API instance via named instance (HTTPS not available, use HTTP)
-                log_debug(f"HTTPS requested for localhost, but API doesn't have HTTPS configured", component="dispatcher")
-                writer.close()
-                await writer.wait_closed()
-                return
+            # No special handling for localhost - treat it like any other proxy
             
             if not target_port:
-                # Log available instances for debugging
-                available_https_hosts = list(self.hostname_to_https_port.keys())[:10]  # First 10
-                log_debug(
-                    "No HTTPS instance found for hostname (may still be initializing)", proxy_hostname=proxy_hostname,
-                    available_https_hosts=available_https_hosts,
-                    total_https_hosts=len(self.hostname_to_https_port),
-                    named_services=list(self.named_services.keys())[:10]
-                )
+                # This should NEVER happen if instances are created properly
+                available_https_hosts = list(self.hostname_to_https_port.keys())
+                log_error(f"CRITICAL: No HTTPS port mapping for {proxy_hostname}", component="dispatcher")
+                log_error(f"Available HTTPS mappings: {available_https_hosts}", component="dispatcher")
+                log_error(f"Total HTTPS mappings: {len(self.hostname_to_https_port)}", component="dispatcher")
+                
+                # Special error for localhost
+                if proxy_hostname == 'localhost':
+                    error_msg = f"CRITICAL: localhost has no HTTPS port mapping - UnifiedMultiInstanceServer not properly initialized?"
+                else:
+                    error_msg = f"CRITICAL: No HTTPS port mapping for {proxy_hostname} - instance not created? This is a BUG!"
+                
+                log_error(error_msg, component="dispatcher")
+                
+                # Close connection - can't send HTTP error over TLS handshake
                 writer.close()
                 await writer.wait_closed()
-                return
+                
+                # Raise to ensure it's logged
+                raise RuntimeError(error_msg)
             
             # Determine if this is a named instance or proxy target
             service_name = None
@@ -1122,8 +1170,12 @@ class UnifiedMultiInstanceServer:
         
         # Pass storage and async components to dispatcher for route management
         self.dispatcher = UnifiedDispatcher(host, storage, async_components)
-        self.next_http_port = 10002   # Starting port for HTTP instances (10001 reserved for API)
-        self.next_https_port = 11000  # Starting port for HTTPS instances
+        
+        # Initialize PortManager for Redis-based port allocation
+        self.port_manager = PortManager(storage)
+        
+        # Redis client for port mappings
+        self.redis = storage.redis_client if storage else None
         
     async def create_instance_for_proxy(self, proxy_hostname: str):
         """Dynamically create and start an instance for a proxy target."""
@@ -1189,13 +1241,66 @@ class UnifiedMultiInstanceServer:
         else:
             log_info(f"[PROXY_CREATE] HTTPS is disabled for {proxy_hostname}", component="dispatcher")
         
+        # Check Redis for existing port mapping first
+        http_port = None
+        https_port = None
+        
+        if self.redis:
+            mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+            if mapping_data:
+                mapping = json.loads(mapping_data)
+                http_port = mapping.get("http")
+                https_port = mapping.get("https")
+                log_info(f"[PROXY_CREATE] Found existing port mapping for {proxy_hostname}: HTTP:{http_port}, HTTPS:{https_port}", 
+                        component="dispatcher")
+        
+        # Allocate ports if not found in Redis
+        if not http_port:
+            # Use hash-based preferred port for deterministic allocation
+            preferred_http = 12000 + (hash(proxy_hostname) % 1000)
+            http_port = await self.port_manager.allocate_port(
+                purpose="proxy_http",
+                preferred=preferred_http,
+                bind_address="127.0.0.1"
+            )
+            if not http_port:
+                log_error(f"[PROXY_CREATE] No HTTP ports available for {proxy_hostname}", component="dispatcher")
+                return
+            log_info(f"[PROXY_CREATE] Allocated HTTP port {http_port} for {proxy_hostname}", component="dispatcher")
+        
+        if not https_port and proxy_target.enable_https:
+            preferred_https = 13000 + (hash(proxy_hostname) % 1000)
+            https_port = await self.port_manager.allocate_port(
+                purpose="proxy_https",
+                preferred=preferred_https,
+                bind_address="127.0.0.1"
+            )
+            if not https_port:
+                # Release HTTP port if HTTPS allocation fails
+                await self.port_manager.release_port(http_port)
+                log_error(f"[PROXY_CREATE] No HTTPS ports available for {proxy_hostname}", component="dispatcher")
+                return
+            log_info(f"[PROXY_CREATE] Allocated HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
+        elif not proxy_target.enable_https:
+            https_port = 13000  # Default for instances without HTTPS
+        
+        # Store port mapping in Redis for persistence
+        if self.redis:
+            mapping = {
+                "http": http_port,
+                "https": https_port,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
+            log_debug(f"[PROXY_CREATE] Stored port mapping for {proxy_hostname} in Redis", component="dispatcher")
+        
         # Create instance - this is a proxy-only instance
-        log_info(f"[PROXY_CREATE] Creating HypercornInstance for {proxy_hostname} on ports HTTP:{self.next_http_port}, HTTPS:{self.next_https_port}", component="dispatcher")
+        log_info(f"[PROXY_CREATE] Creating HypercornInstance for {proxy_hostname} on ports HTTP:{http_port}, HTTPS:{https_port}", component="dispatcher")
         instance = HypercornInstance(
             app=None,  # Will create its own proxy app
             domains=[proxy_hostname],
-            http_port=self.next_http_port,
-            https_port=self.next_https_port,
+            http_port=http_port,
+            https_port=https_port,
             cert=cert,
             proxy_configs={proxy_hostname: proxy_target},
             storage=self.storage,  # Use the storage passed to UnifiedMultiInstanceServer
@@ -1214,15 +1319,12 @@ class UnifiedMultiInstanceServer:
         log_info(f"[PROXY_CREATE] Registering {proxy_hostname} with dispatcher - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}", component="dispatcher")
         self.dispatcher.register_domain(
             [proxy_hostname], 
-            self.next_http_port, 
-            self.next_https_port,
+            http_port, 
+            https_port,
             enable_http=proxy_target.enable_http,
             enable_https=https_ready  # Only enable HTTPS routing if cert is available
         )
         log_info(f"[PROXY_CREATE] Domain {proxy_hostname} registered with dispatcher", component="dispatcher")
-        
-        self.next_http_port += 1
-        self.next_https_port += 1
         
         log_info(
             f"[PROXY_CREATE] ✅ Successfully created proxy instance for {proxy_hostname} - "
@@ -1293,8 +1395,13 @@ class UnifiedMultiInstanceServer:
     
     async def handle_unified_event(self, event: dict):
         """ONE handler for ALL events - simple and direct."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         event_type = event.get('event_type') or event.get('type')
         proxy_hostname = event.get('proxy_hostname')
+        
+        logger.info(f"Python logging: Processing event {event_type} for {proxy_hostname}")
         
         # Special handling for certificate_ready - it has domains instead of proxy_hostname
         if event_type == 'certificate_ready':
@@ -1332,17 +1439,17 @@ class UnifiedMultiInstanceServer:
                      component="dispatcher", error=e)
     
     async def _ensure_instance_exists(self, proxy_hostname: str):
-        """Create instance if it doesn't exist - idempotent."""
+        """Create instance if it doesn't exist - FAIL LOUDLY if anything goes wrong."""
         # Skip if already exists
         if proxy_hostname in self.instances:
             log_debug(f"[UNIFIED] Instance already exists for {proxy_hostname}", component="dispatcher")
             return
         
-        # Get proxy configuration
+        # Get proxy configuration - MUST exist
         proxy_target = await self.dispatcher._get_proxy_target(proxy_hostname)
         if not proxy_target:
-            log_warning(f"[UNIFIED] No proxy config for {proxy_hostname}", component="dispatcher")
-            return
+            log_error(f"CRITICAL: No proxy config for {proxy_hostname} - cannot create instance", component="dispatcher")
+            raise RuntimeError(f"Cannot create instance for {proxy_hostname} - proxy configuration not found in database")
         
         log_info(f"[UNIFIED] Creating instance for {proxy_hostname}", component="dispatcher")
         
@@ -1356,39 +1463,95 @@ class UnifiedMultiInstanceServer:
                     https_ready = True
                     log_info(f"[UNIFIED] Certificate ready for {proxy_hostname}", component="dispatcher")
         
-        # Create instance
-        instance = HypercornInstance(
-            app=None,  # Will create its own proxy app
-            domains=[proxy_hostname],
-            http_port=self.next_http_port,
-            https_port=self.next_https_port,
-            cert=cert,
-            proxy_configs={proxy_hostname: proxy_target},
-            storage=self.storage,
-            async_components=self.async_components
-        )
+        # Check Redis for existing port mapping first
+        http_port = None
+        https_port = None
         
-        # Start it
-        await instance.start()
+        if self.redis:
+            mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+            if mapping_data:
+                mapping = json.loads(mapping_data)
+                http_port = mapping.get("http")
+                https_port = mapping.get("https")
+                log_info(f"[UNIFIED] Found existing port mapping for {proxy_hostname}: HTTP:{http_port}, HTTPS:{https_port}", 
+                        component="dispatcher")
         
-        # Track it
-        self.instances[proxy_hostname] = instance
-        self.instance_states[proxy_hostname] = "running"
+        # Allocate ports if not found in Redis
+        if not http_port:
+            # Use hash-based preferred port for deterministic allocation
+            preferred_http = 12000 + (hash(proxy_hostname) % 1000)
+            http_port = await self.port_manager.allocate_port(
+                purpose="proxy_http",
+                preferred=preferred_http,
+                bind_address="127.0.0.1"
+            )
+            if not http_port:
+                raise RuntimeError(f"No HTTP ports available for {proxy_hostname}")
+            log_info(f"[UNIFIED] Allocated HTTP port {http_port} for {proxy_hostname}", component="dispatcher")
         
-        # Register routes
-        self.dispatcher.register_domain(
-            [proxy_hostname],
-            self.next_http_port,
-            self.next_https_port,
-            enable_http=proxy_target.enable_http,
-            enable_https=https_ready
-        )
+        if not https_port and proxy_target.enable_https:
+            preferred_https = 13000 + (hash(proxy_hostname) % 1000)
+            https_port = await self.port_manager.allocate_port(
+                purpose="proxy_https",
+                preferred=preferred_https,
+                bind_address="127.0.0.1"
+            )
+            if not https_port:
+                # Release HTTP port if HTTPS allocation fails
+                await self.port_manager.release_port(http_port)
+                raise RuntimeError(f"No HTTPS ports available for {proxy_hostname}")
+            log_info(f"[UNIFIED] Allocated HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
+        elif not proxy_target.enable_https:
+            https_port = 13000  # Default for instances without HTTPS
         
-        self.next_http_port += 1
-        self.next_https_port += 1
+        # Store port mapping in Redis for persistence
+        if self.redis:
+            mapping = {
+                "http": http_port,
+                "https": https_port,
+                "created_at": datetime.now(timezone.utc).isoformat()
+            }
+            self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
+            log_debug(f"[UNIFIED] Stored port mapping for {proxy_hostname} in Redis", component="dispatcher")
         
-        log_info(f"✅ [UNIFIED] Instance created for {proxy_hostname} - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}", 
-                component="dispatcher")
+        # Create Hypercorn instance - MUST succeed
+        try:
+            # HypercornInstance is in this same file
+            # Create the instance with the allocated ports
+            instance = HypercornInstance(
+                app=None,  # Will be created by HypercornInstance
+                domains=[proxy_hostname],
+                http_port=http_port,
+                https_port=https_port,
+                cert=cert if https_ready else None,
+                proxy_configs={proxy_hostname: proxy_target},
+                storage=self.storage,
+                async_components=self.async_components
+            )
+            
+            # Start it - MUST succeed
+            await instance.start()
+            
+            # Track it
+            self.instances[proxy_hostname] = instance
+            self.instance_states[proxy_hostname] = "running"
+            
+            # Register routes - MUST succeed
+            self.dispatcher.register_domain(
+                [proxy_hostname],
+                http_port,
+                https_port,
+                enable_http=proxy_target.enable_http,
+                enable_https=https_ready
+            )
+            
+            log_info(f"✅ [UNIFIED] Instance created for {proxy_hostname} - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}", 
+                    component="dispatcher")
+                    
+        except Exception as e:
+            log_error(f"CRITICAL: Instance creation failed for {proxy_hostname}: {e}", component="dispatcher")
+            log_error(f"Traceback: {traceback.format_exc()}", component="dispatcher")
+            raise RuntimeError(f"Cannot create instance for {proxy_hostname}: {e}")
     
     async def _remove_instance(self, proxy_hostname: str):
         """Remove instance for a proxy."""
@@ -1397,6 +1560,26 @@ class UnifiedMultiInstanceServer:
             return
         
         instance = self.instances[proxy_hostname]
+        
+        # Get port mapping from Redis to release ports
+        if self.redis:
+            mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+            if mapping_data:
+                mapping = json.loads(mapping_data)
+                http_port = mapping.get("http")
+                https_port = mapping.get("https")
+                
+                # Release ports back to the pool
+                if http_port:
+                    await self.port_manager.release_port(http_port)
+                    log_debug(f"[UNIFIED] Released HTTP port {http_port} for {proxy_hostname}", component="dispatcher")
+                if https_port and https_port != 13000:  # Don't release default HTTPS port
+                    await self.port_manager.release_port(https_port)
+                    log_debug(f"[UNIFIED] Released HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
+                
+                # Remove mapping from Redis
+                self.redis.hdel("proxy:ports:mappings", proxy_hostname)
+                log_debug(f"[UNIFIED] Removed port mapping for {proxy_hostname} from Redis", component="dispatcher")
         
         # Stop the instance
         await instance.stop()
@@ -1442,121 +1625,16 @@ class UnifiedMultiInstanceServer:
                     )
                     log_info(f"✅ [UNIFIED] HTTPS enabled for {proxy_hostname}", component="dispatcher")
     
-    async def _ensure_localhost_proxy(self):
-        """Ensure localhost proxy exists with OAuth configuration if not manually configured."""
-        try:
-            localhost = None
-            
-            # Get existing localhost proxy
-            if self.dispatcher.async_storage:
-                localhost = await self.dispatcher.async_storage.get_proxy_target("localhost")
-            elif self.storage:
-                localhost = self.storage.get_proxy_target("localhost")
-            
-            needs_update = False
-            
-            if not localhost:
-                # Create new localhost proxy
-                log_info("Creating localhost proxy with OAuth configuration", component="dispatcher")
-                localhost = ProxyTarget(
-                    proxy_hostname="localhost",
-                    target_url="http://127.0.0.1:9000",
-                    cert_name=None,  # No certificate for localhost
-                    owner_token_hash="system",
-                    created_by="system",
-                    created_at=datetime.now(timezone.utc),
-                    enabled=True,
-                    enable_http=True,
-                    enable_https=False,  # No HTTPS for localhost
-                    preserve_host_header=True,
-                    custom_headers=None,
-                    custom_response_headers=None,
-                    
-                    # OAuth will be configured below
-                    auth_enabled=True,
-                    auth_proxy="localhost",  # Self-referential for OAuth
-                    auth_mode="redirect",  # Redirect to OAuth for auth
-                    auth_required_users=None,
-                    auth_required_emails=None,
-                    auth_required_groups=None,
-                    auth_allowed_scopes=None,
-                    auth_allowed_audiences=None,
-                    auth_pass_headers=True,
-                    auth_cookie_name="oauth_token",
-                    auth_header_prefix="X-Auth-",
-                    auth_excluded_paths=[
-                        "/health",
-                        "/device/code",     # Must be accessible for Device Flow
-                        "/device/token",    # Must be accessible for Device Flow
-                    ],
-                    
-                    # Route control
-                    route_mode="all",
-                    enabled_routes=[],
-                    disabled_routes=[],
-                )
-                needs_update = True
-            
-            # Only update OAuth users if ALL are None/empty
-            if (localhost.oauth_admin_users is None and 
-                localhost.oauth_user_users is None and 
-                localhost.oauth_mcp_users is None):
-                
-                # Get from environment
-                admin_users_env = os.getenv("OAUTH_LOCALHOST_ADMIN_USERS", "")
-                user_users_env = os.getenv("OAUTH_LOCALHOST_USER_USERS", "*")
-                mcp_users_env = os.getenv("OAUTH_LOCALHOST_MCP_USERS", "")
-                
-                admin_users = [u.strip() for u in admin_users_env.split(",") if u.strip()]
-                user_users = [u.strip() for u in user_users_env.split(",") if u.strip()]
-                mcp_users = [u.strip() for u in mcp_users_env.split(",") if u.strip()]
-                
-                localhost.oauth_admin_users = admin_users if admin_users else None
-                localhost.oauth_user_users = user_users if user_users else None
-                localhost.oauth_mcp_users = mcp_users if mcp_users else None
-                
-                # Also ensure auth is enabled if we're setting users
-                if not localhost.auth_enabled:
-                    localhost.auth_enabled = True
-                    localhost.auth_proxy = "localhost"  # Self-referential
-                    localhost.auth_mode = "redirect"
-                    localhost.auth_excluded_paths = [
-                        "/health",
-                        "/device/code",     # Must be accessible for Device Flow
-                        "/device/token",    # Must be accessible for Device Flow
-                    ]
-                
-                needs_update = True
-                log_info(
-                    "Configured localhost proxy OAuth users from environment",
-                    component="dispatcher",
-                    admin_users=admin_users,
-                    user_users=user_users,
-                    mcp_users=mcp_users
-                )
-            
-            if needs_update:
-                # Store the proxy
-                if self.dispatcher.async_storage:
-                    await self.dispatcher.async_storage.store_proxy_target("localhost", localhost)
-                    log_info("Stored localhost proxy configuration", component="dispatcher")
-                elif self.storage:
-                    self.storage.store_proxy_target("localhost", localhost)
-                    log_info("Stored localhost proxy configuration", component="dispatcher")
-                    
-        except Exception as e:
-            log_error(f"Error ensuring localhost proxy: {e}", component="dispatcher")
-    
     async def _reconcile_all_proxies(self):
-        """Reconcile ALL proxies in background without blocking."""
+        """Reconcile ALL proxies - FAIL if any proxy can't be created."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Python logging: _reconcile_all_proxies() started")
+        
         try:
-            # Wait for system to stabilize
-            await asyncio.sleep(2)
-            
-            log_info("[UNIFIED] Starting background reconciliation", component="dispatcher")
-            
-            # Ensure localhost proxy exists with OAuth configuration
-            await self._ensure_localhost_proxy()
+            log_info("=" * 60, component="dispatcher")
+            log_info("[UNIFIED] Starting proxy reconciliation", component="dispatcher")
+            log_info("=" * 60, component="dispatcher")
             
             # Get all proxy targets
             all_proxies = []
@@ -1564,33 +1642,53 @@ class UnifiedMultiInstanceServer:
                 all_proxies = await self.dispatcher.async_storage.list_proxy_targets()
             elif self.storage:
                 all_proxies = self.storage.list_proxy_targets()
+            else:
+                raise RuntimeError("CRITICAL: No storage available for proxy reconciliation")
+            
+            log_info(f"[UNIFIED] Found {len(all_proxies)} proxies to reconcile", component="dispatcher")
+            logger.info(f"Python logging: Found {len(all_proxies)} proxies to reconcile")
             
             created = 0
             skipped = 0
+            failed = []
             
             for proxy in all_proxies:
+                proxy_hostname = proxy.proxy_hostname if hasattr(proxy, 'proxy_hostname') else proxy.get('proxy_hostname')
+                logger.info(f"Python logging: Processing proxy {proxy_hostname}")
+                
                 try:
-                    proxy_hostname = proxy.proxy_hostname if hasattr(proxy, 'proxy_hostname') else proxy.get('proxy_hostname')
-                    
                     # Ensure instance exists
                     if proxy_hostname not in self.instances:
+                        log_info(f"[UNIFIED] Creating instance for {proxy_hostname}...", component="dispatcher")
+                        logger.info(f"Python logging: Creating instance for {proxy_hostname}")
                         await self._ensure_instance_exists(proxy_hostname)
                         created += 1
+                        log_info(f"✅ [UNIFIED] Created instance for {proxy_hostname}", component="dispatcher")
                     else:
                         skipped += 1
+                        log_debug(f"[UNIFIED] Instance already exists for {proxy_hostname}", component="dispatcher")
                     
                     # Rate limit to avoid overwhelming
                     await asyncio.sleep(0.1)
                     
                 except Exception as e:
-                    log_error(f"[UNIFIED] Failed to reconcile {proxy_hostname}: {e}", 
-                             component="dispatcher", error=e)
+                    log_error(f"CRITICAL: Failed to create instance for {proxy_hostname}: {e}", component="dispatcher")
+                    log_error(f"Traceback: {traceback.format_exc()}", component="dispatcher")
+                    failed.append((proxy_hostname, str(e)))
+            
+            if failed:
+                log_error(f"CRITICAL: Reconciliation failed for {len(failed)} proxies", component="dispatcher")
+                for hostname, error in failed:
+                    log_error(f"  - {hostname}: {error}", component="dispatcher")
+                raise RuntimeError(f"System cannot start - failed to create instances for: {[h for h,_ in failed]}")
             
             log_info(f"✅ [UNIFIED] Reconciliation complete: {created} created, {skipped} already existed", 
                     component="dispatcher")
             
         except Exception as e:
-            log_error(f"[UNIFIED] Reconciliation failed: {e}", component="dispatcher", error=e)
+            log_error(f"CRITICAL: Reconciliation failed completely: {e}", component="dispatcher")
+            log_error(f"Traceback: {traceback.format_exc()}", component="dispatcher")
+            raise RuntimeError(f"System cannot start - reconciliation failed: {e}")
     
     # =================== END UNIFIED ARCHITECTURE METHODS ===================
     
@@ -1658,13 +1756,21 @@ class UnifiedMultiInstanceServer:
                 log_info(f"[STREAM_EVENT] Creating HTTP instance for {proxy_hostname}", component="dispatcher")
                 await self.create_instance_for_proxy(proxy_hostname)
                 
+                # Get the allocated port from Redis mapping
+                port = None
+                if self.redis:
+                    mapping_data = self.redis.hget("proxy:ports:mappings", proxy_hostname)
+                    if mapping_data:
+                        mapping = json.loads(mapping_data)
+                        port = mapping.get("http")
+                
                 # Publish confirmation event
                 from ..storage.redis_stream_publisher import RedisStreamPublisher
                 redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
                 publisher = RedisStreamPublisher(redis_url=redis_url)
                 await publisher.publish_event("http_instance_started", {
                     "proxy_hostname": proxy_hostname,
-                    "port": self.next_http_port - 1  # Last allocated port
+                    "port": port if port else 0
                 })
                 await publisher.close()
                 log_info(f"[STREAM_EVENT] HTTP instance created for {proxy_hostname}", component="dispatcher")
@@ -1847,6 +1953,10 @@ class UnifiedMultiInstanceServer:
     
     async def run(self):
         """Run the unified dispatcher with non-blocking architecture."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("Python logging: UnifiedMultiInstanceServer.run() started")
+        
         log_info("=" * 60, component="dispatcher")
         log_info("UNIFIED DISPATCHER STARTING", component="dispatcher")
         log_info("=" * 60, component="dispatcher")
@@ -1856,26 +1966,62 @@ class UnifiedMultiInstanceServer:
         unified_server_instance = self
         
         if not self.https_server:
+            logger.error("Python logging: NO HTTPS SERVER INSTANCE - CANNOT START")
             log_error("NO HTTPS SERVER INSTANCE - CANNOT START", component="dispatcher")
             return
         
         # 1. Start unified consumer FIRST (non-blocking)
+        logger.info("Python logging: Starting unified consumer")
         await self._start_unified_consumer()
         log_info("✅ Unified consumer started", component="dispatcher")
+        logger.info("Python logging: Unified consumer started")
         
         # 2. Load routes from storage
+        logger.info("Python logging: Loading routes from storage")
         await self.dispatcher.load_routes_from_storage()
         
         # 3. Register API service
+        logger.info("Python logging: Registering API service")
         self.dispatcher.register_named_service('api', 10001, 'http://api:9000')
-        # Note: localhost will get its own proxy instance during reconciliation
         
-        # 4. Start dispatcher
+        # 4. Load existing port mappings from Redis
+        logger.info("Python logging: Loading existing port mappings from Redis")
+        log_info("Loading existing proxy port mappings from Redis...", component="dispatcher")
+        
+        if self.redis:
+            mappings = self.redis.hgetall("proxy:ports:mappings")
+            if mappings:
+                log_info(f"Found {len(mappings)} existing port mappings in Redis", component="dispatcher")
+                for hostname_bytes, mapping_bytes in mappings.items():
+                    hostname = hostname_bytes.decode() if isinstance(hostname_bytes, bytes) else hostname_bytes
+                    mapping = json.loads(mapping_bytes)
+                    http_port = mapping.get("http")
+                    https_port = mapping.get("https")
+                    
+                    # Register with dispatcher
+                    self.dispatcher.register_domain(
+                        [hostname],
+                        http_port,
+                        https_port,
+                        enable_http=True,
+                        enable_https=(https_port is not None and https_port != 13000)
+                    )
+                    log_debug(f"Registered existing mapping for {hostname}: HTTP:{http_port}, HTTPS:{https_port}", 
+                             component="dispatcher")
+            else:
+                log_info("No existing port mappings found in Redis", component="dispatcher")
+        
+        # 5. Reconcile ALL proxies SYNCHRONOUSLY before starting dispatcher
+        logger.info("Python logging: Reconciling all proxies before starting dispatcher")
+        log_info("Reconciling all proxy instances before starting dispatcher...", component="dispatcher")
+        await self._reconcile_all_proxies()
+        logger.info("Python logging: Reconciliation complete")
+        
+        # 6. NOW start dispatcher with all instances ready
+        logger.info("Python logging: Starting dispatcher")
         await self.dispatcher.start()
         log_info("✅ Dispatcher started", component="dispatcher")
-        
-        # 5. Reconcile existing proxies in BACKGROUND - NON-BLOCKING!
-        self.reconciliation_task = asyncio.create_task(self._reconcile_all_proxies())
+        logger.info("Python logging: Dispatcher started")
         
         log_info("=" * 60, component="dispatcher")
         log_info("UNIFIED DISPATCHER READY - Processing events in real-time", component="dispatcher")

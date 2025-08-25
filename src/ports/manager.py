@@ -21,7 +21,11 @@ class PortManager:
     INTERNAL_HTTP_END = 9999
     INTERNAL_HTTPS_START = 10000
     INTERNAL_HTTPS_END = 10999
-    EXPOSED_PORT_START = 11000
+    PROXY_HTTP_START = 12000    # HTTP proxy instances
+    PROXY_HTTP_END = 12999
+    PROXY_HTTPS_START = 13000   # HTTPS proxy instances
+    PROXY_HTTPS_END = 13999
+    EXPOSED_PORT_START = 14000  # User services start at 14000 now
     EXPOSED_PORT_END = 65535
     
     # Restricted ports that should not be allocated
@@ -67,6 +71,10 @@ class PortManager:
                 start, end = self.INTERNAL_HTTP_START, self.INTERNAL_HTTP_END
             elif purpose == "internal_https":
                 start, end = self.INTERNAL_HTTPS_START, self.INTERNAL_HTTPS_END
+            elif purpose == "proxy_http":
+                start, end = self.PROXY_HTTP_START, self.PROXY_HTTP_END
+            elif purpose == "proxy_https":
+                start, end = self.PROXY_HTTPS_START, self.PROXY_HTTPS_END
             else:  # exposed
                 start, end = self.EXPOSED_PORT_START, self.EXPOSED_PORT_END
             

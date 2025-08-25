@@ -34,9 +34,25 @@ This document describes the source code organization and technical implementatio
 - `REDIS_PASSWORD` - Redis authentication password (required, 32+ random bytes recommended)
 - `REDIS_URL` - Full Redis connection URL including password (format: `redis://:password@host:port/db`)
 
-### Internal Ports
-- Port 9000: Direct API access (localhost-only)
-- Port 10001: PROXY protocol endpoint (forwards to 9000)
+### Docker Networking
+- All services use Docker service names for internal communication
+- API service: accessed as "http://api:9000" internally
+- Redis service: accessed as "redis:6379" internally
+- NO hardcoded 127.0.0.1 for inter-service communication
+
+### Internal Ports (FINAL)
+- Port 80/443: Dispatcher (public-facing)
+- Port 9000: API (internal only, accessed via Docker service name)
+- Port 12000+: HTTP proxy instances (localhost gets 12000)
+- Port 13000+: HTTPS proxy instances
+
+### Simplified Startup Sequence
+The system starts in 5 clear steps:
+1. Initialize core components (storage, certificates, logging)
+2. Create FastAPI application
+3. Register API routers
+4. Start API on port 9000 (0.0.0.0:9000 in Docker)
+5. Start dispatcher with proxy instances
 
 ## Async Architecture Overview
 

@@ -670,7 +670,141 @@ logs-help:
     @echo "  logs-stats        - Statistics and metrics"
     @echo "  logs-service      - Docker container logs"
     @echo ""
+    @echo "Log Level Management:"
+    @echo "  log-level-set     - Set log level (e.g., just log-level-set DEBUG proxy)"
+    @echo "  log-level-get     - Get current log levels"
+    @echo "  log-level-reset   - Reset component to default level"
+    @echo ""
+    @echo "Log Filter Management:"
+    @echo "  log-filter-set    - Set filters (e.g., just log-filter-set proxy '.*health.*')"
+    @echo "  log-filter-get    - Get filter configuration"
+    @echo "  log-filter-reset  - Remove filters for component"
+    @echo "  log-filter-stats  - Get filtering statistics"
+    @echo ""
+    @echo "Quick Presets:"
+    @echo "  log-reduce-verbose - Reduce verbose logging (suppress health checks, etc.)"
+    @echo "  log-debug-enable   - Enable DEBUG for a component"
+    @echo "  log-trace-enable   - Enable TRACE for a component (very verbose!)"
+    @echo ""
     @echo "For detailed help: proxy-client log --help"
+
+# ============================================================================
+# LOG LEVEL & FILTER MANAGEMENT
+# ============================================================================
+
+# Set log level for global or specific component
+log-level-set level component="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    if [ -z "{{ component }}" ]; then
+        echo "Setting global log level to {{ level }}..."
+        pixi run proxy-client log level set {{ level }}
+    else
+        echo "Setting log level for {{ component }} to {{ level }}..."
+        pixi run proxy-client log level set {{ level }} --component {{ component }}
+    fi
+
+# Get current log levels
+log-level-get component="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    if [ -z "{{ component }}" ]; then
+        pixi run proxy-client log level get
+    else
+        pixi run proxy-client log level get --component {{ component }}
+    fi
+
+# Reset component log level to default
+log-level-reset component:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    echo "Resetting log level for {{ component }} to default..."
+    pixi run proxy-client log level reset {{ component }} --confirm
+
+# Set log filter with suppress patterns (example: just log-filter-set proxy ".*health.*,.*OPTIONS.*")
+log-filter-set component patterns="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    if [ -n "{{ patterns }}" ]; then
+        # Split comma-separated patterns and add -s flag for each
+        IFS=',' read -ra PATTERN_ARRAY <<< "{{ patterns }}"
+        PATTERN_FLAGS=""
+        for pattern in "${PATTERN_ARRAY[@]}"; do
+            PATTERN_FLAGS="$PATTERN_FLAGS -s \"$pattern\""
+        done
+        echo "Setting suppress patterns for {{ component }}: {{ patterns }}"
+        eval "pixi run proxy-client log filter set {{ component }} $PATTERN_FLAGS"
+    else
+        echo "Usage: just log-filter-set <component> \"pattern1,pattern2\""
+        echo "Example: just log-filter-set proxy \".*health.*,.*OPTIONS.*\""
+    fi
+
+# Get log filter configuration for a component
+log-filter-get component:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    pixi run proxy-client log filter get {{ component }}
+
+# Reset (remove) log filters for a component
+log-filter-reset component:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    echo "Removing all filters for {{ component }}..."
+    pixi run proxy-client log filter reset {{ component }} --confirm
+
+# Get statistics about filtered logs
+log-filter-stats:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    pixi run proxy-client log filter stats
+
+# Reduce verbose logging (suppress health checks, sample TRACE/DEBUG)
+log-reduce-verbose:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    source .env 2>/dev/null || true
+    
+    echo "Applying verbose reduction preset..."
+    
+    # Set global level to INFO
+    just log-level-set INFO
+    
+    # Suppress health checks for common components
+    for component in proxy api dispatcher redis_storage; do
+        echo "Configuring $component..."
+        pixi run proxy-client log filter set $component \
+            -s ".*health.*" \
+            -s ".*OPTIONS.*" \
+            -r "TRACE:0.01" \
+            -r "DEBUG:0.1" \
+            -l "same_message:10/minute"
+    done
+    
+    echo "Verbose reduction applied!"
+
+# Enable debug logging for a component
+log-debug-enable component:
+    just log-level-set DEBUG {{ component }}
+    @echo "Debug logging enabled for {{ component }}"
+
+# Enable trace logging (very verbose) for a component
+log-trace-enable component:
+    just log-level-set TRACE {{ component }}
+    @echo "TRACE logging enabled for {{ component }} (very verbose!)"
 
 # ============================================================================
 # SYSTEM & CONFIG MANAGEMENT (Migrated to proxy-client)

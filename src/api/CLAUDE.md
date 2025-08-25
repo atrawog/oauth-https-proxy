@@ -6,12 +6,13 @@ The API module provides the main FastAPI application, routers, and web interface
 
 ## Architecture
 
-### API App (FastAPI)
+### API Architecture
+- Runs on a SINGLE port: 9000
+- Internal access only (no external port exposure)
+- Accessed via Docker service name: http://api:9000
+- Binds to 0.0.0.0:9000 in Docker for container networking
+- ALL requests come through proxy instances (OAuth validated)
 - Full FastAPI with async lifespan management
-- Async API endpoints, Web GUI, certificate management
-- Integrated OAuth 2.1 server functionality
-- Global resources (scheduler, Redis) with async initialization
-- Runs on internal port 9000
 - Background tasks for certificate renewal and cleanup
 
 ### Directory Structure

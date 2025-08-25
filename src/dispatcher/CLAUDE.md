@@ -7,17 +7,51 @@ The Unified Dispatcher is THE server - FastAPI is just another service it manage
 ## Architecture
 
 ```
-Client → Port 80/443 → UnifiedDispatcher (in api container)
-                              ↓
-                    Route by hostname/path
-                              ↓
-         ├→ localhost → FastAPI App (API/GUI/OAuth)
-         ├→ proxy1.com → Proxy App (forwarding only)
-         └→ proxy2.com → Proxy App (forwarding only)
+Client → Dispatcher (80/443) → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Backend
+         (Read SNI & route)     ├─ PROXY Handler (12xxx/13xxx)
+                                │  • Parse PROXY header
+                                │  • Store client IP in Redis
+                                └─ Hypercorn (22xxx/23xxx)
+                                   • Terminate SSL
+                                   • Run Starlette app
+                                   • OAuth validation in UnifiedProxyHandler
 
-For PROXY protocol support:
-External LB → Port 10001 → PROXY Handler → Port 9000 → UnifiedDispatcher
+For localhost with Docker:
+Client → Dispatcher (80) → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → API (http://api:9000)
 ```
+
+## Why HypercornInstance, Not EnhancedProxyInstance
+
+### The Failed Experiment
+We tried creating EnhancedProxyInstance to handle OAuth "at the edge" (at the TCP/SSL layer) but this failed because:
+
+1. **OAuth validation needs application context**: The edge doesn't know routes, scopes, or backends
+2. **Partial validation creates security holes**: Basic JWT validation without scope checking is dangerous
+3. **The edge layer can't make routing decisions**: It doesn't know which backend to forward to
+
+### The Working Solution
+HypercornInstance + UnifiedProxyHandler provides:
+- **Clean separation of concerns**: SSL at Hypercorn, OAuth at UnifiedProxyHandler
+- **Complete OAuth validation with context**: Scopes, user allowlists, route-specific auth
+- **No duplicate implementations**: One place for routing logic
+- **Proven, working architecture**: This was already working before we broke it
+
+## Why the Dispatcher CANNOT Terminate SSL
+
+**Critical Insight**: The dispatcher doesn't know which certificate to use until AFTER 
+it reads the SNI hostname from the TLS Client Hello. Since each proxy has its own 
+certificate, the dispatcher MUST forward the raw TLS data to the correct proxy instance.
+
+## Why We Use PROXY Protocol
+
+When the dispatcher forwards a connection to a proxy instance, the proxy would normally 
+see the connection as coming from 127.0.0.1 (the dispatcher). The PROXY protocol header 
+preserves the real client IP: `PROXY TCP4 <real_ip> 127.0.0.1 <port> 443`
+
+INTERNAL PROXY protocol flow:
+- Dispatcher adds PROXY header when forwarding to proxy instances
+- Preserves real client IP for logging and security
+- NO external load balancers involved
 
 ## Server Configuration
 
@@ -28,8 +62,33 @@ External LB → Port 10001 → PROXY Handler → Port 9000 → UnifiedDispatcher
 - `API_URL` - Base URL for API endpoints (default: http://localhost:9000)
 
 ### Internal Ports
-- Port 9000: Direct API access (localhost-only)
-- Port 10001: PROXY protocol endpoint (forwards to 9000)
+- Port 9000: API (internal only, Docker service name: api)
+- Port 12000-12999: HTTP proxy instances (Redis-allocated)
+- Port 13000-13999: HTTPS proxy instances (Redis-allocated)
+
+## Port Management
+
+The dispatcher uses Redis-based PortManager for all port allocations:
+
+- **Persistent**: Port mappings stored in Redis survive restarts
+- **Atomic**: PortManager ensures no conflicts via Redis locks
+- **Deterministic**: Hash-based preferred ports for consistency
+- **Tracked**: All allocations visible in Redis
+
+### Port Allocation Flow
+1. Check Redis for existing mapping: `proxy:ports:mappings`
+2. If missing, allocate via PortManager with preferred port
+3. Store mapping in Redis for persistence
+4. Register with dispatcher for routing
+
+### Redis Keys
+```
+proxy:ports:mappings -> hash of hostname to port mapping
+port:12001 -> allocation details for specific port
+ports:allocated -> set of all allocated ports
+ports:proxy:http -> set of allocated HTTP proxy ports
+ports:proxy:https -> set of allocated HTTPS proxy ports
+```
 
 ## Dual App Architecture
 
@@ -95,21 +154,23 @@ async def get_ssl_context(hostname: str) -> Optional[SSLContext]:
 
 ## Multi-Instance Management
 
-Each proxy domain gets its own ASGI app instance:
+Each proxy domain gets its own ASGI app instance with Redis-managed ports:
 
 ### Benefits
-- No port conflicts or race conditions
-- Instance isolation - delete proxy without affecting others
-- Clean resource management per instance
-- Dynamic add/remove without side effects
-- Preserves real client IPs through PROXY protocol
-- Unified HTTP/HTTPS client IP handling via Redis
+- **Persistent Ports**: Port allocations survive restarts via Redis
+- **No Conflicts**: PortManager ensures atomic allocation
+- **Instance Isolation**: Delete proxy without affecting others
+- **Clean Resource Management**: Ports released on deletion
+- **Dynamic Operations**: Add/remove without service restart
+- **Deterministic**: Same proxy gets similar ports via hash
+- **Debuggable**: All port mappings visible in Redis
 
 ### Instance Lifecycle
-1. **Creation**: New proxy triggers instance creation
-2. **Update**: Configuration changes update instance
-3. **Deletion**: Proxy removal cleanly shuts down instance
-4. **No Restart**: All operations without service restart
+1. **Port Check**: Look for existing mapping in Redis
+2. **Port Allocation**: Use PortManager if no mapping exists
+3. **Instance Creation**: Create with allocated ports
+4. **Registration**: Store mapping and register with dispatcher
+5. **Deletion**: Release ports back to pool and remove mapping
 
 ## WebSocket and SSE Support
 
@@ -207,11 +268,16 @@ All requests logged with:
 
 ## Integration Points
 
-### PROXY Protocol
-TCP-level handler preserves real client IPs:
+### PROXY Protocol (Internal Use Only)
+The PROXY protocol is used INTERNALLY to preserve real client IPs between components:
 ```
-External LB → Port 10001 → Parse PROXY header → Store in Redis → Forward to 9000
+Dispatcher (80/443) → [PROXY header] → Proxy Instance (12000+) → Parse & Store in Redis
+                                                ↓
+                                    Extract real client IP for logging/auth
 ```
+
+**CRITICAL**: PROXY protocol is only used internally between the dispatcher and proxy instances.
+There are NO external load balancers involved in this architecture.
 
 ### Redis Storage
 All configuration and state in Redis:
@@ -268,12 +334,41 @@ self.reconciliation_task = asyncio.create_task(
 
 ## Troubleshooting
 
+### Port Issues
+
+#### Check Allocated Ports
+```bash
+redis-cli hgetall proxy:ports:mappings
+redis-cli smembers ports:allocated
+redis-cli smembers ports:proxy:http
+```
+
+#### Port Already in Use
+```bash
+# Check what's using the port
+lsof -i :12000
+# Check Redis allocation
+redis-cli get port:12000
+# Clear stale allocation if needed
+redis-cli del port:12000
+```
+
+#### Missing Port Mappings
+```bash
+# Check if proxy exists
+redis-cli hget proxy:targets localhost
+# Check port mapping
+redis-cli hget proxy:ports:mappings localhost
+# Restart to trigger reconciliation
+just restart
+```
+
 ### Common Issues
 
 1. **SSL Certificate Not Found**: Check certificate exists for hostname
 2. **Backend Unreachable**: Verify target URL and network
-3. **High Memory Usage**: Check for response streaming
-4. **PROXY Protocol Issues**: Verify load balancer configuration
+3. **No Available Ports**: Check port range usage and clean orphaned allocations
+4. **Port Mapping Mismatch**: Delete and recreate proxy instance
 
 ### Debug Commands
 
@@ -287,6 +382,30 @@ curl http://localhost:9000/dispatcher/health
 # Check SSL context
 curl https://hostname --resolve hostname:443:127.0.0.1
 ```
+
+## SSL/TLS Architecture
+
+### How SSL Works in the System
+
+**For HTTPS Proxy Instances:**
+1. **Hypercorn handles SSL termination** using `config.certfile` and `config.keyfile`
+2. **PROXY protocol handler is just a TCP forwarder** - it does NOT handle SSL
+3. **No SSL context needed for PROXY handler** - it forwards raw TCP to Hypercorn
+
+**Flow for HTTPS:**
+```
+Client --[HTTPS]--> Dispatcher:443 --[TCP+PROXY header]--> ProxyHandler:13xxx --[TCP]--> Hypercorn:23xxx (SSL termination here)
+```
+
+**IMPORTANT**: 
+- The PROXY protocol handler (`create_proxy_protocol_server`) does NOT accept or need an `ssl_context` parameter
+- SSL is handled entirely by Hypercorn using the certificate files
+- The PROXY handler is a simple TCP forwarder that preserves client IP information
+
+### Certificate Storage
+- Certificates are stored in Redis (fulfilling the "no filesystem" principle)
+- Temporary files are created ONLY for Hypercorn (Python SSL limitation)
+- These temp files are managed by the HypercornInstance lifecycle
 
 ## Related Documentation
 

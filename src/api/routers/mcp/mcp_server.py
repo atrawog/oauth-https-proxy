@@ -37,10 +37,8 @@ class IntegratedMCPServer:
         """Fire-and-forget async info logging without creating orphaned tasks."""
         if self.logger:
             try:
-                # Create task with proper error handling
-                task = asyncio.create_task(self.logger.info(message, **kwargs))
-                # Add callback to handle exceptions
-                task.add_done_callback(lambda t: t.exception() if t.done() else None)
+                # UnifiedAsyncLogger.info() already handles async internally
+                self.logger.info(message, **kwargs)
             except RuntimeError:
                 # No event loop running, skip logging
                 pass
@@ -49,10 +47,8 @@ class IntegratedMCPServer:
         """Fire-and-forget async error logging without creating orphaned tasks."""
         if self.logger:
             try:
-                # Create task with proper error handling
-                task = asyncio.create_task(self.logger.error(message, **kwargs))
-                # Add callback to handle exceptions
-                task.add_done_callback(lambda t: t.exception() if t.done() else None)
+                # UnifiedAsyncLogger.error() already handles async internally
+                self.logger.error(message, **kwargs)
             except RuntimeError:
                 # No event loop running, skip logging
                 pass
@@ -61,10 +57,8 @@ class IntegratedMCPServer:
         """Fire-and-forget async warning logging without creating orphaned tasks."""
         if self.logger:
             try:
-                # Create task with proper error handling
-                task = asyncio.create_task(self.logger.warning(message, **kwargs))
-                # Add callback to handle exceptions
-                task.add_done_callback(lambda t: t.exception() if t.done() else None)
+                # UnifiedAsyncLogger.warning() already handles async internally
+                self.logger.warning(message, **kwargs)
             except RuntimeError:
                 # No event loop running, skip logging
                 pass

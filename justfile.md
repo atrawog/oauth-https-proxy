@@ -24,15 +24,12 @@ just service-cleanup-orphaned [token]  # Clean up orphaned resources
 just help                    # Show all available commands
 ```
 
-## Token Management
+## Quick Start Commands
 
 ```bash
-just token-generate <name> [email] [token]  # Create token with optional cert email
-just token-show <name> [token]              # Retrieve full token
-just token-list [token]                     # List all tokens
-just token-delete <name> [token]            # Delete token + owned resources
-just token-email <name> <email> [token]     # Update token cert email
-just token-admin                            # Generate admin token
+just quickstart <hostname> <target-url> [enable-auth]  # Quick setup proxy + cert
+just setup-oauth <domain>                              # Setup OAuth server
+just create-app <name> <image>                         # Create containerized app
 ```
 
 ## Certificate Management
@@ -151,40 +148,75 @@ just service-list-all [type] [token]
 
 ## OAuth Management
 
-### OAuth Setup
+### OAuth Authentication (Device Flow)
 ```bash
-just oauth-key-generate [token]
-just oauth-routes-setup <domain> [token]
-just oauth-client-register <name> [redirect-uri] [scope]
+just oauth-login                    # Login via GitHub Device Flow
+just oauth-refresh                  # Refresh access token
+just oauth-status                   # Check token status
+just oauth-key-generate             # Generate OAuth JWT keys
 ```
 
-### OAuth Status and Monitoring
+### OAuth Client Management
 ```bash
-just oauth-clients-list [active-only] [token]
-just oauth-sessions-list [token]
-just oauth-test-tokens <server-url> [token]
+just oauth-client-register <name> [redirect-uri] [scope]  # Register OAuth client
+just oauth-clients-list [active-only] [page] [per-page]   # List OAuth clients
+just oauth-token-list [type] [client-id] [username] [page] [per-page] [include-expired]
+```
+
+### OAuth Monitoring
+```bash
+just oauth-sessions-list            # List active OAuth sessions
+just oauth-test-tokens <server-url> # Test OAuth token endpoints
+just oauth-clients-list [active-only] [page] [per-page]  # List OAuth clients
 ```
 
 ## Logging
 
 ### Log Query Commands
 ```bash
-just logs [hours] [event] [level] [hostname] [limit] [token]
-just logs-ip <ip> [hours] [event] [level] [limit] [token]
-just logs-host <hostname> [hours] [limit] [token]
-just logs-client <client-id> [hours] [event] [level] [limit] [token]
-just logs-search [query] [hours] [event] [level] [hostname] [limit] [token]
-just logs-errors [hours] [limit] [token]
-just logs-errors-debug [hours] [include-warnings] [limit] [token]
-just logs-follow [service]
-just logs-oauth <ip> [hours] [limit] [token]
-just logs-oauth-debug <ip> [hours] [limit] [token]
-just logs-oauth-flow [client-id] [username] [hours] [token]
-just logs-stats [hours] [token]
-just logs-test [token]
-just logs-all [lines] [hours] [token]
-just logs-clear [token]
-just logs-help
+just logs [hours] [event] [level] [hostname] [limit]                # Recent logs
+just logs-ip <ip> [hours] [event] [level] [limit]                  # Logs by client IP
+just logs-proxy <hostname> [hours] [limit]                         # Logs by proxy hostname
+just logs-hostname <hostname> [hours] [limit]                      # Logs by hostname
+just logs-oauth-client <client-id> [hours] [event] [level] [limit] # Logs by OAuth client
+just logs-errors [hours] [limit]                                   # Recent errors only
+just logs-errors-debug [hours] [include-warnings] [limit]          # Detailed error logs
+just logs-follow [interval] [event] [level] [hostname]             # Follow logs real-time
+just logs-docker [lines] [follow]                                  # Docker container logs
+just logs-service [service] [lines]                                # Service logs
+```
+
+### Log Analysis Commands
+```bash
+just logs-oauth <ip> [hours] [limit]                        # OAuth activity by IP
+just logs-oauth-debug <ip> [hours] [limit]                  # OAuth debug logs
+just logs-oauth-flow [client-id] [username] [hours]         # OAuth flow trace
+just logs-oauth-user <username> [hours] [limit]             # OAuth logs by user
+just logs-search <query> [hours] [event] [level] [hostname] [limit]  # Search logs
+just logs-stats [hours]                                     # Log statistics
+just logs-user <user-id> [hours] [limit]                   # Logs by user ID
+just logs-session <session-id> [hours] [limit]             # Logs by session
+just logs-method <method> [hours] [limit]                  # Logs by HTTP method
+just logs-status <code> [hours] [limit]                    # Logs by HTTP status
+just logs-slow [threshold-ms] [hours] [limit]              # Slow requests
+just logs-path <pattern> [hours] [limit]                   # Logs by path pattern
+```
+
+### Log Management Commands
+```bash
+just logs-clear                     # Clear all logs
+just logs-test                      # Test logging system
+just logs-help                      # Show log command help
+just log-level-set <level> [component]        # Set log level
+just log-level-get [component]                # Get current log level
+just log-level-reset <component>              # Reset to default level
+just log-filter-set <component> [patterns]    # Set log filters
+just log-filter-get <component>               # Get current filters
+just log-filter-reset <component>             # Clear filters
+just log-filter-stats                         # Filter statistics
+just log-reduce-verbose                       # Reduce verbose logging
+just log-debug-enable <component>             # Enable debug for component
+just log-trace-enable <component>             # Enable trace for component
 ```
 
 ## Configuration Management
@@ -194,17 +226,21 @@ just config-save [filename]        # Save full configuration to YAML backup
 just config-load <filename> [force]  # Load configuration from YAML backup
 ```
 
-## Testing
+## System Cleanup
+
+```bash
+just cleanup-resources       # Clean up all resources
+just service-cleanup         # Clean up orphaned services
+just service-cleanup-orphaned  # Clean up orphaned resources
+```
+
+## Development & Testing
 
 ```bash
 just test [files]           # Run standard test suite
 just test-all               # Run comprehensive test suite
-```
-
-## Documentation
-
-```bash
-just docs-build            # Build documentation
+just docs-build             # Build documentation
+just dry-run <command> [args]  # Test command without execution
 ```
 
 ## Environment Variables

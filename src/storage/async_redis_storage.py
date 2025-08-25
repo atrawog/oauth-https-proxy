@@ -87,6 +87,24 @@ class AsyncRedisStorage:
         except RedisError:
             return False
     
+    async def get(self, key: str) -> Optional[str]:
+        """Get raw value from Redis.
+        
+        Args:
+            key: Redis key to retrieve
+            
+        Returns:
+            String value or None if not found
+        """
+        await self.ensure_initialized()
+        try:
+            value = await self.redis_client.get(key)
+            # Since we use decode_responses=True, value is already a string or None
+            return value
+        except Exception as e:
+            log_error(f"Failed to get value for key {key}: {e}", component="redis_storage")
+            return None
+    
     # Certificate operations
     async def store_certificate(self, cert_name: str, certificate: Certificate) -> bool:
         """Store certificate in Redis with domain uniqueness checking."""
@@ -340,8 +358,8 @@ class AsyncRedisStorage:
                 # Decode bytes to string if needed
                 if isinstance(key, bytes):
                     key = key.decode('utf-8')
-                # Skip client info keys (proxy:client:*) and event streams  
-                if ":client:" in key or key == "proxy:events:stream":
+                # Skip client info keys (proxy:client:*), port mappings, and event streams
+                if ":client:" in key or ":ports:" in key or key == "proxy:events:stream":
                     log_trace(f"Skipping non-proxy key: {key}", component="redis_storage")
                     continue
                 proxy_hostname = key.split(":", 1)[1]

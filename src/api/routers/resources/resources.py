@@ -56,7 +56,9 @@ def create_router(storage):
     ):
         """List all registered Protected Resources."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         # Get all resources from Redis using SCAN for production safety
@@ -86,7 +88,9 @@ def create_router(storage):
     ):
         """Register a new Protected Resource."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -117,7 +121,9 @@ def create_router(storage):
     ):
         """Get details of a specific Protected Resource."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         # Reconstruct full URI
@@ -143,7 +149,9 @@ def create_router(storage):
     ):
         """Update an existing Protected Resource."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
@@ -175,7 +183,9 @@ def create_router(storage):
     ):
         """Delete a Protected Resource."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         

@@ -56,7 +56,9 @@ def create_proxy_integration_router(storage) -> APIRouter:
     ):
         """Create a proxy configuration for the service."""
         # Get auth info from headers (set by proxy)
-        auth_user = request.headers.get("X-Auth-User", "system")
+        auth_user = request.headers.get("X-Auth-User")
+        if not auth_user:
+            raise HTTPException(401, "Authentication required")
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
