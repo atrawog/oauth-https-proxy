@@ -586,9 +586,14 @@ class UnifiedDispatcher:
     
     async def handle_https_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTPS connection and forward to appropriate instance."""
+        import logging
+        logger = logging.getLogger(__name__)
+        
         client_addr = writer.get_extra_info('peername')
         client_ip = client_addr[0] if client_addr else 'unknown'
         client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
+        
+        logger.info(f"Python logging: New HTTPS connection from {client_ip}:{client_port}")
         
         # No need to store IP mappings - PROXY protocol handles this
         
@@ -615,7 +620,9 @@ class UnifiedDispatcher:
             
             # Extract SNI hostname
             proxy_hostname = self.get_sni_hostname(data)
+            logger.info(f"Python logging: SNI hostname extracted: {proxy_hostname}")
             if not proxy_hostname:
+                logger.warning(f"Python logging: No SNI hostname found from {client_ip}")
                 log_warning(
                     "No SNI hostname found in connection",
                     client_ip=client_ip
@@ -658,6 +665,8 @@ class UnifiedDispatcher:
             
             # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_https_port.get(proxy_hostname)
+            logger.info(f"Python logging: Target port for {proxy_hostname}: {target_port}")
+            logger.info(f"Python logging: Available HTTPS mappings: {list(self.hostname_to_https_port.keys())}")
             if not target_port:
                 # Try wildcard match
                 parts = proxy_hostname.split('.')
@@ -691,17 +700,23 @@ class UnifiedDispatcher:
             
             # Determine if this is a named instance or proxy target
             service_name = None
-            for name, port in self.named_services.items():
-                if port == target_port:
-                    service_name = name
-                    break
+            logger.info(f"Python logging: Checking named_services for port {target_port}")
+            logger.info(f"Python logging: named_services = {self.named_services if hasattr(self, 'named_services') else 'NOT SET'}")
+            if hasattr(self, 'named_services'):
+                for name, port in self.named_services.items():
+                    if port == target_port:
+                        service_name = name
+                        break
+            logger.info(f"Python logging: service_name = {service_name}")
             
             
             # Forward to the target instance with PROXY protocol enabled for HTTPS
+            logger.info(f"Python logging: Forwarding HTTPS connection for {proxy_hostname} to port {target_port}")
             await self._forward_connection(
                 reader, writer, data, '127.0.0.1', target_port, 
                 client_ip=client_ip, client_port=client_port, use_proxy_protocol=True, proxy_hostname=proxy_hostname, service_name=service_name
             )
+            logger.info(f"Python logging: HTTPS forwarding completed for {proxy_hostname}")
             
         except ConnectionResetError as e:
             # Connection reset by peer is common with HTTPS/MCP - handle gracefully
@@ -749,6 +764,10 @@ class UnifiedDispatcher:
         Forward connection to target with optional PROXY protocol.
         This is a PURE TCP forwarder - no HTTP parsing or modification.
         """
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"Python logging: _forward_connection to {target_host}:{target_port}, proxy_protocol={use_proxy_protocol}")
+        
         target_reader = None
         target_writer = None
         
@@ -796,6 +815,7 @@ class UnifiedDispatcher:
             )
             
         except Exception as e:
+            logger.error(f"Python logging: Error forwarding connection: {e}")
             log_error(f"Error forwarding connection: {e}", component="dispatcher", error=e)
         finally:
             # Clean up connections
