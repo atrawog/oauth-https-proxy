@@ -55,9 +55,15 @@ class UnifiedStorage:
         
     async def initialize_async(self):
         """Asynchronous initialization for async components."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(f"UnifiedStorage.initialize_async() called, _initialized={self._initialized}")
         if self._initialized:
+            logger.warning("UnifiedStorage already initialized, skipping")
+            log_debug("UnifiedStorage already initialized, skipping", component="unified_storage")
             return
             
+        logger.info("Initializing UnifiedStorage (async mode)")
         log_info("Initializing UnifiedStorage (async mode)", component="unified_storage")
         
         await self._initialize_async()
@@ -67,6 +73,10 @@ class UnifiedStorage:
         
     async def _initialize_async(self):
         """Core initialization logic (async)."""
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info("CRITICAL: _initialize_async() starting - this MUST initialize defaults")
+        log_info("CRITICAL: _initialize_async() starting - this MUST initialize defaults", component="unified_storage")
         # Create connection pool using redis-py
         self._async_pool = redis_async.ConnectionPool.from_url(
             self.redis_url,
@@ -76,23 +86,29 @@ class UnifiedStorage:
         )
         
         # Initialize AsyncRedisStorage with the pool
-        from .async_redis_storage import AsyncRedisStorage
+        from ._async_redis_storage import AsyncRedisStorage
         self._async_storage = AsyncRedisStorage(self.redis_url)
         
         # Initialize the Redis client
         await self._async_storage.initialize()
         
         # CRITICAL: Initialize defaults (fixes OAuth bug)
+        logger.info("About to initialize default proxies and routes")
         log_info("Initializing default proxies and routes", component="unified_storage")
+        logger.info("Calling self._async_storage.initialize_default_proxies()")
         await self._async_storage.initialize_default_proxies()
+        logger.info("Calling self._async_storage.initialize_default_routes()")
         await self._async_storage.initialize_default_routes()
+        logger.info("Default proxies and routes initialization complete")
         log_info("Default proxies and routes initialized", component="unified_storage")
         
     def __getattr__(self, name: str) -> Any:
         """Smart method delegation with automatic sync/async conversion."""
         if not self._initialized:
             # Auto-initialize on first use
-            log_debug(f"Auto-initializing UnifiedStorage on first use of {name}", component="unified_storage")
+            log_warning(f"WARNING: Auto-initializing UnifiedStorage on first use of '{name}' - this may skip default initialization!", component="unified_storage")
+            import traceback
+            log_debug(f"Stack trace: {''.join(traceback.format_stack())}", component="unified_storage")
             self.initialize()
             
         # Get the attribute from async storage

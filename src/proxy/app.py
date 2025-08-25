@@ -50,10 +50,10 @@ class ProxyOnlyApp:
             # This is a SHARED instance - we must NOT close it!
             self.owns_handler_storage = False
         else:
-            # Create async storage from regular storage for the handler
-            from ..storage.async_redis_storage import AsyncRedisStorage
+            # Create unified storage for the handler
+            from ..storage import UnifiedStorage
             from ..shared.config import Config
-            self.handler_storage = AsyncRedisStorage(Config.REDIS_URL)
+            self.handler_storage = UnifiedStorage(Config.REDIS_URL)
             # We created this instance - we should close it
             self.owns_handler_storage = True
         
@@ -143,10 +143,14 @@ class ProxyOnlyApp:
                     self.redis_clients_initialized = True
                     log_info("Redis clients initialized on first request", component="proxy_app")
                 
-                # Initialize async storage if needed
-                if hasattr(self.handler_storage, 'initialize'):
+                # Initialize storage if needed (UnifiedStorage uses initialize_async)
+                if hasattr(self.handler_storage, 'initialize_async'):
+                    await self.handler_storage.initialize_async()
+                    log_info("UnifiedStorage initialized on first request", component="proxy_app")
+                elif hasattr(self.handler_storage, 'initialize'):
+                    # Fallback for old AsyncRedisStorage
                     await self.handler_storage.initialize()
-                    log_info("Async storage initialized on first request", component="proxy_app")
+                    log_info("Storage initialized on first request", component="proxy_app")
                 
                 # Create the proxy handler with hostname for route filtering
                 proxy_hostname = self.domains[0] if self.domains else None

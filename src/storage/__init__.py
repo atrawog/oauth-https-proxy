@@ -22,16 +22,8 @@ class RedisStorage(UnifiedStorage):
     def __init__(self, redis_url: str):
         super().__init__(redis_url)
         log_info("RedisStorage compatibility shim initialized (using UnifiedStorage)", component="storage")
-        
-        # Check if we're in an async context
-        import asyncio
-        try:
-            asyncio.get_running_loop()
-            # We're in an async context, don't auto-initialize
-            log_info("RedisStorage created in async context - call await storage.initialize_async()", component="storage")
-        except RuntimeError:
-            # We're in a sync context, auto-initialize for backward compatibility
-            self.initialize()
+        # Don't auto-initialize - let the caller decide when to initialize
+        # This prevents double initialization issues
         
     # All methods inherited from UnifiedStorage work automatically
 

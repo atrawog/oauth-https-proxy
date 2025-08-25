@@ -11,7 +11,7 @@ import uuid
 from typing import Any, Dict, List, Optional
 
 from ....shared.unified_logger import UnifiedAsyncLogger
-from ....storage.async_redis_storage import AsyncRedisStorage
+from ....storage import UnifiedStorage
 from ....storage.redis_clients import RedisClients
 
 
@@ -25,7 +25,7 @@ class MCPSessionManager:
 
     def __init__(
         self,
-        async_storage: AsyncRedisStorage,
+        async_storage: UnifiedStorage,
         redis_clients: RedisClients
     ):
         """Initialize the session manager.

@@ -9,7 +9,7 @@ import time
 from typing import Any, Dict, Optional
 
 from ....shared.unified_logger import UnifiedAsyncLogger
-from ....storage.async_redis_storage import AsyncRedisStorage
+from ....storage import UnifiedStorage
 from ....storage.redis_clients import RedisClients
 
 
@@ -18,7 +18,7 @@ class MCPEventPublisher:
 
     def __init__(
         self,
-        async_storage: AsyncRedisStorage,
+        async_storage: UnifiedStorage,
         redis_clients: RedisClients
     ):
         """Initialize the event publisher.

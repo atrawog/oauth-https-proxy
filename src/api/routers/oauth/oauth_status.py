@@ -16,7 +16,7 @@ from fastapi import APIRouter, Query, HTTPException, Depends, Request
 from pydantic import BaseModel, Field
 
 # Authentication is handled by proxy, API trusts headers
-from src.storage.redis_storage import RedisStorage
+from ....storage import UnifiedStorage
 
 logger = logging.getLogger(__name__)
 

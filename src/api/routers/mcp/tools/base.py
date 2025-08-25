@@ -22,7 +22,7 @@ class BaseMCPTools:
         
         Args:
             mcp_server: The MCP server instance with FastMCP
-            storage: AsyncRedisStorage instance
+            storage: UnifiedStorage instance
             logger: UnifiedAsyncLogger instance
             event_publisher: MCPEventPublisher instance
             session_manager: MCPSessionManager instance

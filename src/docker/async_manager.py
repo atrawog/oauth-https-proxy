@@ -23,7 +23,7 @@ from .models import (
     DockerServiceUpdate,
     DockerServiceStats
 )
-from ..storage.async_redis_storage import AsyncRedisStorage
+from ..storage import UnifiedStorage
 from ..ports.async_manager import AsyncPortManager
 from ..ports.models import ServicePort
 from ..shared.unified_logger import UnifiedAsyncLogger
@@ -38,7 +38,7 @@ executor = ThreadPoolExecutor(max_workers=5)
 class AsyncDockerManager:
     """Async Docker manager with event publishing."""
     
-    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients):
+    def __init__(self, storage: UnifiedStorage, redis_clients: RedisClients):
         """Initialize async Docker manager.
         
         Args:

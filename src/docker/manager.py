@@ -17,7 +17,7 @@ from .models import (
     DockerServiceUpdate,
     DockerServiceStats
 )
-from ..storage.redis_storage import RedisStorage
+from ..storage import UnifiedStorage
 from ..ports import PortManager, ServicePort
 
 logger = logging.getLogger(__name__)

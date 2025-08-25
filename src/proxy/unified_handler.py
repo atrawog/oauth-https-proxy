@@ -8,7 +8,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
 from urllib.parse import quote
-from ..storage.async_redis_storage import AsyncRedisStorage
+from ..storage import UnifiedStorage
 from ..storage.redis_clients import RedisClients
 from ..shared.config import Config
 from ..proxy.unified_routing import (
@@ -57,11 +57,11 @@ class UnifiedProxyHandler:
         (r".*", r"/.well-known/.*", None),
     ]
     
-    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients, proxy_hostname=None):
+    def __init__(self, storage: UnifiedStorage, redis_clients: RedisClients, proxy_hostname=None):
         """Initialize unified proxy handler.
         
         Args:
-            storage: Async storage instance
+            storage: UnifiedStorage instance
             redis_clients: Redis clients for operations
             proxy_hostname: Hostname this handler is serving (for route filtering)
         """

@@ -29,15 +29,21 @@ async def initialize_components(config: Config) -> tuple:
         Tuple of (storage, manager, scheduler, proxy_handler, async_components, https_server)
     """
     # Initialize storage with Redis URL
+    import logging
+    logger = logging.getLogger(__name__)
     redis_url = config.get_redis_url_with_password()
+    logger.info(f"Creating RedisStorage with URL pattern: redis://:****@{redis_url.split('@')[-1] if '@' in redis_url else 'redis:6379'}")
     storage = RedisStorage(redis_url)
+    logger.info("RedisStorage instance created")
     # Since we're in async context, must initialize async
+    logger.info("Calling storage.initialize_async()")
     await storage.initialize_async()
+    logger.info("storage.initialize_async() completed")
     
-    # Initialize async components
+    # Initialize async components with shared storage
     from .api.async_init import init_async_components
-    async_components = await init_async_components(redis_url)
-    log_info("Async components initialized", component="main")
+    async_components = await init_async_components(redis_url, storage)
+    log_info("Async components initialized with shared storage", component="main")
     
     # Logging is now handled by UnifiedAsyncLogger initialized in async_components
     log_info("Using UnifiedAsyncLogger for all logging", component="main")
@@ -60,10 +66,14 @@ async def initialize_components(config: Config) -> tuple:
     )
     
     # Initialize default routes
+    log_info("Calling storage.initialize_default_routes()", component="main")
     await storage.initialize_default_routes()
+    log_info("storage.initialize_default_routes() completed", component="main")
     
     # Initialize default proxies
+    log_info("Calling storage.initialize_default_proxies()", component="main")
     await storage.initialize_default_proxies()
+    log_info("storage.initialize_default_proxies() completed", component="main")
     
     # Note: Flexible auth system is initialized directly in run_server()
     

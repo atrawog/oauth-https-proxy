@@ -12,7 +12,7 @@ import anyio
 from fastapi import FastAPI, Request, Response
 from starlette.middleware.cors import CORSMiddleware
 
-from ....storage.async_redis_storage import AsyncRedisStorage
+from ....storage import UnifiedStorage
 from ....shared.unified_logger import UnifiedAsyncLogger
 from ....shared.dns_resolver import get_dns_resolver
 from .mcp_server import IntegratedMCPServer
@@ -29,7 +29,7 @@ _unified_logger = None
 
 def mount_mcp_app(
     app: FastAPI,
-    async_storage: AsyncRedisStorage,
+    async_storage: UnifiedStorage,
     cert_manager=None,
     docker_manager=None,
     unified_logger: Optional[UnifiedAsyncLogger] = None

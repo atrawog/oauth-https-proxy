@@ -11,7 +11,7 @@ from typing import Dict, List, Optional, Set, Tuple
 from datetime import datetime, timezone
 import hashlib
 
-from ..storage.async_redis_storage import AsyncRedisStorage
+from ..storage import UnifiedStorage
 from .models import ServicePort, PortAllocation
 
 logger = logging.getLogger(__name__)
@@ -41,7 +41,7 @@ class AsyncPortManager:
         27017, # MongoDB
     }
     
-    def __init__(self, storage: AsyncRedisStorage):
+    def __init__(self, storage: UnifiedStorage):
         """Initialize the async port manager."""
         self.storage = storage
         self.redis = storage.redis_client  # Will be async Redis client

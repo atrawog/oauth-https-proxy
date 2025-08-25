@@ -14,7 +14,6 @@ from concurrent.futures import ThreadPoolExecutor
 
 from .models import Certificate, CertificateRequest
 from .manager import CertificateManager as SyncCertManager
-from ..storage.async_redis_storage import AsyncRedisStorage
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..storage.redis_clients import RedisClients
 
@@ -32,11 +31,11 @@ generation_results: Dict[str, Dict[str, Any]] = {}
 class AsyncCertificateManager:
     """Async certificate manager with event publishing."""
     
-    def __init__(self, storage: AsyncRedisStorage, redis_clients: RedisClients):
+    def __init__(self, storage, redis_clients: RedisClients):
         """Initialize async certificate manager.
         
         Args:
-            storage: Async Redis storage instance
+            storage: UnifiedStorage instance (works in both sync and async contexts)
             redis_clients: Redis clients for logging
         """
         self.storage = storage
@@ -45,30 +44,12 @@ class AsyncCertificateManager:
         # Initialize component-specific logger
         self.logger = UnifiedAsyncLogger(redis_clients, component="certificate_manager")
         
-        # Initialize sync manager for ACME operations
-        # Need sync storage for sync manager
+        # Initialize sync manager for ACME operations using the same storage
+        # UnifiedStorage works in both sync and async contexts
         try:
-            from ..storage.redis_storage import RedisStorage
-            # Build Redis URL with password
-            redis_base = os.getenv('REDIS_URL', 'redis://redis:6379/0')
-            redis_password = os.getenv('REDIS_PASSWORD', '')
-            
-            # Parse and rebuild URL with password
-            if redis_password and '://' in redis_base:
-                # Insert password into URL: redis://:password@host:port/db
-                parts = redis_base.split('://', 1)
-                if '@' not in parts[1]:  # No password in URL yet
-                    host_part = parts[1]
-                    redis_url = f"{parts[0]}://:{redis_password}@{host_part}"
-                else:
-                    redis_url = redis_base
-            else:
-                redis_url = redis_base
-            
-            logger.info(f"Initializing sync RedisStorage with URL pattern: redis://:****@{redis_url.split('@')[-1] if '@' in redis_url else redis_url.split('//')[-1]}")
-            sync_storage = RedisStorage(redis_url)
-            self.sync_manager = SyncCertManager(sync_storage)
-            logger.info("Successfully initialized sync CertificateManager for ACME operations")
+            # Use the shared UnifiedStorage for sync operations
+            self.sync_manager = SyncCertManager(storage)
+            logger.info("Successfully initialized sync CertificateManager using shared UnifiedStorage")
         except Exception as e:
             logger.error(f"Failed to initialize sync CertificateManager: {e}", exc_info=True)
             self.sync_manager = None

@@ -9,7 +9,7 @@ from typing import Optional
 from fastapi import FastAPI
 
 from ..storage.redis_clients import RedisClients, initialize_redis_clients
-from ..storage.async_redis_storage import AsyncRedisStorage
+from ..storage import UnifiedStorage
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..shared.logger import set_global_logger
 from ..consumers.metrics_processor import MetricsProcessor
@@ -25,7 +25,7 @@ class AsyncComponents:
     
     def __init__(self):
         self.redis_clients: Optional[RedisClients] = None
-        self.async_storage: Optional[AsyncRedisStorage] = None
+        self.async_storage: Optional[UnifiedStorage] = None
         self.unified_logger: Optional[UnifiedAsyncLogger] = None
         self.metrics_processor: Optional[MetricsProcessor] = None
         self.alert_manager: Optional[AlertManager] = None
@@ -33,11 +33,12 @@ class AsyncComponents:
         self.cert_manager: Optional[AsyncCertificateManager] = None
         self.initialized = False
     
-    async def initialize(self, redis_url: str):
+    async def initialize(self, redis_url: str, storage=None):
         """Initialize all async components.
         
         Args:
             redis_url: Redis connection URL
+            storage: Optional UnifiedStorage instance to share (if None, creates new AsyncRedisStorage)
         """
         if self.initialized:
             logger.warning("Async components already initialized")
@@ -52,10 +53,16 @@ class AsyncComponents:
             await self.redis_clients.initialize()
             logger.info("Redis clients initialized")
             
-            # Initialize async storage
-            self.async_storage = AsyncRedisStorage(redis_url)
-            await self.async_storage.initialize()
-            logger.info("Async storage initialized")
+            # Use shared storage or create new AsyncRedisStorage
+            if storage:
+                # Use the shared UnifiedStorage instance
+                self.async_storage = storage
+                logger.info("Using shared UnifiedStorage instance")
+            else:
+                # Fallback: create new UnifiedStorage (for backward compatibility)
+                self.async_storage = UnifiedStorage(redis_url)
+                await self.async_storage.initialize_async()
+                logger.info("Created new UnifiedStorage (fallback - prefer passing shared storage)")
             
             # Initialize unified logger with component name
             self.unified_logger = UnifiedAsyncLogger(self.redis_clients, component="api_server")
@@ -154,11 +161,12 @@ def get_async_components() -> Optional[AsyncComponents]:
     return _async_components
 
 
-async def init_async_components(redis_url: str) -> AsyncComponents:
+async def init_async_components(redis_url: str, storage=None) -> AsyncComponents:
     """Initialize and return async components.
     
     Args:
         redis_url: Redis connection URL
+        storage: Optional UnifiedStorage instance to share
         
     Returns:
         Initialized AsyncComponents instance
@@ -167,7 +175,7 @@ async def init_async_components(redis_url: str) -> AsyncComponents:
     
     if _async_components is None:
         _async_components = AsyncComponents()
-        await _async_components.initialize(redis_url)
+        await _async_components.initialize(redis_url, storage)
     
     return _async_components
 

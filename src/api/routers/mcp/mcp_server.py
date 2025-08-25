@@ -13,7 +13,7 @@ from typing import Any, Dict, Optional
 from mcp.server.fastmcp import FastMCP
 
 from ....shared.unified_logger import UnifiedAsyncLogger
-from ....storage.async_redis_storage import AsyncRedisStorage
+from ....storage import UnifiedStorage
 from .event_publisher import MCPEventPublisher
 from .session_manager import MCPSessionManager
 from .session_interceptor import MCPSessionInterceptor
@@ -66,7 +66,7 @@ class IntegratedMCPServer:
 
     def __init__(
         self,
-        async_storage: AsyncRedisStorage,
+        async_storage: UnifiedStorage,
         unified_logger: UnifiedAsyncLogger,
         cert_manager=None,
         docker_manager=None
