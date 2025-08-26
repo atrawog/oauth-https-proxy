@@ -181,14 +181,74 @@ class MCPStarletteApp:
             accepts_sse = "text/event-stream" in accept_header
             logger.info(f"[MCP APP] Client accepts SSE: {accepts_sse} (Accept: {accept_header})")
             
-            # For GET without body, return server info
-            if method == "GET" and not await request.body():
-                # Return server info as JSON
-                return JSONResponse({
-                    "server": self.mcp.server_info,
-                    "capabilities": self.mcp.capabilities,
-                    "tools": self.mcp.list_tools()
-                })
+            # For GET requests, open an SSE stream per MCP spec
+            if method == "GET":
+                logger.info(f"[MCP APP] GET request - opening SSE stream for session {session_id}")
+                
+                # Get or create session
+                session_id = await self.mcp.get_or_create_session(session_id)
+                
+                # Create SSE stream that stays open for multiple requests
+                async def persistent_sse_stream():
+                    """Generate persistent SSE stream for GET requests per MCP spec."""
+                    stream_id = f"get_stream_{secrets.token_hex(4)}"
+                    logger.info(f"[MCP APP SSE] Opening persistent GET stream (id: {stream_id}, session: {session_id})")
+                    
+                    try:
+                        # Send initial ping to establish connection
+                        yield b": ping\n\n"
+                        
+                        # Send server hello message
+                        hello_msg = {
+                            "jsonrpc": "2.0",
+                            "method": "notifications/hello",
+                            "params": {
+                                "protocolVersion": "2025-06-18",
+                                "capabilities": self.mcp.capabilities,
+                                "serverInfo": self.mcp.server_info
+                            }
+                        }
+                        hello_data = f"data: {json.dumps(hello_msg)}\n\n"
+                        yield hello_data.encode('utf-8')
+                        logger.info(f"[MCP APP SSE] Sent hello notification on GET stream")
+                        
+                        # Keep connection alive with periodic pings
+                        ping_count = 0
+                        max_pings = 600  # 5 minutes with 0.5s interval
+                        
+                        while ping_count < max_pings:
+                            await asyncio.sleep(0.5)
+                            yield b": keepalive\n\n"
+                            ping_count += 1
+                            
+                            if ping_count % 20 == 0:  # Log every 10 seconds
+                                logger.debug(f"[MCP APP SSE] GET stream alive ({ping_count}/{max_pings})")
+                        
+                        logger.info(f"[MCP APP SSE] GET stream timeout, closing (id: {stream_id})")
+                    except Exception as e:
+                        logger.error(f"[MCP APP SSE] GET stream error: {e}")
+                        error_msg = {
+                            "jsonrpc": "2.0",
+                            "error": {
+                                "code": -32603,
+                                "message": f"Stream error: {str(e)}"
+                            }
+                        }
+                        error_data = f"data: {json.dumps(error_msg)}\n\n"
+                        yield error_data.encode('utf-8')
+                
+                return StreamingResponse(
+                    persistent_sse_stream(),
+                    media_type="text/event-stream",
+                    headers={
+                        "Cache-Control": "no-cache",
+                        "X-Accel-Buffering": "no",
+                        "Mcp-Session-Id": session_id,
+                        "Connection": "keep-alive",
+                        "Access-Control-Allow-Origin": "*",
+                        "Access-Control-Expose-Headers": "Mcp-Session-Id"
+                    }
+                )
             
             # Parse JSON-RPC request body
             body_bytes = await request.body()
