@@ -27,4 +27,19 @@ def create_debug_router() -> APIRouter:
             "app_state_attributes": state_info,
             "has_oauth_components": hasattr(request.app.state, "oauth_components")
         }
+    
+    @router.get("/routes")
+    async def list_routes(request: Request):
+        """List all registered routes including mounted apps."""
+        routes = []
+        for route in request.app.routes:
+            if hasattr(route, 'path'):
+                routes.append({
+                    "path": route.path,
+                    "name": getattr(route, 'name', None),
+                    "methods": list(getattr(route, 'methods', [])) if hasattr(route, 'methods') else None,
+                    "type": type(route).__name__
+                })
+        return {"routes": routes, "total": len(routes)}
+    
     return router

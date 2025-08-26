@@ -76,6 +76,9 @@ set quiet
     echo "  just docs-build            # Build documentation"
     echo "  just test [files]          # Run tests"
     echo "  just test-all              # Run all tests"
+    echo "  just mcp-test [url]        # MCP compliance testing"
+    echo "  just mcp-test-verbose      # MCP tests with details"
+    echo "  just mcp-stress [url] [n]  # MCP stress test (n sessions)"
     echo ""
     echo "REDIS TOOLS:"
     echo "  just redis-info            # Show Redis stats"
@@ -89,7 +92,7 @@ set quiet
     echo "  just oauth login"
     echo "  just proxy-github set api.example.com <client-id> <secret>"
     echo ""
-    echo "Total: 34 commands with 93 available actions"
+    echo "Total: 37 commands with 96 available actions"
     echo "Run 'just --list' for complete command list"
     echo "Run 'just <command> --help' for action details"
     echo ""
@@ -392,6 +395,21 @@ test *files="":
 # Run comprehensive tests
 test-all:
     pixi run pytest tests/ -v --tb=short
+
+# Run MCP compliance tests
+mcp-test url="https://localhost/mcp" category="all":
+    @echo "Running MCP compliance tests against {{url}}"
+    @pixi run python scripts/test_mcp_compliance.py --url {{url}} --category {{category}}
+
+# Run MCP compliance tests with verbose output
+mcp-test-verbose url="https://localhost/mcp":
+    @echo "Running MCP compliance tests with verbose output"
+    @pixi run python scripts/test_mcp_compliance.py --url {{url}} --verbose
+
+# Run MCP stress tests
+mcp-stress url="https://localhost/mcp" sessions="50":
+    @echo "Running MCP stress test with {{sessions}} concurrent sessions"
+    @pixi run python scripts/test_mcp_stress.py --url {{url}} --mode stress --sessions {{sessions}}
 
 # Build documentation
 docs-build:

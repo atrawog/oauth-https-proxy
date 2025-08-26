@@ -856,7 +856,7 @@ class AsyncRedisStorage:
             await self.initialize_logging()
         
         if self.log_storage:
-            return await self.log_storage.get_logs_by_hostname(hostname, hours, limit)
+            return await self.log_storage.get_logs_by_hostname(proxy_hostname, hours, limit)
         return []
     
     async def get_logs_by_proxy(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> list:

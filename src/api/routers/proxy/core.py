@@ -47,6 +47,7 @@ def create_core_router(storage, cert_manager):
         auth_user, auth_scopes, is_admin = check_auth_and_scopes(req, required_scopes=["admin"])
         
         # Debug logging
+        auth_scopes_header = req.headers.get("X-Auth-Scopes", "")
         logger.info(f"Auth check - User: {auth_user}, Scopes header: '{auth_scopes_header}', Parsed scopes: {auth_scopes}, Is admin: {is_admin}")
         
         # Check permissions - admin scope required for create

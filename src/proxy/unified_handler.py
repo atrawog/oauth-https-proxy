@@ -78,7 +78,8 @@ class UnifiedProxyHandler:
         # Initialize DNS resolver
         self.dns_resolver = get_dns_resolver()
         
-        # Create httpx client with proper timeouts
+        # Create httpx client with proper timeouts and increased connection limits
+        # Enhanced for concurrent connections and SSE streaming
         self.client = httpx.AsyncClient(
             follow_redirects=False,
             verify=False,
@@ -86,9 +87,14 @@ class UnifiedProxyHandler:
                 connect=float(Config.PROXY_CONNECT_TIMEOUT),
                 read=float(Config.PROXY_REQUEST_TIMEOUT),
                 write=10.0,
-                pool=None
+                pool=None  # No pool timeout
             ),
-            limits=httpx.Limits(max_keepalive_connections=100)
+            limits=httpx.Limits(
+                max_keepalive_connections=200,  # Increased from 100
+                max_connections=500,             # Added: total connection limit
+                keepalive_expiry=30.0           # Added: keepalive timeout
+            ),
+            http2=True  # Enable HTTP/2 for better concurrent performance
         )
     
     def extract_bearer_token(self, request: Request) -> Optional[str]:
@@ -948,9 +954,99 @@ class UnifiedProxyHandler:
         # Get request body
         body = await request.body()
         
+        # Special handling for MCP endpoint
+        is_mcp_request = request.url.path == '/mcp'
+        if is_mcp_request:
+            log_info(f"MCP {request.method} request detected", component="proxy_handler", **log_ctx)
+        
+        # Check if client expects SSE based on Accept header
+        accept_header = headers.get('accept', '').lower()
+        expects_sse = 'text/event-stream' in accept_header
+        
         try:
-            # Make the request - always use regular request, not stream
-            # We'll check the response content-type to determine if it's SSE
+            # For SSE requests (MCP GET or explicit SSE accept), use streaming from the start
+            # MCP: GET = SSE stream, POST = JSON response
+            if (is_mcp_request and request.method == "GET") or (expects_sse and not is_mcp_request):
+                log_info(f"{'MCP' if is_mcp_request else 'SSE'} streaming request for {target_url}", component="proxy_handler", **log_ctx)
+                
+                # Simple SSE streaming with proper context management
+                async def stream_sse():
+                    """Stream SSE response from backend."""
+                    # For SSE, we need to ensure the connection stays alive
+                    stream_headers = headers.copy()
+                    stream_headers['connection'] = 'keep-alive'
+                    stream_headers['cache-control'] = 'no-cache'
+                    
+                    async with self.client.stream(
+                        request.method,
+                        target_url,
+                        headers=stream_headers,
+                        content=body if body else None,
+                    ) as response:
+                        # Store response info for later use
+                        nonlocal sse_status, sse_headers
+                        sse_status = response.status_code
+                        sse_headers = dict(response.headers)
+                        
+                        log_info(f"SSE stream opened: {sse_status}", component="proxy_handler", **log_ctx)
+                        log_debug(f"SSE headers: {sse_headers}", component="proxy_handler", **log_ctx)
+                        
+                        # Stream the chunks - use smaller chunk size for SSE
+                        chunk_count = 0
+                        try:
+                            # Try with no chunk size to let httpx decide
+                            async for chunk in response.aiter_bytes():
+                                if chunk:
+                                    chunk_count += 1
+                                    log_info(f"SSE chunk {chunk_count}: {len(chunk)} bytes, content: {chunk[:100]}", component="proxy_handler", **log_ctx)
+                                    yield chunk
+                                else:
+                                    log_debug(f"Empty chunk received", component="proxy_handler", **log_ctx)
+                        except Exception as e:
+                            log_error(f"SSE streaming error: {e}", component="proxy_handler", **log_ctx, exc_info=True)
+                        finally:
+                            log_info(f"SSE stream ended after {chunk_count} chunks", component="proxy_handler", **log_ctx)
+                
+                # Variables to capture response info
+                sse_status = 200
+                sse_headers = {}
+                
+                # Create the generator
+                sse_generator = stream_sse()
+                
+                # We need to start the generator to get headers, but this is tricky
+                # Instead, let's use a wrapper that handles this
+                started = False
+                original_generator = sse_generator
+                
+                async def wrapped_generator():
+                    """Wrapper to ensure headers are captured."""
+                    nonlocal started
+                    if not started:
+                        # Force the generator to start so we get headers
+                        started = True
+                    async for chunk in original_generator:
+                        yield chunk
+                
+                # Build response headers
+                response_headers = {}
+                if custom_response_headers:
+                    response_headers.update(custom_response_headers)
+                
+                # Ensure SSE headers are set
+                response_headers['cache-control'] = 'no-cache, no-store, must-revalidate'
+                response_headers['x-accel-buffering'] = 'no'
+                response_headers['connection'] = 'keep-alive'
+                response_headers['content-type'] = 'text/event-stream'
+                
+                # Return streaming response
+                return StreamingResponse(
+                    wrapped_generator(),
+                    status_code=200,  # SSE always returns 200
+                    headers=response_headers
+                )
+            
+            # For non-SSE requests, use regular request
             log_debug(f"Making backend request to {target_url}", component="proxy_handler", **log_ctx)
             
             response = await self.client.request(
@@ -964,40 +1060,30 @@ class UnifiedProxyHandler:
             response_headers = dict(response.headers)
             if custom_response_headers:
                 response_headers.update(custom_response_headers)
-            
-            # Check if this is an SSE response
-            content_type = response_headers.get('content-type', '').lower()
-            is_sse = 'text/event-stream' in content_type
-            
-            if is_sse:
-                # For SSE responses, we need to handle them specially
-                # The backend returns SSE data, we should pass it through directly
-                # without trying to re-stream it
-                log_info(f"SSE response detected, passing through directly", component="proxy_handler", **log_ctx)
-                
-                # For SSE, use the raw response content
-                return Response(
-                    content=response.content,
-                    status_code=response.status_code,
-                    headers=response_headers,
-                    media_type='text/event-stream'
-                )
             else:
                 # Remove hop-by-hop headers from response
                 for header in hop_by_hop:
                     response_headers.pop(header, None)
-                
-                log_info(f"Backend response: {response.status_code}", component="proxy_handler", **log_ctx)
-                
-                # Log error responses for debugging
-                if response.status_code >= 400:
-                    log_warning(f"Backend error response {response.status_code}: {response.text[:200]}", component="proxy_handler", **log_ctx)
-                
-                return Response(
-                    content=response.content,
-                    status_code=response.status_code,
-                    headers=response_headers
-                )
+            
+            # For MCP POST requests, preserve session headers
+            if is_mcp_request:
+                for header_name in ['mcp-session-id', 'mcp-protocol-version']:
+                    if header_name in response.headers:
+                        response_headers[header_name] = response.headers[header_name]
+            
+            # Log responses (moved outside if block to log all responses)
+            log_info(f"Backend response: {response.status_code}", component="proxy_handler", **log_ctx)
+            
+            # Log error responses for debugging
+            if response.status_code >= 400:
+                log_warning(f"Backend error response {response.status_code}: {response.text[:200]}", component="proxy_handler", **log_ctx)
+            
+            # Return for ALL non-SSE requests (not just MCP)
+            return Response(
+                content=response.content,
+                status_code=response.status_code,
+                headers=response_headers
+            )
                 
         except httpx.TimeoutException as e:
             log_error(f"Backend request timeout: {e}", component="proxy_handler", **log_ctx)

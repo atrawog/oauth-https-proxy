@@ -580,6 +580,84 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 - Protected resource metadata endpoints
 - Resource-specific scope enforcement
 
+### MCP Compliance Testing
+
+The system includes comprehensive MCP compliance testing tools that verify full specification compliance:
+
+#### Quick Test Commands
+```bash
+# Run full MCP compliance test suite
+just mcp-test
+
+# Test against a specific MCP endpoint
+just mcp-test https://auth.example.com/mcp
+
+# Run specific test category
+just mcp-test https://localhost/mcp session_basic
+just mcp-test https://localhost/mcp tools_advanced
+just mcp-test https://localhost/mcp protocol
+
+# Run with verbose output for debugging
+just mcp-test-verbose https://auth.example.com/mcp
+
+# Run stress tests (50 concurrent sessions)
+just mcp-stress https://auth.example.com/mcp 50
+```
+
+#### Test Categories
+- **session_basic**: Session ID format, cryptographic security
+- **session_advanced**: State persistence, timeout, header handling
+- **tools_basic**: Unique names, descriptions, schema validation
+- **tools_advanced**: Error handling, parameter validation, concurrent execution
+- **protocol**: Version negotiation, capabilities, JSON-RPC compliance
+- **all**: Run all test categories (default)
+
+#### Compliance Requirements Tested
+The test suite verifies compliance with:
+- [Session Management](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management)
+  - Session IDs contain only visible ASCII (0x21-0x7E)
+  - Session IDs are cryptographically secure with high entropy
+  - Session state persists across requests
+  - Session timeout mechanisms work correctly
+  - Header case sensitivity follows HTTP standards
+  
+- [Server Tools](https://modelcontextprotocol.io/specification/2025-06-18/server/tools)
+  - Tools have unique names
+  - Tools have descriptions
+  - Tool parameters follow JSON Schema
+  - Invalid tool calls return proper errors
+  - Parameter validation works correctly
+  - Concurrent tool execution is supported
+
+- [Protocol Features](https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http)
+  - Protocol version negotiation works correctly
+  - Capabilities are properly defined
+  - List changed notifications are declared
+  - JSON-RPC 2.0 compliance
+  - Large payload handling
+
+#### Test Output
+Tests produce detailed compliance reports showing:
+- Pass/Fail status for each requirement
+- Specification references for each test
+- Detailed error messages and warnings
+- Performance metrics for tool execution
+- Overall compliance percentage
+
+Example output:
+```
+======================================================================
+📊 MCP COMPLIANCE TEST REPORT
+======================================================================
+Total Tests: 16
+Passed: 16
+Failed: 0
+Pass Rate: 100.0%
+
+🎉 FULLY COMPLIANT - ALL TESTS PASSED!
+======================================================================
+```
+
 ## Key Implementation Insights
 
 1. **OAuth-Only Authentication**: Complete removal of bearer token system, pure OAuth 2.1
@@ -815,6 +893,11 @@ just test tests/test_proxy.py      # All proxy tests
 just test tests/test_oauth.py      # OAuth tests  
 just test tests/test_certificates.py  # Certificate tests
 just test tests/test_docker.py     # Docker service tests
+
+# MCP compliance testing
+just mcp-test                      # Full MCP compliance suite
+just mcp-test-verbose              # Verbose compliance testing
+just mcp-stress                    # MCP stress testing (50 sessions)
 ```
 
 ### Test Configuration

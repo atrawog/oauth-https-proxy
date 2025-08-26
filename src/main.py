@@ -148,7 +148,12 @@ def create_asgi_app():
         dual_logger.info("Registering all routers with Unified Router Registry...")
         try:
             from .api.routers.registry import register_all_routers
-            register_all_routers(app)
+            # register_all_routers returns MCP wrapper if MCP is enabled
+            wrapped_app = register_all_routers(app)
+            if wrapped_app != app:
+                dual_logger.info("✓ MCP ASGI wrapper installed")
+                # Store the wrapper for later use
+                app.state.mcp_wrapper = wrapped_app
             dual_logger.info("✓ All routers registered successfully")
         except Exception as e:
             dual_logger.error(f"✗ Router registration failed: {e}")

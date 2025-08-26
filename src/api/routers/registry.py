@@ -178,18 +178,19 @@ def register_all_routers(app: FastAPI):
     
     # ========== LOG SUMMARY ==========
     
-    # ========== MOUNT MCP STARLETTE APP ==========
+    # ========== MOUNT MCP SERVER WITH ASGI WRAPPER ==========
     
-    # Mount MCP Starlette app with ASGI wrapper
+    # Mount MCP server and get wrapper
     mcp_wrapper = None
     try:
-        logger.info("Mounting MCP Starlette app with ASGI wrapper...")
-        mcp_wrapper = _mount_mcp_app(app, async_storage, cert_manager, getattr(app.state, 'docker_manager', None), unified_logger)
+        logger.info("Mounting MCP server with ASGI wrapper...")
+        from .mcp import mount_mcp
+        mcp_wrapper = mount_mcp(app, async_storage, unified_logger)
         successful_routers.append("MCP (/mcp) - Mounted with ASGI wrapper")
     except Exception as e:
         import traceback
-        logger.error(f"Failed to mount MCP app: {e}")
-        logger.error(f"MCP app traceback: {traceback.format_exc()}")
+        logger.error(f"Failed to mount MCP: {e}")
+        logger.error(f"MCP traceback: {traceback.format_exc()}")
         failed_routers.append(f"MCP: {str(e)}")
     
     logger.info("=" * 60)
@@ -292,7 +293,3 @@ def _create_debug_router() -> APIRouter:
     return create_debug_router()
 
 
-def _mount_mcp_app(app: FastAPI, async_storage, cert_manager, docker_manager, unified_logger):
-    """Mount MCP Starlette app directly with proper task group initialization."""
-    from .mcp import mount_mcp_app
-    return mount_mcp_app(app, async_storage, cert_manager, docker_manager, unified_logger)
