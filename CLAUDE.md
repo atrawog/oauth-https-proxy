@@ -552,6 +552,7 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 - **Protocol Versions**: Supports 2024-11-05, 2025-03-26, and 2025-06-18
 - **Session Management**: Stateful sessions with persistent context
 - **Tool Integration**: 10+ built-in tools for system management
+- **Special Architecture**: MCP requests are intercepted BEFORE FastAPI to bypass middleware bugs (see [Architecture Decisions](#why-mcp-bypasses-fastapi-middleware))
 
 ### MCP Tools Available
 - `echo` - Test connectivity and message handling
@@ -603,6 +604,7 @@ The system provides **FULL MCP SUPPORT** for LLM integration:
 20. **Clean Route IDs**: Routes have predictable IDs matching endpoints (`token` not `token-80c106aa`)
 21. **Pure TCP Forwarding**: Dispatcher is a Layer 4 forwarder using h11 only for hostname extraction - no HTTP handling
 22. **h11 for Safety**: Uses the same HTTP/1.1 parser as httpx/uvicorn for safe hostname extraction without manual parsing
+23. **MCP ASGI Interception**: MCP requests bypass FastAPI middleware via MCPASGIMiddleware to avoid BaseHTTPMiddleware SSE bugs
 
 ## Port Configuration
 
@@ -904,6 +906,41 @@ Dispatcher → HypercornInstance → ProxyOnlyApp → UnifiedProxyHandler → Ba
 2. **Trust boundaries matter**: Never trust partial validation - either fully validate or don't
 3. **Working code > clever architecture**: The simpler solution that works is better than complex ideas
 4. **Security first**: A security hole from incomplete validation is worse than slightly later validation
+
+### Why MCP Bypasses FastAPI Middleware
+
+We discovered that Starlette's BaseHTTPMiddleware has a critical bug with Server-Sent Events (SSE) that affects MCP's streaming responses:
+
+1. **The Bug**: BaseHTTPMiddleware crashes with `RuntimeError: Unexpected message received: http.request` when HTTP/1.1 connections are reused after SSE responses
+   - SSE keeps connections open for streaming
+   - HTTP/1.1 keep-alive reuses connections  
+   - BaseHTTPMiddleware's disconnect listener doesn't expect new requests
+   - The middleware crashes on connection reuse
+
+2. **Failed Approaches**: Standard mounting methods all go through middleware
+   - FastAPI routes: Processed after middleware
+   - Starlette Mount: Still within FastAPI's middleware stack
+   - Custom BaseRoute: Routes are handled after middleware
+   - The fundamental issue: Can't bypass middleware from within FastAPI
+
+3. **The Solution**: MCPASGIMiddleware intercepts before FastAPI
+   ```
+   Hypercorn → MCPASGIMiddleware → MCP SDK (for /mcp)
+                      ↓
+                   FastAPI (for everything else)
+   ```
+   - ASGI wrapper sits between Hypercorn and FastAPI
+   - Checks if path == "/mcp"
+   - Routes directly to MCP SDK, bypassing ALL middleware
+   - Everything else goes through normal FastAPI flow
+
+4. **Benefits of This Architecture**:
+   - Complete bypass of BaseHTTPMiddleware bug
+   - No SSE disconnect errors
+   - Clean separation of concerns
+   - MCP performance improvement (skips middleware)
+   - All other endpoints work normally
+   - Future-proof against Starlette changes
 
 ## Troubleshooting
 

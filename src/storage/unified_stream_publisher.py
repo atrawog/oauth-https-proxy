@@ -138,6 +138,12 @@ class UnifiedStreamPublisher:
             approximate=True
         )
         
+        # Add to indexes if this is the master log stream
+        if stream_key == "logs:all:stream" and event_id:
+            # Get timestamp for indexing
+            timestamp_ms = int(data.get('timestamp', time.time() * 1000))
+            await self._add_to_indexes(event_id, data, timestamp_ms)
+        
         return event_id
     
     async def _process_batch(self):
@@ -175,12 +181,115 @@ class UnifiedStreamPublisher:
                 for entry in entries:
                     pipe.xadd(stream_key, entry, maxlen=maxlen, approximate=True)
             
-            await pipe.execute()
+            results = await pipe.execute()
+            
+            # Add to indexes for logs:all:stream entries
+            if "logs:all:stream" in by_stream:
+                stream_entries = by_stream["logs:all:stream"]
+                # Find the results for logs:all:stream entries
+                result_idx = 0
+                for stream_key in by_stream.keys():
+                    if stream_key == "logs:all:stream":
+                        for i, entry in enumerate(stream_entries):
+                            event_id = results[result_idx + i]
+                            if event_id:
+                                timestamp_ms = int(entry.get('timestamp', time.time() * 1000))
+                                await self._add_to_indexes(event_id, entry, timestamp_ms)
+                        break
+                    result_idx += len(by_stream[stream_key])
             
             logger.debug(f"Batch published {len(to_process)} entries to {len(by_stream)} streams")
             
         except Exception as e:
             logger.error(f"Batch processing error: {e}")
+    
+    async def _add_to_indexes(self, stream_id: str, stream_data: Dict[str, str], timestamp_ms: int):
+        """Add log entry to Redis indexes for efficient querying.
+        
+        Creates sorted set indexes by:
+        - All logs (global)
+        - Client IP
+        - Proxy hostname
+        - User ID
+        - HTTP status code
+        - HTTP method
+        - Errors (4xx/5xx)
+        - Log level
+        - Component
+        
+        Args:
+            stream_id: Redis stream entry ID
+            stream_data: Log entry data
+            timestamp_ms: Timestamp in milliseconds (used as score)
+        """
+        try:
+            # Use pipeline for efficiency
+            pipe = self.redis.pipeline()
+            
+            # TTL for indexes (30 days)
+            ttl_seconds = 30 * 24 * 60 * 60
+            
+            # Global index - all logs
+            pipe.zadd("log:idx:all", {stream_id: timestamp_ms})
+            pipe.expire("log:idx:all", ttl_seconds)
+            
+            # Index by client IP
+            client_ip = stream_data.get('client_ip')
+            if client_ip and client_ip != '127.0.0.1':
+                pipe.zadd(f"log:idx:ip:{client_ip}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:ip:{client_ip}", ttl_seconds)
+            
+            # Index by proxy hostname
+            proxy_hostname = stream_data.get('proxy_hostname')
+            if proxy_hostname:
+                pipe.zadd(f"log:idx:host:{proxy_hostname}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:host:{proxy_hostname}", ttl_seconds)
+            
+            # Index by user ID (check both user_id and auth_user fields)
+            user_id = stream_data.get('user_id') or stream_data.get('auth_user')
+            if user_id and user_id != 'anonymous':
+                pipe.zadd(f"log:idx:user:{user_id}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:user:{user_id}", ttl_seconds)
+            
+            # Index by HTTP status code (check both status_code and status fields)
+            status_code = stream_data.get('status_code') or stream_data.get('status')
+            if status_code and status_code != '0':
+                pipe.zadd(f"log:idx:status:{status_code}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:status:{status_code}", ttl_seconds)
+                
+                # Special index for errors
+                try:
+                    status_int = int(status_code)
+                    if status_int >= 400:
+                        pipe.zadd("log:idx:errors", {stream_id: timestamp_ms})
+                        pipe.expire("log:idx:errors", ttl_seconds)
+                except:
+                    pass
+            
+            # Index by HTTP method (support multiple field names)
+            method = stream_data.get('request_method') or stream_data.get('method')
+            if method:
+                pipe.zadd(f"log:idx:method:{method}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:method:{method}", ttl_seconds)
+            
+            # Index by log level
+            level = stream_data.get('level')
+            if level:
+                pipe.zadd(f"log:idx:level:{level}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:level:{level}", ttl_seconds)
+            
+            # Index by component
+            component = stream_data.get('component')
+            if component:
+                pipe.zadd(f"log:idx:component:{component}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:component:{component}", ttl_seconds)
+            
+            # Execute pipeline
+            await pipe.execute()
+            logger.debug(f"Added entry {stream_id} to indexes")
+            
+        except Exception as e:
+            logger.error(f"Error adding to indexes: {e}")
     
     def _flatten_for_redis(self, data: dict) -> dict:
         """Flatten data for Redis Streams compatibility.
@@ -306,7 +415,7 @@ class UnifiedStreamPublisher:
         """
         return await self.publish_log(
             level="INFO",
-            message=f"{request_data['method']} {request_data['path']}",
+            message=f"{request_data.get('request_method', request_data.get('method', 'UNKNOWN'))} {request_data.get('request_path', request_data.get('path', '/'))}",
             component="proxy_handler",
             trace_id=trace_id,
             log_type="http_request",

@@ -25,10 +25,14 @@ from ..proxy.models import ProxyTarget
 from ..proxy.app import create_proxy_app
 from .models import DomainService
 from ..shared.logger import log_info, log_warning, log_error, log_debug, log_trace
+from ..shared.dual_logger import create_dual_logger, set_redis_logger_for_component
 from ..shared.config import Config
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..ports.manager import PortManager
 from ..shared.dns_resolver import get_dns_resolver
+
+# Create dual logger for dispatcher
+dual_logger = create_dual_logger('dispatcher')
 
 # Removed correlation ID generator - using IP as primary identifier
 
@@ -92,16 +96,16 @@ class HypercornInstance:
         if http_enabled:
             await self.start_http()
         else:
-            log_info(f"HTTP disabled for domains {self.domains}", component="dispatcher")
+            dual_logger.info(f"HTTP disabled for domains {self.domains}")
         
         # Start HTTPS instance if enabled and certificate available
         if https_enabled:
             if self.cert and self.cert.fullchain_pem and self.cert.private_key_pem:
                 await self.start_https()
             else:
-                log_warning(f"HTTPS enabled but no certificate available for domains {self.domains}", component="dispatcher")
+                dual_logger.warning(f"HTTPS enabled but no certificate available for domains {self.domains}")
         else:
-            log_info(f"HTTPS disabled for domains {self.domains}", component="dispatcher")
+            dual_logger.info(f"HTTPS disabled for domains {self.domains}")
     
     async def start_http(self):
         """Start HTTP instance with PROXY protocol enabled."""
@@ -116,14 +120,18 @@ class HypercornInstance:
             config = HypercornConfig()
             config.bind = [f"127.0.0.1:{internal_port}"]
             config.loglevel = log_level.upper()
+            # Set reasonable timeouts to prevent hanging
+            config.keep_alive_timeout = 60  # Keep-alive timeout in seconds
+            config.shutdown_timeout = 2  # Max time to wait for graceful shutdown
+            config.ssl_handshake_timeout = 5  # SSL handshake timeout
             
-            log_info(f"Starting internal HTTP instance on port {internal_port} for domains: {self.domains}", component="dispatcher")
+            dual_logger.info(f"Starting internal HTTP instance on port {internal_port} for domains: {self.domains}")
             
             # Start internal server
             self.http_process = asyncio.create_task(serve(self.app, config))
             
             # Start PROXY protocol handler that receives from dispatcher
-            log_info(f"Starting PROXY protocol receiver on port {self.http_port} -> {internal_port}", component="dispatcher")
+            dual_logger.info(f"Starting PROXY protocol receiver on port {self.http_port} -> {internal_port}")
             proxy_server = await create_proxy_protocol_server(
                 backend_host="127.0.0.1",
                 backend_port=internal_port,
@@ -134,7 +142,7 @@ class HypercornInstance:
             self.proxy_handler = asyncio.create_task(proxy_server.serve_forever())
             
         except Exception as e:
-            log_error(f"Failed to start HTTP server: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Failed to start HTTP server: {e}", error=e)
             raise
     
     async def start_https(self):
@@ -161,15 +169,19 @@ class HypercornInstance:
             config.certfile = self.cert_file
             config.keyfile = self.key_file
             config.loglevel = log_level.upper()
+            # Set reasonable timeouts to prevent SSL shutdown hanging
+            config.keep_alive_timeout = 60  # Keep-alive timeout in seconds
+            config.shutdown_timeout = 2  # Max time to wait for graceful shutdown
+            config.ssl_handshake_timeout = 5  # SSL handshake timeout
             
-            log_info(f"Starting internal HTTPS instance on port {internal_port} for domains: {self.domains}", component="dispatcher")
+            dual_logger.info(f"Starting internal HTTPS instance on port {internal_port} for domains: {self.domains}")
             
             # Start internal server (Hypercorn handles SSL termination)
             self.https_process = asyncio.create_task(serve(self.app, config))
             
             # Start PROXY protocol handler that receives from dispatcher
             # Note: PROXY handler is just a TCP forwarder, no SSL needed here
-            log_info(f"Starting PROXY protocol receiver on port {self.https_port} -> {internal_port}", component="dispatcher")
+            dual_logger.info(f"Starting PROXY protocol receiver on port {self.https_port} -> {internal_port}")
             proxy_server = await create_proxy_protocol_server(
                 backend_host="127.0.0.1",
                 backend_port=internal_port,
@@ -180,7 +192,7 @@ class HypercornInstance:
             self.proxy_handler_https = asyncio.create_task(proxy_server.serve_forever())
             
         except Exception as e:
-            log_error(f"Failed to start HTTPS server: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Failed to start HTTPS server: {e}", error=e)
             self.cleanup()
             raise
     
@@ -203,7 +215,7 @@ class HypercornInstance:
                 
         self.cleanup()
         
-        log_info(f"Stopped instance for domains: {self.domains}", component="dispatcher")
+        dual_logger.info(f"Stopped instance for domains: {self.domains}")
     
     def cleanup(self):
         """Clean up temporary files."""
@@ -213,7 +225,7 @@ class HypercornInstance:
             if self.key_file and os.path.exists(self.key_file):
                 os.unlink(self.key_file)
         except Exception as e:
-            log_error(f"Error cleaning up temp files: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Error cleaning up temp files: {e}", error=e)
 
 
 class UnifiedDispatcher:
@@ -228,11 +240,11 @@ class UnifiedDispatcher:
         # Create dispatcher-specific logger (required)
         if async_components and hasattr(async_components, 'redis_clients'):
             self.unified_logger = UnifiedAsyncLogger(async_components.redis_clients, component="dispatcher")
-            log_info("Unified dispatcher initialized with component-specific logger", component="dispatcher")
+            dual_logger.info("Unified dispatcher initialized with component-specific logger")
         else:
             # Unified logger is required for proper operation
             self.unified_logger = None
-            log_warning("No unified logger available - some features may be limited", component="dispatcher")
+            dual_logger.warning("No unified logger available - some features may be limited")
         self.hostname_to_http_port: Dict[str, int] = {}
         self.hostname_to_https_port: Dict[str, int] = {}
         self.http_server = None
@@ -257,30 +269,43 @@ class UnifiedDispatcher:
     def register_domain(self, domains: List[str], http_port: int, https_port: int, 
                           enable_http: bool = True, enable_https: bool = True):
         """Register a domain instance for specific domains and protocols."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Python logging: register_domain called for {domains}, HTTP:{http_port}, HTTPS:{https_port}, enable_http:{enable_http}, enable_https:{enable_https}")
+        dual_logger.debug(
+            "register_domain called",
+            domains=str(domains),
+            http_port=http_port,
+            https_port=https_port,
+            enable_http=enable_http,
+            enable_https=enable_https
+        )
         
         for domain in domains:
             if enable_http:
                 # Register port for dispatcher connections (all have PROXY protocol)
                 self.hostname_to_http_port[domain] = http_port
-                log_info(f"Registered {domain} -> HTTP:{http_port}", component="dispatcher")
-                logger.info(f"Python logging: Registered {domain} -> HTTP:{http_port}")
+                dual_logger.info(
+                    f"Registered domain for HTTP",
+                    domain=domain,
+                    http_port=http_port,
+                    protocol="HTTP"
+                )
             if enable_https:
                 # Register port for dispatcher connections (all have PROXY protocol)
                 self.hostname_to_https_port[domain] = https_port
-                log_info(f"Registered {domain} -> HTTPS:{https_port}", component="dispatcher")
-                logger.info(f"Python logging: Registered {domain} -> HTTPS:{https_port}")
+                dual_logger.info(
+                    f"Registered domain for HTTPS",
+                    domain=domain,
+                    https_port=https_port,
+                    protocol="HTTPS"
+                )
             if not enable_http and not enable_https:
-                log_warning(f"Domain {domain} has no protocols enabled!", component="dispatcher")
+                dual_logger.warning(f"Domain {domain} has no protocols enabled!")
     
     # Removed register_named_service - using URL-only routing
     
     async def load_routes_from_storage(self):
         """Load routes from Redis storage."""
         if not self.storage:
-            log_warning("No storage available for loading routes", component="dispatcher")
+            dual_logger.warning("No storage available for loading routes")
             return
         
         try:
@@ -291,7 +316,7 @@ class UnifiedDispatcher:
             await self.storage.initialize_default_proxies()
             
         except Exception as e:
-            log_error(f"Failed to load routes from storage: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Failed to load routes from storage: {e}", error=e)
     
     def get_request_info(self, data: bytes) -> Tuple[Optional[str], Optional[str]]:
         """Extract request method and path from HTTP request."""
@@ -305,7 +330,7 @@ class UnifiedDispatcher:
                     return parts[0].upper(), parts[1]
             return None, None
         except Exception as e:
-            log_debug(f"Error parsing HTTP request: {e}", component="dispatcher")
+            dual_logger.debug(f"Error parsing HTTP request: {e}")
             return None, None
     
     def extract_hostname_with_h11(self, data: bytes) -> tuple[Optional[str], bytes]:
@@ -320,12 +345,12 @@ class UnifiedDispatcher:
         conn.receive_data(data)
         
         hostname = None
-        log_debug(f"h11: Processing request data, length={len(data)}", component="dispatcher")
+        dual_logger.debug(f"h11: Processing request data, length={len(data)}")
         
         # Parse just enough to get the Host header
         while True:
             event = conn.next_event()
-            log_debug(f"h11 event: {type(event).__name__}", component="dispatcher")
+            dual_logger.debug(f"h11 event: {type(event).__name__}")
             
             if event is h11.NEED_DATA:
                 # We only have initial data, can't get more here
@@ -334,10 +359,10 @@ class UnifiedDispatcher:
                 
             elif isinstance(event, h11.Request):
                 # Headers are part of the Request event in h11
-                log_debug(f"h11 Request: {event.method} {event.target}", component="dispatcher")
+                dual_logger.debug(f"h11 Request: {event.method} {event.target}")
                 # Extract Host header from request headers
                 for name, value in event.headers:
-                    log_debug(f"h11 header: {name}={value}", component="dispatcher")
+                    dual_logger.debug(f"h11 header: {name}={value}")
                     if name.lower() == b'host':
                         hostname = value.decode('utf-8')
                         # Remove port if present
@@ -443,7 +468,7 @@ class UnifiedDispatcher:
             return None
             
         except Exception as e:
-            log_debug(f"Error parsing SNI: {e}", component="dispatcher")
+            dual_logger.debug(f"Error parsing SNI: {e}")
             return None
     
     def _extract_http_headers(self, data: bytes) -> Dict[str, str]:
@@ -460,7 +485,7 @@ class UnifiedDispatcher:
                     key, value = line.split(':', 1)
                     headers[key.strip().lower()] = value.strip()
         except Exception as e:
-            log_debug(f"Error extracting headers: {e}", component="dispatcher")
+            dual_logger.debug(f"Error extracting headers: {e}")
         
         return headers
     
@@ -523,7 +548,7 @@ class UnifiedDispatcher:
             return data  # Return original if we couldn't parse
             
         except Exception as e:
-            log_debug(f"Error injecting header: {e}", component="dispatcher")
+            dual_logger.debug(f"Error injecting header: {e}")
             return data  # Return original on error
     
     async def handle_http_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -542,8 +567,8 @@ class UnifiedDispatcher:
             try:
                 proxy_hostname, complete_data = self.extract_hostname_with_h11(data)
             except Exception as e:
-                log_error(f"Failed to parse HTTP request with h11: {e}", component="dispatcher", error=e)
-                log_debug(f"Request data (first 200 bytes): {data[:200]}", component="dispatcher")
+                dual_logger.error(f"Failed to parse HTTP request with h11: {e}", error=e)
+                dual_logger.debug(f"Request data (first 200 bytes): {data[:200]}")
                 # Send 400 Bad Request
                 error_response = b"HTTP/1.1 400 Bad Request\r\nContent-Length: 17\r\n\r\nMalformed request"
                 writer.write(error_response)
@@ -557,8 +582,13 @@ class UnifiedDispatcher:
                 await writer.drain()
                 return
             
-            log_info(f"Forwarding HTTP connection for {proxy_hostname} from {client_ip}:{client_port}", 
-                     component="dispatcher")
+            dual_logger.info(
+                f"Forwarding HTTP connection for {proxy_hostname}",
+                client_ip=client_ip,
+                client_port=client_port,
+                proxy_hostname=proxy_hostname,
+                protocol="HTTP"
+            )
             
             # Find proxy instance port for hostname  
             target_port = self.hostname_to_http_port.get(proxy_hostname)
@@ -579,27 +609,24 @@ class UnifiedDispatcher:
             )
             
         except Exception as e:
-            log_error(f"Error handling HTTP connection: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Error handling HTTP connection: {e}", error=e)
         finally:
             writer.close()
             await writer.wait_closed()
     
     async def handle_https_connection(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
         """Handle incoming HTTPS connection and forward to appropriate instance."""
-        import logging
-        logger = logging.getLogger(__name__)
-        
         client_addr = writer.get_extra_info('peername')
         client_ip = client_addr[0] if client_addr else 'unknown'
         client_port = client_addr[1] if client_addr and len(client_addr) > 1 else 0
         
-        logger.info(f"Python logging: New HTTPS connection from {client_ip}:{client_port}")
-        
         # No need to store IP mappings - PROXY protocol handles this
         
-        log_debug(
+        dual_logger.debug(
             "New HTTPS connection",
-            client_ip=client_ip
+            client_ip=client_ip,
+            client_port=client_port,
+            protocol="HTTPS"
         )
         
         try:
@@ -620,9 +647,9 @@ class UnifiedDispatcher:
             
             # Extract SNI hostname
             proxy_hostname = self.get_sni_hostname(data)
-            logger.info(f"Python logging: SNI hostname extracted: {proxy_hostname}")
+            dual_logger.debug(f" SNI hostname extracted: {proxy_hostname}")
             if not proxy_hostname:
-                logger.warning(f"Python logging: No SNI hostname found from {client_ip}")
+                dual_logger.warning(f"Python logging: No SNI hostname found from {client_ip}")
                 log_warning(
                     "No SNI hostname found in connection",
                     client_ip=client_ip
@@ -650,11 +677,11 @@ class UnifiedDispatcher:
                     proxy_config = await self._get_proxy_target(proxy_hostname)
                     if proxy_config is None:
                         if proxy_hostname == 'localhost':
-                            log_error(f"CRITICAL: localhost proxy MUST exist but was not found", component="dispatcher")
+                            dual_logger.error(f"CRITICAL: localhost proxy MUST exist but was not found")
                             raise RuntimeError("localhost proxy configuration is missing - database corrupted?")
-                        log_debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)", component="dispatcher")
+                        dual_logger.debug(f"Proxy config not found for {proxy_hostname} (may have been deleted)")
                 except Exception as e:
-                    log_error(f"Error getting proxy config for {proxy_hostname}: {str(e)}", component="dispatcher")
+                    dual_logger.error(f"Error getting proxy config for {proxy_hostname}: {str(e)}")
                     if proxy_hostname == 'localhost':
                         raise RuntimeError(f"CRITICAL: Cannot get localhost proxy config: {e}")
                     raise
@@ -665,8 +692,8 @@ class UnifiedDispatcher:
             
             # Find the appropriate port for hostname-based routing
             target_port = self.hostname_to_https_port.get(proxy_hostname)
-            logger.info(f"Python logging: Target port for {proxy_hostname}: {target_port}")
-            logger.info(f"Python logging: Available HTTPS mappings: {list(self.hostname_to_https_port.keys())}")
+            dual_logger.debug(f" Target port for {proxy_hostname}: {target_port}")
+            dual_logger.debug(f" Available HTTPS mappings: {list(self.hostname_to_https_port.keys())}")
             if not target_port:
                 # Try wildcard match
                 parts = proxy_hostname.split('.')
@@ -679,9 +706,9 @@ class UnifiedDispatcher:
             if not target_port:
                 # This should NEVER happen if instances are created properly
                 available_https_hosts = list(self.hostname_to_https_port.keys())
-                log_error(f"CRITICAL: No HTTPS port mapping for {proxy_hostname}", component="dispatcher")
-                log_error(f"Available HTTPS mappings: {available_https_hosts}", component="dispatcher")
-                log_error(f"Total HTTPS mappings: {len(self.hostname_to_https_port)}", component="dispatcher")
+                dual_logger.error(f"CRITICAL: No HTTPS port mapping for {proxy_hostname}")
+                dual_logger.error(f"Available HTTPS mappings: {available_https_hosts}")
+                dual_logger.error(f"Total HTTPS mappings: {len(self.hostname_to_https_port)}")
                 
                 # Special error for localhost
                 if proxy_hostname == 'localhost':
@@ -689,7 +716,7 @@ class UnifiedDispatcher:
                 else:
                     error_msg = f"CRITICAL: No HTTPS port mapping for {proxy_hostname} - instance not created? This is a BUG!"
                 
-                log_error(error_msg, component="dispatcher")
+                dual_logger.error(error_msg)
                 
                 # Close connection - can't send HTTP error over TLS handshake
                 writer.close()
@@ -700,29 +727,36 @@ class UnifiedDispatcher:
             
             # Determine if this is a named instance or proxy target
             service_name = None
-            logger.info(f"Python logging: Checking named_services for port {target_port}")
-            logger.info(f"Python logging: named_services = {self.named_services if hasattr(self, 'named_services') else 'NOT SET'}")
+            dual_logger.debug(f" Checking named_services for port {target_port}")
+            dual_logger.debug(f" named_services = {self.named_services if hasattr(self, 'named_services') else 'NOT SET'}")
             if hasattr(self, 'named_services'):
                 for name, port in self.named_services.items():
                     if port == target_port:
                         service_name = name
                         break
-            logger.info(f"Python logging: service_name = {service_name}")
+            dual_logger.debug(f" service_name = {service_name}")
             
             
             # Forward to the target instance with PROXY protocol enabled for HTTPS
-            logger.info(f"Python logging: Forwarding HTTPS connection for {proxy_hostname} to port {target_port}")
+            dual_logger.info(
+                f"Forwarding HTTPS connection for {proxy_hostname}",
+                client_ip=client_ip,
+                client_port=client_port,
+                proxy_hostname=proxy_hostname,
+                protocol="HTTPS",
+                target_port=target_port
+            )
             await self._forward_connection(
                 reader, writer, data, '127.0.0.1', target_port, 
                 client_ip=client_ip, client_port=client_port, use_proxy_protocol=True, proxy_hostname=proxy_hostname, service_name=service_name
             )
-            logger.info(f"Python logging: HTTPS forwarding completed for {proxy_hostname}")
+            dual_logger.debug(f" HTTPS forwarding completed for {proxy_hostname}")
             
         except ConnectionResetError as e:
             # Connection reset by peer is common with HTTPS/MCP - handle gracefully
-            log_debug(f"Connection reset by peer from {client_ip}:{client_port} - likely normal client disconnect", component="dispatcher")
+            dual_logger.debug(f"Connection reset by peer from {client_ip}:{client_port} - likely normal client disconnect")
         except Exception as e:
-            log_error(f"Error handling HTTPS connection: {e}", component="dispatcher")
+            dual_logger.error(f"Error handling HTTPS connection: {e}")
         finally:
             try:
                 writer.close()
@@ -731,7 +765,7 @@ class UnifiedDispatcher:
                 # Ignore connection reset during cleanup
                 pass
             except Exception as e:
-                log_debug(f"Error during connection cleanup: {e}", component="dispatcher")
+                dual_logger.debug(f"Error during connection cleanup: {e}")
     
 
     async def _send_proxy_protocol_header(self, writer: asyncio.StreamWriter, client_ip: str, client_port: int, server_port: int):
@@ -753,7 +787,7 @@ class UnifiedDispatcher:
             await writer.drain()
             
         except Exception as e:
-            log_error(f"Error sending PROXY protocol header: {e}", component="dispatcher")
+            dual_logger.error(f"Error sending PROXY protocol header: {e}")
             # Continue without PROXY protocol on error
 
     async def _forward_connection(self, client_reader, client_writer, initial_data, 
@@ -764,9 +798,14 @@ class UnifiedDispatcher:
         Forward connection to target with optional PROXY protocol.
         This is a PURE TCP forwarder - no HTTP parsing or modification.
         """
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"Python logging: _forward_connection to {target_host}:{target_port}, proxy_protocol={use_proxy_protocol}")
+        dual_logger.debug(
+            f"Forwarding connection",
+            target_host=target_host,
+            target_port=target_port,
+            use_proxy_protocol=use_proxy_protocol,
+            client_ip=client_ip,
+            proxy_hostname=proxy_hostname
+        )
         
         target_reader = None
         target_writer = None
@@ -779,7 +818,7 @@ class UnifiedDispatcher:
             if use_proxy_protocol and client_ip and client_port:
                 proxy_header = f"PROXY TCP4 {client_ip} {target_host} {client_port} {target_port}\r\n"
                 target_writer.write(proxy_header.encode())
-                log_debug(f"Sent PROXY header: {proxy_header.strip()}", component="dispatcher")
+                dual_logger.debug(f"Sent PROXY header: {proxy_header.strip()}")
             
             # Send initial data (the complete HTTP request)
             target_writer.write(initial_data)
@@ -799,7 +838,7 @@ class UnifiedDispatcher:
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:
-                    log_debug(f"Forward {direction} ended: {e}", component="dispatcher")
+                    dual_logger.debug(f"Forward {direction} ended: {e}")
                 finally:
                     try:
                         if not dst_writer.is_closing():
@@ -815,8 +854,8 @@ class UnifiedDispatcher:
             )
             
         except Exception as e:
-            logger.error(f"Python logging: Error forwarding connection: {e}")
-            log_error(f"Error forwarding connection: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Python logging: Error forwarding connection: {e}")
+            dual_logger.error(f"Error forwarding connection: {e}", error=e)
         finally:
             # Clean up connections
             for writer in [client_writer, target_writer]:
@@ -829,23 +868,23 @@ class UnifiedDispatcher:
     
     async def start(self):
         """Start both HTTP and HTTPS dispatchers without blocking."""
-        log_info("UnifiedDispatcher.start() called - starting HTTP and HTTPS servers", component="dispatcher")
+        dual_logger.info("UnifiedDispatcher.start() called - starting HTTP and HTTPS servers")
         
         # Start HTTP dispatcher on port 80
         http_port_str = os.getenv('HTTP_PORT')
         if not http_port_str:
             raise ValueError("HTTP_PORT not set in environment - required for server configuration")
         http_port = int(http_port_str)
-        log_info(f"Creating HTTP server on {self.host}:{http_port}", component="dispatcher")
+        dual_logger.info(f"Creating HTTP server on {self.host}:{http_port}")
         try:
             self.http_server = await asyncio.start_server(
                 self.handle_http_connection,
                 self.host,
                 http_port
             )
-            log_info(f"HTTP Dispatcher listening on {self.host}:{http_port}", component="dispatcher")
+            dual_logger.info(f"HTTP Dispatcher listening on {self.host}:{http_port}")
         except Exception as e:
-            log_error(f"Failed to create HTTP server: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Failed to create HTTP server: {e}", error=e)
             raise
         
         # Start HTTPS dispatcher on port 443
@@ -853,26 +892,26 @@ class UnifiedDispatcher:
         if not https_port_str:
             raise ValueError("HTTPS_PORT not set in environment - required for server configuration")
         https_port = int(https_port_str)
-        log_info(f"Creating HTTPS server on {self.host}:{https_port}", component="dispatcher")
+        dual_logger.info(f"Creating HTTPS server on {self.host}:{https_port}")
         try:
             self.https_server = await asyncio.start_server(
                 self.handle_https_connection,
                 self.host,
                 https_port
             )
-            log_info(f"HTTPS Dispatcher listening on {self.host}:{https_port}", component="dispatcher")
+            dual_logger.info(f"HTTPS Dispatcher listening on {self.host}:{https_port}")
         except Exception as e:
-            log_error(f"Failed to create HTTPS server: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"Failed to create HTTPS server: {e}", error=e)
             raise
         
         # Create tasks for the servers but don't await them
         # This allows the dispatcher to start without blocking
-        log_trace("Creating server tasks", component="dispatcher")
+        dual_logger.trace("Creating server tasks")
         self.server_tasks = [
             asyncio.create_task(self.http_server.serve_forever()),
             asyncio.create_task(self.https_server.serve_forever())
         ]
-        log_info("Dispatcher servers started in background", component="dispatcher")
+        dual_logger.info("Dispatcher servers started in background")
     
     async def wait_forever(self):
         """Wait for servers to complete (they run forever)."""
@@ -894,7 +933,7 @@ class UnifiedMultiInstanceServer:
     """Main server that manages domain instances with unified dispatching."""
     
     def __init__(self, https_server_instance, app=None, host='0.0.0.0', async_components=None, storage=None):
-        log_debug(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}", component="dispatcher")
+        dual_logger.debug(f"UnifiedMultiInstanceServer.__init__ called with https_server={https_server_instance is not None}")
         self.https_server = https_server_instance
         self.app = app  # Not used anymore - each instance creates its own proxy app
         self.host = host
@@ -926,19 +965,17 @@ class UnifiedMultiInstanceServer:
         
     async def create_instance_for_proxy(self, proxy_hostname: str):
         """Dynamically create and start an instance for a proxy target."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info(f"[PROXY_CREATE] Method called for {proxy_hostname}")
+        dual_logger.info(f"[PROXY_CREATE] Method called for {proxy_hostname}")
         
-        log_info(f"[PROXY_CREATE] Starting instance creation for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Starting instance creation for {proxy_hostname}")
         
         # Check if instance already exists by looking at actual running instances
         # Don't rely on dispatcher maps as they may have stale entries
         instance_exists = False
         for instance in self.instances:
             if proxy_hostname in instance.domains:
-                logger.info(f"[PROXY_CREATE] Found existing instance for {proxy_hostname}")
-                log_info(f"[PROXY_CREATE] Instance already exists for {proxy_hostname} (found in instances list)", component="dispatcher")
+                dual_logger.info(f"[PROXY_CREATE] Found existing instance for {proxy_hostname}")
+                dual_logger.info(f"[PROXY_CREATE] Instance already exists for {proxy_hostname} (found in instances list)")
                 instance_exists = True
                 break
         
@@ -947,46 +984,46 @@ class UnifiedMultiInstanceServer:
         
         # Clean up any stale entries in dispatcher maps
         if proxy_hostname in self.dispatcher.hostname_to_https_port:
-            logger.info(f"[PROXY_CREATE] Removing stale HTTPS map entry for {proxy_hostname}")
+            dual_logger.info(f"[PROXY_CREATE] Removing stale HTTPS map entry for {proxy_hostname}")
             del self.dispatcher.hostname_to_https_port[proxy_hostname]
         if proxy_hostname in self.dispatcher.hostname_to_http_port:
-            logger.info(f"[PROXY_CREATE] Removing stale HTTP map entry for {proxy_hostname}")
+            dual_logger.info(f"[PROXY_CREATE] Removing stale HTTP map entry for {proxy_hostname}")
             del self.dispatcher.hostname_to_http_port[proxy_hostname]
         
-        log_info(f"[PROXY_CREATE] No existing instance found for {proxy_hostname}, proceeding with creation", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] No existing instance found for {proxy_hostname}, proceeding with creation")
         
         # Get proxy configuration using async storage via dispatcher
         proxy_target = await self.dispatcher._get_proxy_target(proxy_hostname)
         if not proxy_target:
-            log_error(f"[PROXY_CREATE] No proxy target found for {proxy_hostname} in Redis storage", component="dispatcher")
+            dual_logger.error(f"[PROXY_CREATE] No proxy target found for {proxy_hostname} in Redis storage")
             return
         
-        log_info(f"[PROXY_CREATE] Found proxy target for {proxy_hostname}: target_url={proxy_target.target_url}, enable_http={proxy_target.enable_http}, enable_https={proxy_target.enable_https}", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Found proxy target for {proxy_hostname}: target_url={proxy_target.target_url}, enable_http={proxy_target.enable_http}, enable_https={proxy_target.enable_https}")
         
         # Get certificate if HTTPS is enabled - but don't block if not available
         cert = None
         https_ready = False
         if proxy_target.enable_https:
-            log_info(f"[PROXY_CREATE] HTTPS is enabled for {proxy_hostname}, checking certificate availability", component="dispatcher")
+            dual_logger.info(f"[PROXY_CREATE] HTTPS is enabled for {proxy_hostname}, checking certificate availability")
             cert_name = proxy_target.cert_name
             if cert_name:
-                log_info(f"[PROXY_CREATE] Certificate name is {cert_name}, attempting to retrieve", component="dispatcher")
+                dual_logger.info(f"[PROXY_CREATE] Certificate name is {cert_name}, attempting to retrieve")
                 # Use async cert manager if available
                 if self.async_components and self.async_components.cert_manager:
                     cert = await self.async_components.cert_manager.get_certificate(cert_name)
                 else:
-                    log_warning(f"[PROXY_CREATE] No cert manager available", component="dispatcher")
+                    dual_logger.warning(f"[PROXY_CREATE] No cert manager available")
                     cert = None
                 
                 if cert:
                     https_ready = True
-                    log_info(f"[PROXY_CREATE] Certificate {cert_name} is available and ready for {proxy_hostname}", component="dispatcher")
+                    dual_logger.info(f"[PROXY_CREATE] Certificate {cert_name} is available and ready for {proxy_hostname}")
                 else:
-                    log_warning(f"[PROXY_CREATE] Certificate {cert_name} not yet available for {proxy_hostname}, will enable HTTPS when ready", component="dispatcher")
+                    dual_logger.warning(f"[PROXY_CREATE] Certificate {cert_name} not yet available for {proxy_hostname}, will enable HTTPS when ready")
             else:
-                log_info(f"[PROXY_CREATE] No certificate name set for {proxy_hostname}, HTTPS will be enabled when certificate is assigned", component="dispatcher")
+                dual_logger.info(f"[PROXY_CREATE] No certificate name set for {proxy_hostname}, HTTPS will be enabled when certificate is assigned")
         else:
-            log_info(f"[PROXY_CREATE] HTTPS is disabled for {proxy_hostname}", component="dispatcher")
+            dual_logger.info(f"[PROXY_CREATE] HTTPS is disabled for {proxy_hostname}")
         
         # Check Redis for existing port mapping first
         http_port = None
@@ -998,8 +1035,7 @@ class UnifiedMultiInstanceServer:
                 mapping = json.loads(mapping_data)
                 http_port = mapping.get("http")
                 https_port = mapping.get("https")
-                log_info(f"[PROXY_CREATE] Found existing port mapping for {proxy_hostname}: HTTP:{http_port}, HTTPS:{https_port}", 
-                        component="dispatcher")
+                dual_logger.info(f"[PROXY_CREATE] Found existing port mapping for {proxy_hostname}: HTTP:{http_port}, HTTPS:{https_port}")
         
         # Allocate ports if not found in Redis
         if not http_port:
@@ -1011,9 +1047,9 @@ class UnifiedMultiInstanceServer:
                 bind_address="127.0.0.1"
             )
             if not http_port:
-                log_error(f"[PROXY_CREATE] No HTTP ports available for {proxy_hostname}", component="dispatcher")
+                dual_logger.error(f"[PROXY_CREATE] No HTTP ports available for {proxy_hostname}")
                 return
-            log_info(f"[PROXY_CREATE] Allocated HTTP port {http_port} for {proxy_hostname}", component="dispatcher")
+            dual_logger.info(f"[PROXY_CREATE] Allocated HTTP port {http_port} for {proxy_hostname}")
         
         if not https_port and proxy_target.enable_https:
             preferred_https = 13000 + (hash(proxy_hostname) % 1000)
@@ -1025,9 +1061,9 @@ class UnifiedMultiInstanceServer:
             if not https_port:
                 # Release HTTP port if HTTPS allocation fails
                 await self.port_manager.release_port(http_port)
-                log_error(f"[PROXY_CREATE] No HTTPS ports available for {proxy_hostname}", component="dispatcher")
+                dual_logger.error(f"[PROXY_CREATE] No HTTPS ports available for {proxy_hostname}")
                 return
-            log_info(f"[PROXY_CREATE] Allocated HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
+            dual_logger.info(f"[PROXY_CREATE] Allocated HTTPS port {https_port} for {proxy_hostname}")
         elif not proxy_target.enable_https:
             https_port = 13000  # Default for instances without HTTPS
         
@@ -1039,10 +1075,10 @@ class UnifiedMultiInstanceServer:
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             await self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
-            log_debug(f"[PROXY_CREATE] Stored port mapping for {proxy_hostname} in Redis", component="dispatcher")
+            dual_logger.debug(f"[PROXY_CREATE] Stored port mapping for {proxy_hostname} in Redis")
         
         # Create instance - this is a proxy-only instance
-        log_info(f"[PROXY_CREATE] Creating HypercornInstance for {proxy_hostname} on ports HTTP:{http_port}, HTTPS:{https_port}", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Creating HypercornInstance for {proxy_hostname} on ports HTTP:{http_port}, HTTPS:{https_port}")
         instance = HypercornInstance(
             app=None,  # Will create its own proxy app
             domains=[proxy_hostname],
@@ -1054,16 +1090,16 @@ class UnifiedMultiInstanceServer:
             async_components=self.async_components
         )
         
-        log_info(f"[PROXY_CREATE] Starting instance for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Starting instance for {proxy_hostname}")
         # Start the instance
         await instance.start()
-        log_info(f"[PROXY_CREATE] Instance started successfully for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Instance started successfully for {proxy_hostname}")
         
         self.instances.append(instance)
-        log_info(f"[PROXY_CREATE] Instance added to instances list for {proxy_hostname} (total instances: {len(self.instances)})", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Instance added to instances list for {proxy_hostname} (total instances: {len(self.instances)})")
         
         # Register with dispatcher - enable HTTPS only if certificate is actually available
-        log_info(f"[PROXY_CREATE] Registering {proxy_hostname} with dispatcher - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Registering {proxy_hostname} with dispatcher - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}")
         self.dispatcher.register_domain(
             [proxy_hostname], 
             http_port, 
@@ -1071,7 +1107,7 @@ class UnifiedMultiInstanceServer:
             enable_http=proxy_target.enable_http,
             enable_https=https_ready  # Only enable HTTPS routing if cert is available
         )
-        log_info(f"[PROXY_CREATE] Domain {proxy_hostname} registered with dispatcher", component="dispatcher")
+        dual_logger.info(f"[PROXY_CREATE] Domain {proxy_hostname} registered with dispatcher")
         
         log_info(
             f"[PROXY_CREATE] ✅ Successfully created proxy instance for {proxy_hostname} - "
@@ -1092,7 +1128,7 @@ class UnifiedMultiInstanceServer:
                 break
         
         if not instance_to_remove:
-            log_warning(f"No instance found for {proxy_hostname}", component="dispatcher")
+            dual_logger.warning(f"No instance found for {proxy_hostname}")
             return
         
         # Stop the instance
@@ -1105,7 +1141,7 @@ class UnifiedMultiInstanceServer:
         if proxy_hostname in self.dispatcher.hostname_to_https_port:
             del self.dispatcher.hostname_to_https_port[proxy_hostname]
         
-        log_info(f"Removed instance for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"Removed instance for {proxy_hostname}")
     
     # =================== UNIFIED ARCHITECTURE METHODS ===================
     
@@ -1135,28 +1171,25 @@ class UnifiedMultiInstanceServer:
                 self.stream_consumer.claim_pending_messages()
             )
             
-            log_info("[UNIFIED] Consumer started with group 'unified-dispatcher'", component="dispatcher")
+            dual_logger.info("[UNIFIED] Consumer started with group 'unified-dispatcher'")
             
         except Exception as e:
-            log_error(f"[UNIFIED] Failed to start consumer: {e}", component="dispatcher", error=e)
+            dual_logger.error(f"[UNIFIED] Failed to start consumer: {e}", error=e)
     
     async def handle_unified_event(self, event: dict):
         """ONE handler for ALL events - simple and direct."""
-        import logging
-        logger = logging.getLogger(__name__)
         
         event_type = event.get('event_type') or event.get('type')
         proxy_hostname = event.get('proxy_hostname')
         
-        logger.info(f"Python logging: Processing event {event_type} for {proxy_hostname}")
+        dual_logger.debug(f" Processing event {event_type} for {proxy_hostname}")
         
         # Special handling for certificate_ready - it has domains instead of proxy_hostname
         if event_type == 'certificate_ready':
             cert_name = event.get('cert_name')
             domains = event.get('domains', [])
             
-            log_info(f"[UNIFIED] Processing certificate_ready for {cert_name} with domains: {domains}", 
-                    component="dispatcher")
+            dual_logger.info(f"[UNIFIED] Processing certificate_ready for {cert_name} with domains: {domains}")
             
             # Enable HTTPS for each domain that has a proxy
             for domain in domains:
@@ -1164,10 +1197,10 @@ class UnifiedMultiInstanceServer:
             return
         
         if not proxy_hostname:
-            log_debug(f"[UNIFIED] Event missing proxy_hostname: {event}", component="dispatcher")
+            dual_logger.debug(f"[UNIFIED] Event missing proxy_hostname: {event}")
             return
         
-        log_info(f"[UNIFIED] Processing {event_type} for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"[UNIFIED] Processing {event_type} for {proxy_hostname}")
         
         try:
             # Just 3 event types - that's it!
@@ -1179,26 +1212,25 @@ class UnifiedMultiInstanceServer:
                 await self._remove_instance(proxy_hostname)
                 
             else:
-                log_debug(f"[UNIFIED] Ignoring event type: {event_type}", component="dispatcher")
+                dual_logger.debug(f"[UNIFIED] Ignoring event type: {event_type}")
                 
         except Exception as e:
-            log_error(f"[UNIFIED] Failed to handle {event_type} for {proxy_hostname}: {e}", 
-                     component="dispatcher", error=e)
+            dual_logger.error(f"[UNIFIED] Failed to handle {event_type} for {proxy_hostname}: {e}", error=e)
     
     async def _ensure_instance_exists(self, proxy_hostname: str):
         """Create instance if it doesn't exist - FAIL LOUDLY if anything goes wrong."""
         # Skip if already exists
         if proxy_hostname in self.instances:
-            log_debug(f"[UNIFIED] Instance already exists for {proxy_hostname}", component="dispatcher")
+            dual_logger.debug(f"[UNIFIED] Instance already exists for {proxy_hostname}")
             return
         
         # Get proxy configuration - MUST exist
         proxy_target = await self.dispatcher._get_proxy_target(proxy_hostname)
         if not proxy_target:
-            log_error(f"CRITICAL: No proxy config for {proxy_hostname} - cannot create instance", component="dispatcher")
+            dual_logger.error(f"CRITICAL: No proxy config for {proxy_hostname} - cannot create instance")
             raise RuntimeError(f"Cannot create instance for {proxy_hostname} - proxy configuration not found in database")
         
-        log_info(f"[UNIFIED] Creating instance for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"[UNIFIED] Creating instance for {proxy_hostname}")
         
         # Check for certificate if HTTPS is enabled
         cert = None
@@ -1208,7 +1240,7 @@ class UnifiedMultiInstanceServer:
                 cert = await self.async_components.cert_manager.get_certificate(proxy_target.cert_name)
                 if cert:
                     https_ready = True
-                    log_info(f"[UNIFIED] Certificate ready for {proxy_hostname}", component="dispatcher")
+                    dual_logger.info(f"[UNIFIED] Certificate ready for {proxy_hostname}")
         
         # Check Redis for existing port mapping first
         http_port = None
@@ -1220,8 +1252,7 @@ class UnifiedMultiInstanceServer:
                 mapping = json.loads(mapping_data)
                 http_port = mapping.get("http")
                 https_port = mapping.get("https")
-                log_info(f"[UNIFIED] Found existing port mapping for {proxy_hostname}: HTTP:{http_port}, HTTPS:{https_port}", 
-                        component="dispatcher")
+                dual_logger.info(f"[UNIFIED] Found existing port mapping for {proxy_hostname}: HTTP:{http_port}, HTTPS:{https_port}")
         
         # Allocate ports if not found in Redis
         if not http_port:
@@ -1234,7 +1265,7 @@ class UnifiedMultiInstanceServer:
             )
             if not http_port:
                 raise RuntimeError(f"No HTTP ports available for {proxy_hostname}")
-            log_info(f"[UNIFIED] Allocated HTTP port {http_port} for {proxy_hostname}", component="dispatcher")
+            dual_logger.info(f"[UNIFIED] Allocated HTTP port {http_port} for {proxy_hostname}")
         
         if not https_port and proxy_target.enable_https:
             preferred_https = 13000 + (hash(proxy_hostname) % 1000)
@@ -1247,7 +1278,7 @@ class UnifiedMultiInstanceServer:
                 # Release HTTP port if HTTPS allocation fails
                 await self.port_manager.release_port(http_port)
                 raise RuntimeError(f"No HTTPS ports available for {proxy_hostname}")
-            log_info(f"[UNIFIED] Allocated HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
+            dual_logger.info(f"[UNIFIED] Allocated HTTPS port {https_port} for {proxy_hostname}")
         elif not proxy_target.enable_https:
             https_port = 13000  # Default for instances without HTTPS
         
@@ -1259,7 +1290,7 @@ class UnifiedMultiInstanceServer:
                 "created_at": datetime.now(timezone.utc).isoformat()
             }
             await self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
-            log_debug(f"[UNIFIED] Stored port mapping for {proxy_hostname} in Redis", component="dispatcher")
+            dual_logger.debug(f"[UNIFIED] Stored port mapping for {proxy_hostname} in Redis")
         
         # Create Hypercorn instance - MUST succeed
         try:
@@ -1292,18 +1323,17 @@ class UnifiedMultiInstanceServer:
                 enable_https=https_ready
             )
             
-            log_info(f"✅ [UNIFIED] Instance created for {proxy_hostname} - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}", 
-                    component="dispatcher")
+            dual_logger.info(f"✅ [UNIFIED] Instance created for {proxy_hostname} - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}")
                     
         except Exception as e:
-            log_error(f"CRITICAL: Instance creation failed for {proxy_hostname}: {e}", component="dispatcher")
-            log_error(f"Traceback: {traceback.format_exc()}", component="dispatcher")
+            dual_logger.error(f"CRITICAL: Instance creation failed for {proxy_hostname}: {e}")
+            dual_logger.error(f"Traceback: {traceback.format_exc()}")
             raise RuntimeError(f"Cannot create instance for {proxy_hostname}: {e}")
     
     async def _remove_instance(self, proxy_hostname: str):
         """Remove instance for a proxy."""
         if proxy_hostname not in self.instances:
-            log_debug(f"[UNIFIED] No instance to remove for {proxy_hostname}", component="dispatcher")
+            dual_logger.debug(f"[UNIFIED] No instance to remove for {proxy_hostname}")
             return
         
         instance = self.instances[proxy_hostname]
@@ -1319,14 +1349,14 @@ class UnifiedMultiInstanceServer:
                 # Release ports back to the pool
                 if http_port:
                     await self.port_manager.release_port(http_port)
-                    log_debug(f"[UNIFIED] Released HTTP port {http_port} for {proxy_hostname}", component="dispatcher")
+                    dual_logger.debug(f"[UNIFIED] Released HTTP port {http_port} for {proxy_hostname}")
                 if https_port and https_port != 13000:  # Don't release default HTTPS port
                     await self.port_manager.release_port(https_port)
-                    log_debug(f"[UNIFIED] Released HTTPS port {https_port} for {proxy_hostname}", component="dispatcher")
+                    dual_logger.debug(f"[UNIFIED] Released HTTPS port {https_port} for {proxy_hostname}")
                 
                 # Remove mapping from Redis
                 await self.redis.hdel("proxy:ports:mappings", proxy_hostname)
-                log_debug(f"[UNIFIED] Removed port mapping for {proxy_hostname} from Redis", component="dispatcher")
+                dual_logger.debug(f"[UNIFIED] Removed port mapping for {proxy_hostname} from Redis")
         
         # Stop the instance
         await instance.stop()
@@ -1342,7 +1372,7 @@ class UnifiedMultiInstanceServer:
         if proxy_hostname in self.dispatcher.hostname_to_https_port:
             del self.dispatcher.hostname_to_https_port[proxy_hostname]
         
-        log_info(f"✅ [UNIFIED] Instance removed for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"✅ [UNIFIED] Instance removed for {proxy_hostname}")
     
     async def _enable_https(self, proxy_hostname: str, cert_name: str):
         """Enable HTTPS for an existing instance when certificate is ready."""
@@ -1370,18 +1400,16 @@ class UnifiedMultiInstanceServer:
                         enable_http=proxy_target.enable_http,
                         enable_https=True
                     )
-                    log_info(f"✅ [UNIFIED] HTTPS enabled for {proxy_hostname}", component="dispatcher")
+                    dual_logger.info(f"✅ [UNIFIED] HTTPS enabled for {proxy_hostname}")
     
     async def _reconcile_all_proxies(self):
         """Reconcile ALL proxies - FAIL if any proxy can't be created."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("Python logging: _reconcile_all_proxies() started")
+        dual_logger.info("Python logging: _reconcile_all_proxies() started")
         
         try:
-            log_info("=" * 60, component="dispatcher")
-            log_info("[UNIFIED] Starting proxy reconciliation", component="dispatcher")
-            log_info("=" * 60, component="dispatcher")
+            dual_logger.info("=" * 60)
+            dual_logger.info("[UNIFIED] Starting proxy reconciliation")
+            dual_logger.info("=" * 60)
             
             # Get all proxy targets
             all_proxies = []
@@ -1392,8 +1420,8 @@ class UnifiedMultiInstanceServer:
             else:
                 raise RuntimeError("CRITICAL: No storage available for proxy reconciliation")
             
-            log_info(f"[UNIFIED] Found {len(all_proxies)} proxies to reconcile", component="dispatcher")
-            logger.info(f"Python logging: Found {len(all_proxies)} proxies to reconcile")
+            dual_logger.info(f"[UNIFIED] Found {len(all_proxies)} proxies to reconcile")
+            dual_logger.debug(f" Found {len(all_proxies)} proxies to reconcile")
             
             created = 0
             skipped = 0
@@ -1401,40 +1429,39 @@ class UnifiedMultiInstanceServer:
             
             for proxy in all_proxies:
                 proxy_hostname = proxy.proxy_hostname if hasattr(proxy, 'proxy_hostname') else proxy.get('proxy_hostname')
-                logger.info(f"Python logging: Processing proxy {proxy_hostname}")
+                dual_logger.debug(f" Processing proxy {proxy_hostname}")
                 
                 try:
                     # Ensure instance exists
                     if proxy_hostname not in self.instances:
-                        log_info(f"[UNIFIED] Creating instance for {proxy_hostname}...", component="dispatcher")
-                        logger.info(f"Python logging: Creating instance for {proxy_hostname}")
+                        dual_logger.info(f"[UNIFIED] Creating instance for {proxy_hostname}...")
+                        dual_logger.debug(f" Creating instance for {proxy_hostname}")
                         await self._ensure_instance_exists(proxy_hostname)
                         created += 1
-                        log_info(f"✅ [UNIFIED] Created instance for {proxy_hostname}", component="dispatcher")
+                        dual_logger.info(f"✅ [UNIFIED] Created instance for {proxy_hostname}")
                     else:
                         skipped += 1
-                        log_debug(f"[UNIFIED] Instance already exists for {proxy_hostname}", component="dispatcher")
+                        dual_logger.debug(f"[UNIFIED] Instance already exists for {proxy_hostname}")
                     
                     # Rate limit to avoid overwhelming
                     await asyncio.sleep(0.1)
                     
                 except Exception as e:
-                    log_error(f"CRITICAL: Failed to create instance for {proxy_hostname}: {e}", component="dispatcher")
-                    log_error(f"Traceback: {traceback.format_exc()}", component="dispatcher")
+                    dual_logger.error(f"CRITICAL: Failed to create instance for {proxy_hostname}: {e}")
+                    dual_logger.error(f"Traceback: {traceback.format_exc()}")
                     failed.append((proxy_hostname, str(e)))
             
             if failed:
-                log_error(f"CRITICAL: Reconciliation failed for {len(failed)} proxies", component="dispatcher")
+                dual_logger.error(f"CRITICAL: Reconciliation failed for {len(failed)} proxies")
                 for hostname, error in failed:
-                    log_error(f"  - {hostname}: {error}", component="dispatcher")
+                    dual_logger.error(f"  - {hostname}: {error}")
                 raise RuntimeError(f"System cannot start - failed to create instances for: {[h for h,_ in failed]}")
             
-            log_info(f"✅ [UNIFIED] Reconciliation complete: {created} created, {skipped} already existed", 
-                    component="dispatcher")
+            dual_logger.info(f"✅ [UNIFIED] Reconciliation complete: {created} created, {skipped} already existed")
             
         except Exception as e:
-            log_error(f"CRITICAL: Reconciliation failed completely: {e}", component="dispatcher")
-            log_error(f"Traceback: {traceback.format_exc()}", component="dispatcher")
+            dual_logger.error(f"CRITICAL: Reconciliation failed completely: {e}")
+            dual_logger.error(f"Traceback: {traceback.format_exc()}")
             raise RuntimeError(f"System cannot start - reconciliation failed: {e}")
     
     # =================== END UNIFIED ARCHITECTURE METHODS ===================
@@ -1455,7 +1482,7 @@ class UnifiedMultiInstanceServer:
             
             # Initialize consumer
             await self.stream_consumer.initialize()
-            log_info("[STREAM_CONSUMER] Redis Stream consumer initialized", component="dispatcher")
+            dual_logger.info("[STREAM_CONSUMER] Redis Stream consumer initialized")
             
             # Start consuming events
             asyncio.create_task(
@@ -1467,40 +1494,40 @@ class UnifiedMultiInstanceServer:
                 self.stream_consumer.claim_pending_messages()
             )
             
-            log_info("[STREAM_CONSUMER] Started Redis Stream consumer for proxy events", component="dispatcher")
+            dual_logger.info("[STREAM_CONSUMER] Started Redis Stream consumer for proxy events")
             
         except Exception as e:
-            log_error(f"[STREAM_CONSUMER] Failed to start stream consumer: {e}", exc_info=True, component="dispatcher")
+            dual_logger.error(f"[STREAM_CONSUMER] Failed to start stream consumer: {e}", exc_info=True)
     
     async def handle_proxy_event(self, event: dict):
         """Handle events from Redis Stream."""
         event_type = event.get('type')
         proxy_hostname = event.get("proxy_hostname")
         
-        log_info(f"[STREAM_EVENT] Processing {event_type} for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"[STREAM_EVENT] Processing {event_type} for {proxy_hostname}")
         
         try:
             if event_type == 'proxy_created':
                 # Create instance for new proxy
-                log_info(f"[STREAM_EVENT] Creating instance for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Creating instance for {proxy_hostname}")
                 await self.create_instance_for_proxy(proxy_hostname)
-                log_info(f"[STREAM_EVENT] Instance created for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Instance created for {proxy_hostname}")
             
             elif event_type == 'proxy_deleted':
                 # Remove instance for deleted proxy
-                log_info(f"[STREAM_EVENT] Removing instance for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Removing instance for {proxy_hostname}")
                 await self.remove_instance_for_proxy(proxy_hostname)
-                log_info(f"[STREAM_EVENT] Instance removed for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Instance removed for {proxy_hostname}")
                 
             elif event_type == 'certificate_ready':
                 # Update instance when certificate becomes available
-                log_info(f"[STREAM_EVENT] Certificate ready for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Certificate ready for {proxy_hostname}")
                 await self.update_instance_certificate(proxy_hostname)
-                log_info(f"[STREAM_EVENT] Certificate applied for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Certificate applied for {proxy_hostname}")
             
             elif event_type == 'create_http_instance':
                 # The workflow orchestrator wants us to create an HTTP instance
-                log_info(f"[STREAM_EVENT] Creating HTTP instance for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Creating HTTP instance for {proxy_hostname}")
                 await self.create_instance_for_proxy(proxy_hostname)
                 
                 # Get the allocated port from Redis mapping
@@ -1520,12 +1547,12 @@ class UnifiedMultiInstanceServer:
                     "port": port if port else 0
                 })
                 await publisher.close()
-                log_info(f"[STREAM_EVENT] HTTP instance created for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] HTTP instance created for {proxy_hostname}")
                     
             elif event_type == 'create_https_instance':
                 # The workflow orchestrator wants us to create an HTTPS instance
                 # This typically happens when a certificate becomes ready
-                log_info(f"[STREAM_EVENT] Creating HTTPS instance for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Creating HTTPS instance for {proxy_hostname}")
                 
                 # Find existing instance and update it with HTTPS
                 for instance in self.instances:
@@ -1550,41 +1577,41 @@ class UnifiedMultiInstanceServer:
                                     enable_http=proxy_target.enable_http,
                                     enable_https=True
                                 )
-                                log_info(f"[STREAM_EVENT] HTTPS instance created for {proxy_hostname}", component="dispatcher")
+                                dual_logger.info(f"[STREAM_EVENT] HTTPS instance created for {proxy_hostname}")
                         break
                 
             elif event_type == 'proxy_updated':
                 # Handle proxy updates
-                log_info(f"[STREAM_EVENT] Processing proxy_updated event for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Processing proxy_updated event for {proxy_hostname}")
                 # Recreate the instance with new configuration
                 await self.remove_instance_for_proxy(proxy_hostname)
                 await self.create_instance_for_proxy(proxy_hostname)
-                log_info(f"[STREAM_EVENT] Instance recreated for {proxy_hostname}", component="dispatcher")
+                dual_logger.info(f"[STREAM_EVENT] Instance recreated for {proxy_hostname}")
                 
             elif event_type in ['http_instance_started', 'https_instance_started', 'http_route_registered', 'https_route_registered']:
                 # These are confirmation events from the workflow orchestrator - no action needed
-                log_debug(f"[STREAM_EVENT] Acknowledged {event_type} for {proxy_hostname}", component="dispatcher")
+                dual_logger.debug(f"[STREAM_EVENT] Acknowledged {event_type} for {proxy_hostname}")
                 
             else:
-                log_warning(f"[STREAM_EVENT] Unknown event type: {event_type}", component="dispatcher")
+                dual_logger.warning(f"[STREAM_EVENT] Unknown event type: {event_type}")
                 
         except Exception as e:
-            log_error(f"[STREAM_EVENT] Error processing event {event_type} for {proxy_hostname}: {e}", exc_info=True, component="dispatcher")
+            dual_logger.error(f"[STREAM_EVENT] Error processing event {event_type} for {proxy_hostname}: {e}", exc_info=True)
     
     async def update_instance_certificate(self, proxy_hostname: str):
         """Update instance when certificate becomes available."""
-        log_info(f"update_instance_certificate called for hostname {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"update_instance_certificate called for hostname {proxy_hostname}")
         
         # Get proxy configuration
         proxy_target = await self.dispatcher._get_proxy_target(proxy_hostname)
         if not proxy_target:
-            log_warning(f"No proxy target found for {proxy_hostname}", component="dispatcher")
+            dual_logger.warning(f"No proxy target found for {proxy_hostname}")
             return
         if not proxy_target.enable_https:
-            log_info(f"HTTPS not enabled for {proxy_hostname}, skipping certificate update", component="dispatcher")
+            dual_logger.info(f"HTTPS not enabled for {proxy_hostname}, skipping certificate update")
             return
         
-        log_info(f"Proxy target found for {proxy_hostname}, cert_name: {proxy_target.cert_name}", component="dispatcher")
+        dual_logger.info(f"Proxy target found for {proxy_hostname}, cert_name: {proxy_target.cert_name}")
         
         # Get certificate
         if self.async_components and self.async_components.cert_manager:
@@ -1592,35 +1619,35 @@ class UnifiedMultiInstanceServer:
         else:
             cert = None
         if not cert:
-            log_warning(f"Certificate {proxy_target.cert_name} still not available for {proxy_hostname}", component="dispatcher")
+            dual_logger.warning(f"Certificate {proxy_target.cert_name} still not available for {proxy_hostname}")
             return
         
-        log_info(f"Certificate {proxy_target.cert_name} found for {proxy_hostname}", component="dispatcher")
+        dual_logger.info(f"Certificate {proxy_target.cert_name} found for {proxy_hostname}")
         
         # Find the instance
         instance = None
-        log_info(f"Looking for instance with hostname {proxy_hostname} in {len(self.instances)} instances", component="dispatcher")
+        dual_logger.info(f"Looking for instance with hostname {proxy_hostname} in {len(self.instances)} instances")
         for inst in self.instances:
-            log_debug(f"Checking instance with domains {inst.domains}", component="dispatcher")
+            dual_logger.debug(f"Checking instance with domains {inst.domains}")
             if proxy_hostname in inst.domains:
                 instance = inst
-                log_info(f"Found instance for {proxy_hostname} with domains {inst.domains}", component="dispatcher")
+                dual_logger.info(f"Found instance for {proxy_hostname} with domains {inst.domains}")
                 break
         
         if not instance:
-            log_error(f"No instance found for {proxy_hostname}", component="dispatcher")
+            dual_logger.error(f"No instance found for {proxy_hostname}")
             return
         
         # Check if HTTPS process is actually running
         if instance.https_process and not instance.https_process.done():
-            log_info(f"HTTPS already running for {proxy_hostname}", component="dispatcher")
+            dual_logger.info(f"HTTPS already running for {proxy_hostname}")
             return
         
         # Update instance with certificate
         instance.cert = cert
         
         # Start HTTPS instance
-        log_info(f"Starting HTTPS instance for {proxy_hostname} with newly available certificate", component="dispatcher")
+        dual_logger.info(f"Starting HTTPS instance for {proxy_hostname} with newly available certificate")
         await instance.start_https()
         
         # Update dispatcher registration to enable HTTPS
@@ -1632,16 +1659,16 @@ class UnifiedMultiInstanceServer:
             enable_https=True
         )
         
-        log_info(f"HTTPS enabled for {proxy_hostname} after certificate became available", component="dispatcher")
+        dual_logger.info(f"HTTPS enabled for {proxy_hostname} after certificate became available")
     
     def update_ssl_context(self, certificate):
         """Update SSL context when a new certificate is created or renewed."""
         if not certificate or not certificate.domains:
-            log_warning("Invalid certificate passed to update_ssl_context", component="dispatcher")
+            dual_logger.warning("Invalid certificate passed to update_ssl_context")
             return
             
-        log_info(f"update_ssl_context called for certificate {certificate.cert_name} domains: {certificate.domains}", component="dispatcher")
-        log_info(f"Current instances: {[inst.domains for inst in self.instances]}", component="dispatcher")
+        dual_logger.info(f"update_ssl_context called for certificate {certificate.cert_name} domains: {certificate.domains}")
+        dual_logger.info(f"Current instances: {[inst.domains for inst in self.instances]}")
         
         # For each domain in the certificate, update the instance if it exists OR create one if it doesn't
         for domain in certificate.domains:
@@ -1649,7 +1676,7 @@ class UnifiedMultiInstanceServer:
             # Use sync storage for this sync function
             proxy_target = self.storage.get_proxy_target(domain) if self.storage else None
             if not proxy_target:
-                log_debug(f"No proxy target found for domain {domain}, skipping", component="dispatcher")
+                dual_logger.debug(f"No proxy target found for domain {domain}, skipping")
                 continue
             
             # Find the instance handling this domain
@@ -1657,15 +1684,15 @@ class UnifiedMultiInstanceServer:
             for instance in self.instances:
                 if domain in instance.domains:
                     instance_found = True
-                    log_info(f"Found existing instance for domain {domain}", component="dispatcher")
+                    dual_logger.info(f"Found existing instance for domain {domain}")
                     
                     # Update the certificate for this instance
                     instance.cert = certificate
-                    log_info(f"Certificate updated on instance for domain {domain}", component="dispatcher")
+                    dual_logger.info(f"Certificate updated on instance for domain {domain}")
                     
                     # If HTTPS is already running, we need to restart it
                     if instance.https_process and not instance.https_process.done():
-                        log_info(f"HTTPS process is running for {domain}, restarting to use new certificate", component="dispatcher")
+                        dual_logger.info(f"HTTPS process is running for {domain}, restarting to use new certificate")
                         # Cancel the current HTTPS process
                         instance.https_process.cancel()
                         # Clean up old temp files
@@ -1675,10 +1702,10 @@ class UnifiedMultiInstanceServer:
                             os.unlink(instance.key_file)
                         # Start HTTPS with new certificate
                         asyncio.create_task(instance.start_https())
-                        log_info(f"HTTPS restart initiated for {domain}", component="dispatcher")
+                        dual_logger.info(f"HTTPS restart initiated for {domain}")
                     else:
                         # HTTPS not running yet, start it now
-                        log_info(f"Starting HTTPS for {domain} since certificate is now available", component="dispatcher")
+                        dual_logger.info(f"Starting HTTPS for {domain} since certificate is now available")
                         asyncio.create_task(instance.start_https())
                         
                         # Update dispatcher to enable HTTPS
@@ -1690,54 +1717,52 @@ class UnifiedMultiInstanceServer:
                                 enable_http=proxy_target.enable_http,
                                 enable_https=True
                             )
-                            log_info(f"HTTPS routing enabled for {domain}", component="dispatcher")
+                            dual_logger.info(f"HTTPS routing enabled for {domain}")
                     break
             
             if not instance_found:
                 # No instance exists - create one now that we have the certificate
-                log_info(f"No instance found for domain {domain}, creating new instance with certificate", component="dispatcher")
+                dual_logger.info(f"No instance found for domain {domain}, creating new instance with certificate")
                 asyncio.create_task(self.create_instance_for_proxy(domain))
     
     async def run(self):
         """Run the unified dispatcher with non-blocking architecture."""
-        import logging
-        logger = logging.getLogger(__name__)
-        logger.info("Python logging: UnifiedMultiInstanceServer.run() started")
+        dual_logger.info("UnifiedMultiInstanceServer.run() started")
         
-        log_info("=" * 60, component="dispatcher")
-        log_info("UNIFIED DISPATCHER STARTING", component="dispatcher")
-        log_info("=" * 60, component="dispatcher")
+        dual_logger.info("=" * 60)
+        dual_logger.info("UNIFIED DISPATCHER STARTING")
+        dual_logger.info("=" * 60)
         
         # Set global instance for dynamic management
         global unified_server_instance
         unified_server_instance = self
         
         if not self.https_server:
-            logger.error("Python logging: NO HTTPS SERVER INSTANCE - CANNOT START")
-            log_error("NO HTTPS SERVER INSTANCE - CANNOT START", component="dispatcher")
+            dual_logger.error("Python logging: NO HTTPS SERVER INSTANCE - CANNOT START")
+            dual_logger.error("NO HTTPS SERVER INSTANCE - CANNOT START")
             return
         
         # 1. Start unified consumer FIRST (non-blocking)
-        logger.info("Python logging: Starting unified consumer")
+        dual_logger.info("Python logging: Starting unified consumer")
         await self._start_unified_consumer()
-        log_info("✅ Unified consumer started", component="dispatcher")
-        logger.info("Python logging: Unified consumer started")
+        dual_logger.info("✅ Unified consumer started")
+        dual_logger.info("Python logging: Unified consumer started")
         
         # 2. Load routes from storage
-        logger.info("Python logging: Loading routes from storage")
+        dual_logger.info("Python logging: Loading routes from storage")
         await self.dispatcher.load_routes_from_storage()
         
         # 3. Named services removed - using URL-only routing
-        logger.info("Python logging: URL-only routing enabled (no named services)")
+        dual_logger.info("Python logging: URL-only routing enabled (no named services)")
         
         # 4. Load existing port mappings from Redis
-        logger.info("Python logging: Loading existing port mappings from Redis")
-        log_info("Loading existing proxy port mappings from Redis...", component="dispatcher")
+        dual_logger.info("Python logging: Loading existing port mappings from Redis")
+        dual_logger.info("Loading existing proxy port mappings from Redis...")
         
         if self.redis:
             mappings = await self.redis.hgetall("proxy:ports:mappings")
             if mappings:
-                log_info(f"Found {len(mappings)} existing port mappings in Redis", component="dispatcher")
+                dual_logger.info(f"Found {len(mappings)} existing port mappings in Redis")
                 for hostname_bytes, mapping_bytes in mappings.items():
                     hostname = hostname_bytes.decode() if isinstance(hostname_bytes, bytes) else hostname_bytes
                     mapping = json.loads(mapping_bytes)
@@ -1752,35 +1777,34 @@ class UnifiedMultiInstanceServer:
                         enable_http=True,
                         enable_https=(https_port is not None and https_port != 13000)
                     )
-                    log_debug(f"Registered existing mapping for {hostname}: HTTP:{http_port}, HTTPS:{https_port}", 
-                             component="dispatcher")
+                    dual_logger.debug(f"Registered existing mapping for {hostname}: HTTP:{http_port}, HTTPS:{https_port}")
             else:
-                log_info("No existing port mappings found in Redis", component="dispatcher")
+                dual_logger.info("No existing port mappings found in Redis")
         
         # 5. Reconcile ALL proxies SYNCHRONOUSLY before starting dispatcher
-        logger.info("Python logging: Reconciling all proxies before starting dispatcher")
-        log_info("Reconciling all proxy instances before starting dispatcher...", component="dispatcher")
+        dual_logger.info("Python logging: Reconciling all proxies before starting dispatcher")
+        dual_logger.info("Reconciling all proxy instances before starting dispatcher...")
         await self._reconcile_all_proxies()
-        logger.info("Python logging: Reconciliation complete")
+        dual_logger.info("Python logging: Reconciliation complete")
         
         # 6. NOW start dispatcher with all instances ready
-        logger.info("Python logging: Starting dispatcher")
+        dual_logger.info("Python logging: Starting dispatcher")
         await self.dispatcher.start()
-        log_info("✅ Dispatcher started", component="dispatcher")
-        logger.info("Python logging: Dispatcher started")
+        dual_logger.info("✅ Dispatcher started")
+        dual_logger.info("Python logging: Dispatcher started")
         
-        log_info("=" * 60, component="dispatcher")
-        log_info("UNIFIED DISPATCHER READY - Processing events in real-time", component="dispatcher")
-        log_info("=" * 60, component="dispatcher")
+        dual_logger.info("=" * 60)
+        dual_logger.info("UNIFIED DISPATCHER READY - Processing events in real-time")
+        dual_logger.info("=" * 60)
         
         # The dispatcher is now running in background
         # unified_server_instance is available for dynamic management
-        log_info("UnifiedMultiInstanceServer fully initialized in WORKFLOW MODE", component="dispatcher")
+        dual_logger.info("UnifiedMultiInstanceServer fully initialized in WORKFLOW MODE")
         
         # Note: Instances will be created by the workflow orchestrator for existing proxies
         # This is expected behavior - the orchestrator publishes events for all existing proxies at startup
         # So we don't check for zero instances here anymore
-        log_info(f"Currently {len(self.instances)} instances running (created by workflow orchestrator)", component="dispatcher")
+        dual_logger.info(f"Currently {len(self.instances)} instances running (created by workflow orchestrator)")
         
         # Wait forever (this is where we block)
         try:

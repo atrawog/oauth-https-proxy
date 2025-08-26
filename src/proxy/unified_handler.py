@@ -1,9 +1,11 @@
 """Unified proxy handler - THE ONLY handler for all proxy requests with full MCP compliance."""
 import json
 import traceback
+import time
 import httpx
 import jwt
 import re
+import asyncio
 from typing import Optional, List, Dict, Any
 from fastapi import Request, Response, HTTPException
 from fastapi.responses import RedirectResponse, StreamingResponse
@@ -16,7 +18,7 @@ from ..proxy.unified_routing import (
     UnifiedRoutingEngine, 
     RoutingDecisionType
 )
-from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace
+from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, log_request, log_response
 from ..shared.dns_resolver import get_dns_resolver
 from ..proxy.auth_exclusions import merge_exclusions
 
@@ -581,16 +583,16 @@ class UnifiedProxyHandler:
         # Get trace ID from request state or generate one
         trace_id = getattr(request.state, 'trace_id', None) or f"req-{id(request)}"
         
-        # Create comprehensive log context
+        # Create comprehensive log context using standard field names
         log_ctx = {
             'protocol': protocol,
             'proxy_hostname': proxy_hostname,
             'client_ip': client_ip,
             'client_hostname': client_hostname,
             'request_id': trace_id,
-            'request_path': str(request.url.path),
-            'request_method': request.method,
-            'request_query': str(request.url.query) if request.url.query else None,
+            'request_path': str(request.url.path),  # Standard field name
+            'request_method': request.method,  # Standard field name
+            'request_query': str(request.url.query) if request.url.query else None,  # Standard field name
             'user_agent': request.headers.get('user-agent', 'unknown'),
             'referer': request.headers.get('referer'),
             'content_type': request.headers.get('content-type'),
@@ -619,6 +621,9 @@ class UnifiedProxyHandler:
         Returns:
             Response from backend or error response
         """
+        # Track request start time for duration calculation
+        start_time = time.time()
+        
         # Create unified log context
         try:
             # Determine protocol from x-forwarded-proto or URL scheme
@@ -627,6 +632,29 @@ class UnifiedProxyHandler:
         except Exception as e:
             log_error(f"Failed to create log context: {e}", component="proxy_handler")
             log_ctx = {}
+        
+        # Extract key fields for structured logging
+        client_ip = log_ctx.get('client_ip', 'unknown')
+        proxy_hostname = log_ctx.get('proxy_hostname', 'unknown')
+        trace_id = log_ctx.get('request_id', f"req-{id(request)}")
+        method = request.method
+        path = str(request.url.path)
+        
+        # Don't log request here - wait for response to have complete info including status
+        # Store request context for later use in log_response
+        request_log_ctx = {
+            'method': method,
+            'path': path,
+            'client_ip': client_ip,
+            'proxy_hostname': proxy_hostname,
+            'trace_id': trace_id,
+            'client_hostname': log_ctx.get('client_hostname', ''),
+            'user_agent': log_ctx.get('user_agent', ''),
+            'referer': log_ctx.get('referer', ''),
+            'query': log_ctx.get('request_query', ''),
+            'content_type': log_ctx.get('content_type', ''),
+            'protocol': protocol
+        }
         
         try:
             # Build client info from log context or fallback
@@ -654,6 +682,23 @@ class UnifiedProxyHandler:
                 auth_response = await self._check_auth(request, normalized.hostname, decision, log_ctx)
                 if auth_response:
                     log_info("Authentication failed, returning auth error", component="proxy_handler", **log_ctx)
+                    # Log response for auth error
+                    duration_ms = (time.time() - start_time) * 1000
+                    log_response(
+                        status=auth_response.status_code,
+                        duration_ms=duration_ms,
+                        trace_id=trace_id,
+                        client_ip=client_ip,
+                        proxy_hostname=proxy_hostname,
+                        method=method,
+                        path=path,
+                        query=request_log_ctx.get('query', ''),
+                        user_agent=request_log_ctx.get('user_agent', ''),
+                        referer=request_log_ctx.get('referer', ''),
+                        client_hostname=request_log_ctx.get('client_hostname', ''),
+                        auth_status="failed",
+                        response_type="auth_error"
+                    )
                     return auth_response  # Return auth error or redirect
             except Exception as e:
                 log_error(f"Auth check failed with exception type: {type(e).__name__}, message: {e}", component="proxy_handler", **log_ctx)
@@ -671,25 +716,115 @@ class UnifiedProxyHandler:
             if decision.type == RoutingDecisionType.ROUTE:
                 # Route matched - forward to service
                 log_info(f"Forwarding to service via route {decision.route_id}: {decision.target}", component="proxy_handler", **log_ctx)
-                return await self._forward_to_service(request, decision, normalized, log_ctx)
+                response = await self._forward_to_service(request, decision, normalized, log_ctx)
+                # Log response for route forward
+                duration_ms = (time.time() - start_time) * 1000
+                log_response(
+                    status=response.status_code,
+                    duration_ms=duration_ms,
+                    trace_id=trace_id,
+                    client_ip=client_ip,
+                    proxy_hostname=proxy_hostname,
+                    method=method,
+                    path=path,
+                    query=request_log_ctx.get('query', ''),
+                    user_agent=request_log_ctx.get('user_agent', ''),
+                    referer=request_log_ctx.get('referer', ''),
+                    client_hostname=request_log_ctx.get('client_hostname', ''),
+                    route_id=decision.route_id,
+                    backend_url=decision.target,
+                    response_type="route_forward"
+                )
+                return response
             
             elif decision.type == RoutingDecisionType.PROXY:
                 # Proxy target found - forward to backend
                 log_info(f"Forwarding to proxy backend: {decision.target}", component="proxy_handler", **log_ctx)
-                return await self._forward_to_proxy(request, decision, normalized, log_ctx)
+                response = await self._forward_to_proxy(request, decision, normalized, log_ctx)
+                # Log response for proxy forward
+                duration_ms = (time.time() - start_time) * 1000
+                log_response(
+                    status=response.status_code,
+                    duration_ms=duration_ms,
+                    trace_id=trace_id,
+                    client_ip=client_ip,
+                    proxy_hostname=proxy_hostname,
+                    method=method,
+                    path=path,
+                    query=request_log_ctx.get('query', ''),
+                    user_agent=request_log_ctx.get('user_agent', ''),
+                    referer=request_log_ctx.get('referer', ''),
+                    client_hostname=request_log_ctx.get('client_hostname', ''),
+                    backend_url=decision.target,
+                    response_type="proxy_forward"
+                )
+                return response
             
             else:
                 # No route or proxy found
                 log_error(f"NO ROUTE OR PROXY FOUND for {normalized.hostname}{normalized.path}", component="proxy_handler", **log_ctx)
+                # Log response for 404
+                duration_ms = (time.time() - start_time) * 1000
+                log_response(
+                    status=404,
+                    duration_ms=duration_ms,
+                    trace_id=trace_id,
+                    client_ip=client_ip,
+                    proxy_hostname=proxy_hostname,
+                    method=method,
+                    path=path,
+                    query=request_log_ctx.get('query', ''),
+                    user_agent=request_log_ctx.get('user_agent', ''),
+                    referer=request_log_ctx.get('referer', ''),
+                    client_hostname=request_log_ctx.get('client_hostname', ''),
+                    error="no_route_or_proxy",
+                    response_type="error"
+                )
                 raise HTTPException(404, f"No route or proxy target for {normalized.hostname}")
         
         except HTTPException as he:
             log_warning(f"HTTPException in handle_request: status_code={he.status_code}, detail={he.detail}", component="proxy_handler", **log_ctx)
+            # Log response for HTTP exception
+            duration_ms = (time.time() - start_time) * 1000
+            log_response(
+                status=he.status_code,
+                duration_ms=duration_ms,
+                trace_id=trace_id,
+                client_ip=client_ip,
+                proxy_hostname=proxy_hostname,
+                method=method,
+                path=path,
+                query=request_log_ctx.get('query', '') if 'request_log_ctx' in locals() else '',
+                user_agent=request_log_ctx.get('user_agent', '') if 'request_log_ctx' in locals() else '',
+                referer=request_log_ctx.get('referer', '') if 'request_log_ctx' in locals() else '',
+                client_hostname=request_log_ctx.get('client_hostname', '') if 'request_log_ctx' in locals() else '',
+                error=str(he.detail),
+                error_type="http_exception",
+                response_type="error"
+            )
             raise
         except Exception as e:
             log_error(f"Unhandled exception in handle_request for {request.url}: {e}", component="proxy_handler", **log_ctx)
             log_error(f"Exception type: {type(e).__name__}", component="proxy_handler", **log_ctx)
             log_error(f"Full traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
+            # Log response for unhandled exception
+            duration_ms = (time.time() - start_time) * 1000
+            log_response(
+                status=500,
+                duration_ms=duration_ms,
+                trace_id=trace_id,
+                client_ip=client_ip,
+                proxy_hostname=proxy_hostname,
+                method=method if 'method' in locals() else request.method,
+                path=path if 'path' in locals() else str(request.url.path),
+                query=request_log_ctx.get('query', '') if 'request_log_ctx' in locals() else '',
+                user_agent=request_log_ctx.get('user_agent', '') if 'request_log_ctx' in locals() else '',
+                referer=request_log_ctx.get('referer', '') if 'request_log_ctx' in locals() else '',
+                client_hostname=request_log_ctx.get('client_hostname', '') if 'request_log_ctx' in locals() else '',
+                error=str(e),
+                error_type=type(e).__name__,
+                response_type="error"
+            )
             raise HTTPException(500, "Internal server error")
     
     async def _forward_to_service(self, request: Request, decision, normalized, log_ctx: Dict[str, Any]):
@@ -813,51 +948,41 @@ class UnifiedProxyHandler:
         # Get request body
         body = await request.body()
         
-        # Check for streaming content
-        is_streaming = 'text/event-stream' in headers.get('accept', '')
-        
         try:
-            # Make the request
+            # Make the request - always use regular request, not stream
+            # We'll check the response content-type to determine if it's SSE
             log_debug(f"Making backend request to {target_url}", component="proxy_handler", **log_ctx)
             
-            if is_streaming:
-                # Use streaming for SSE/WebSocket
-                async with self.client.stream(
-                    request.method,
-                    target_url,
-                    headers=headers,
-                    content=body if body else None,
-                ) as response:
-                    # Build response headers
-                    response_headers = dict(response.headers)
-                    if custom_response_headers:
-                        response_headers.update(custom_response_headers)
-                    
-                    # Stream the response
-                    async def generate():
-                        async for chunk in response.aiter_bytes():
-                            yield chunk
-                    
-                    return StreamingResponse(
-                        generate(),
-                        status_code=response.status_code,
-                        headers=response_headers,
-                        media_type=response_headers.get('content-type', 'text/event-stream')
-                    )
-            else:
-                # Regular request
-                response = await self.client.request(
-                    request.method,
-                    target_url,
-                    headers=headers,
-                    content=body if body else None,
+            response = await self.client.request(
+                request.method,
+                target_url,
+                headers=headers,
+                content=body if body else None,
+            )
+            
+            # Build response headers
+            response_headers = dict(response.headers)
+            if custom_response_headers:
+                response_headers.update(custom_response_headers)
+            
+            # Check if this is an SSE response
+            content_type = response_headers.get('content-type', '').lower()
+            is_sse = 'text/event-stream' in content_type
+            
+            if is_sse:
+                # For SSE responses, we need to handle them specially
+                # The backend returns SSE data, we should pass it through directly
+                # without trying to re-stream it
+                log_info(f"SSE response detected, passing through directly", component="proxy_handler", **log_ctx)
+                
+                # For SSE, use the raw response content
+                return Response(
+                    content=response.content,
+                    status_code=response.status_code,
+                    headers=response_headers,
+                    media_type='text/event-stream'
                 )
-                
-                # Build response headers
-                response_headers = dict(response.headers)
-                if custom_response_headers:
-                    response_headers.update(custom_response_headers)
-                
+            else:
                 # Remove hop-by-hop headers from response
                 for header in hop_by_hop:
                     response_headers.pop(header, None)
@@ -880,6 +1005,13 @@ class UnifiedProxyHandler:
         except httpx.RequestError as e:
             log_error(f"Backend request error: {e}", component="proxy_handler", **log_ctx)
             raise HTTPException(502, "Bad gateway")
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as e:
+            log_warning(f"Client disconnected during request: {e}", component="proxy_handler", **log_ctx)
+            # Don't raise HTTPException for client disconnects - just return a simple response
+            return Response(content="", status_code=499)  # 499 = Client Closed Request
+        except asyncio.CancelledError:
+            log_debug("Request cancelled by client", component="proxy_handler", **log_ctx)
+            return Response(content="", status_code=499)
         except Exception as e:
             log_error(f"Unexpected error in backend request: {e}", component="proxy_handler", **log_ctx)
             log_error(f"Traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)

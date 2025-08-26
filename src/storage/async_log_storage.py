@@ -54,11 +54,199 @@ class AsyncLogStorage:
             # Group already exists, that's fine
             logger.debug(f"Consumer group {self.consumer_group} already exists")
     
-    async def log_request(self, log_entry: Dict[str, Any]) -> str:
-        """Log a request to the unified Redis stream.
+    async def _add_to_indexes(self, stream_id: str, stream_data: Dict[str, str], timestamp_ms: int):
+        """Add log entry to Redis indexes for efficient querying.
         
-        This is now just a compatibility wrapper that writes directly to the unified stream.
-        No more indexes, no more req: keys, just the stream.
+        Creates sorted set indexes by:
+        - All logs (global)
+        - Client IP
+        - Proxy hostname
+        - User ID
+        - HTTP status code
+        - HTTP method
+        - Errors (4xx/5xx)
+        
+        Args:
+            stream_id: Redis stream entry ID
+            stream_data: Log entry data
+            timestamp_ms: Timestamp in milliseconds (used as score)
+        """
+        try:
+            # Use pipeline for efficiency
+            pipe = self.redis.pipeline()
+            
+            # TTL for indexes (30 days)
+            ttl_seconds = 30 * 24 * 60 * 60
+            
+            # Global index - all logs
+            pipe.zadd("log:idx:all", {stream_id: timestamp_ms})
+            pipe.expire("log:idx:all", ttl_seconds)
+            
+            # Index by client IP
+            client_ip = stream_data.get('client_ip')
+            if client_ip and client_ip != '127.0.0.1':
+                pipe.zadd(f"log:idx:ip:{client_ip}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:ip:{client_ip}", ttl_seconds)
+            
+            # Index by proxy hostname
+            proxy_hostname = stream_data.get('proxy_hostname')
+            if proxy_hostname:
+                pipe.zadd(f"log:idx:host:{proxy_hostname}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:host:{proxy_hostname}", ttl_seconds)
+            
+            # Index by user ID
+            user_id = stream_data.get('user_id')
+            if user_id and user_id != 'anonymous':
+                pipe.zadd(f"log:idx:user:{user_id}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:user:{user_id}", ttl_seconds)
+            
+            # Index by HTTP status code
+            status_code = stream_data.get('status_code')
+            if status_code and status_code != '0':
+                pipe.zadd(f"log:idx:status:{status_code}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:status:{status_code}", ttl_seconds)
+                
+                # Special index for errors
+                try:
+                    status_int = int(status_code)
+                    if status_int >= 400:
+                        pipe.zadd("log:idx:errors", {stream_id: timestamp_ms})
+                        pipe.expire("log:idx:errors", ttl_seconds)
+                except:
+                    pass
+            
+            # Index by HTTP method (support both old and new field names)
+            method = stream_data.get('request_method') or stream_data.get('method')
+            if method:
+                pipe.zadd(f"log:idx:method:{method}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:method:{method}", ttl_seconds)
+            
+            # Index by log level (for non-HTTP logs)
+            level = stream_data.get('level')
+            if level and level != 'INFO':
+                pipe.zadd(f"log:idx:level:{level}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:level:{level}", ttl_seconds)
+            
+            # Index by component
+            component = stream_data.get('component')
+            if component:
+                pipe.zadd(f"log:idx:component:{component}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:component:{component}", ttl_seconds)
+            
+            # Execute pipeline
+            await pipe.execute()
+            logger.debug(f"Added entry {stream_id} to indexes")
+            
+        except Exception as e:
+            logger.error(f"Error adding to indexes: {e}")
+    
+    async def rebuild_indexes(self, hours: int = 24, batch_size: int = 1000):
+        """Rebuild indexes from existing stream entries.
+        
+        Scans the stream and recreates all indexes. Useful for:
+        - Initial migration from non-indexed logs
+        - Recovering from index corruption
+        - Adding new index types
+        
+        Args:
+            hours: How many hours of logs to index (default 24)
+            batch_size: Number of entries to process per batch
+            
+        Returns:
+            Number of entries indexed
+        """
+        try:
+            logger.info(f"Starting index rebuild for last {hours} hours")
+            
+            # Calculate time range
+            now = datetime.now(timezone.utc)
+            cutoff = now - timedelta(hours=hours)
+            cutoff_ms = int(cutoff.timestamp() * 1000)
+            now_ms = int(now.timestamp() * 1000)
+            
+            indexed_count = 0
+            last_id = f"{now_ms}"
+            
+            while True:
+                # Fetch batch of entries
+                entries = await self.redis.xrevrange(
+                    "logs:all:stream",
+                    max=last_id,
+                    min=cutoff_ms,
+                    count=batch_size
+                )
+                
+                if not entries:
+                    break
+                
+                # Process entries
+                for entry_id, data in entries:
+                    timestamp_ms = int(data.get('timestamp', 0))
+                    if timestamp_ms:
+                        await self._add_to_indexes(entry_id, data, timestamp_ms)
+                        indexed_count += 1
+                    
+                    # Update last_id for next batch (exclude current entry)
+                    last_id = f"({entry_id}"
+                
+                logger.info(f"Indexed {indexed_count} entries so far...")
+                
+                # If we got fewer than batch_size, we're done
+                if len(entries) < batch_size:
+                    break
+            
+            logger.info(f"Index rebuild complete. Indexed {indexed_count} entries.")
+            return indexed_count
+            
+        except Exception as e:
+            logger.error(f"Error rebuilding indexes: {e}")
+            return 0
+    
+    async def cleanup_old_indexes(self, days: int = 30):
+        """Remove old entries from indexes.
+        
+        Removes entries older than specified days from all indexes.
+        This helps keep indexes manageable in size.
+        
+        Args:
+            days: Remove entries older than this many days
+            
+        Returns:
+            Number of entries removed
+        """
+        try:
+            logger.info(f"Cleaning indexes older than {days} days")
+            
+            # Calculate cutoff timestamp
+            cutoff = datetime.now(timezone.utc) - timedelta(days=days)
+            cutoff_ms = int(cutoff.timestamp() * 1000)
+            
+            removed_count = 0
+            
+            # Get all index keys
+            index_keys = await self.redis.keys("log:idx:*")
+            
+            for key in index_keys:
+                # Remove old entries from sorted set
+                removed = await self.redis.zremrangebyscore(key, "-inf", cutoff_ms)
+                removed_count += removed
+                
+                # If index is now empty, delete it
+                if await self.redis.zcard(key) == 0:
+                    await self.redis.delete(key)
+                    logger.debug(f"Deleted empty index: {key}")
+            
+            logger.info(f"Cleanup complete. Removed {removed_count} old index entries.")
+            return removed_count
+            
+        except Exception as e:
+            logger.error(f"Error cleaning indexes: {e}")
+            return 0
+    
+    async def log_request(self, log_entry: Dict[str, Any]) -> str:
+        """Log a request to the unified Redis stream with proper indexing.
+        
+        Writes to stream and creates Redis indexes for efficient querying.
         
         Args:
             log_entry: Dictionary containing request/response data
@@ -118,7 +306,10 @@ class AsyncLogStorage:
                 approximate=True
             )
             
-            logger.debug(f"Logged to unified stream with ID: {stream_id}")
+            # Add to Redis indexes for efficient querying
+            await self._add_to_indexes(stream_id, stream_data, timestamp_ms)
+            
+            logger.debug(f"Logged to unified stream with ID: {stream_id} and indexed")
             return stream_id
             
         except Exception as e:
@@ -126,9 +317,10 @@ class AsyncLogStorage:
             return ""
     
     async def search_logs(self, **kwargs) -> Dict[str, Any]:
-        """Search logs from Redis Streams.
+        """Search logs using Redis indexes for efficient querying.
         
-        Queries the unified log stream for all log entries.
+        Uses Redis sorted sets and ZREVRANGEBYSCORE for fast filtering
+        instead of fetching all entries and filtering in Python.
         """
         try:
             hours = kwargs.get('hours', 24)
@@ -141,140 +333,160 @@ class AsyncLogStorage:
             cutoff_ms = int(cutoff.timestamp() * 1000)
             now_ms = int(now.timestamp() * 1000)
             
-            logger.info(f"Search logs from stream: cutoff={cutoff_ms}, now={now_ms}, hours={hours}")
+            logger.info(f"Search logs using indexes: cutoff={cutoff_ms}, now={now_ms}, hours={hours}")
+            logger.info(f"Search filters: client_ip={kwargs.get('client_ip')}, proxy_hostname={kwargs.get('proxy_hostname')}")
             
-            # Query the unified log stream
-            # XREVRANGE returns entries in reverse chronological order
-            stream_key = "logs:all:stream"
+            # Determine which index to use based on filters
+            index_key = None
+            if kwargs.get('client_ip'):
+                index_key = f"log:idx:ip:{kwargs['client_ip']}"
+            elif kwargs.get('proxy_hostname'):
+                index_key = f"log:idx:host:{kwargs['proxy_hostname']}"
+            elif kwargs.get('user'):
+                index_key = f"log:idx:user:{kwargs['user']}"
+            elif kwargs.get('status'):
+                index_key = f"log:idx:status:{kwargs['status']}"
+            elif kwargs.get('method'):
+                index_key = f"log:idx:method:{kwargs['method']}"
+            else:
+                # No specific filter, use global index
+                index_key = "log:idx:all"
             
-            # Build the count parameter (limit + offset to handle pagination)
-            count = limit + offset if offset > 0 else limit
-            
-            # Query the stream
-            entries = await self.redis.xrevrange(
-                stream_key,
+            # Query the index using ZREVRANGEBYSCORE (reverse chronological order)
+            # This returns entry IDs from the time range, already filtered!
+            entry_ids = await self.redis.zrevrangebyscore(
+                index_key,
                 max=now_ms,
                 min=cutoff_ms,
-                count=count
+                start=offset,
+                num=limit
             )
             
-            logger.info(f"Found {len(entries)} entries in stream {stream_key}")
+            logger.info(f"Found {len(entry_ids)} entries from index {index_key}")
             
-            # Process entries and apply filters
+            # If we have multiple filters, we need to intersect the results
+            # (This is a simplified version - full implementation would use ZINTERSTORE)
+            if len(entry_ids) > 0 and (
+                (kwargs.get('client_ip') and kwargs.get('status')) or
+                (kwargs.get('proxy_hostname') and kwargs.get('method'))
+            ):
+                # For now, we'll fetch and filter - but this could be optimized with ZINTERSTORE
+                logger.debug("Multiple filters detected - using post-filtering")
+            
+            # Fetch the actual log data from the stream
             logs = []
-            for entry_id, data in entries:
-                # Skip entries before offset
-                if offset > 0:
-                    offset -= 1
-                    continue
+            for entry_id in entry_ids:
+                # Fetch entry from stream
+                entries = await self.redis.xrange(
+                    "logs:all:stream",
+                    min=entry_id,
+                    max=entry_id,
+                    count=1
+                )
                 
-                # Stop if we have enough entries
-                if len(logs) >= limit:
-                    break
-                
-                # Apply filters
-                if kwargs.get('client_ip') and data.get('client_ip') != kwargs['client_ip']:
-                    continue
-                if kwargs.get('proxy_hostname') and data.get('proxy_hostname') != kwargs['proxy_hostname']:
-                    continue
-                if kwargs.get('user') and data.get('user_id') != kwargs['user']:
-                    continue
-                if kwargs.get('status') and str(data.get('status_code', '')) != str(kwargs['status']):
-                    continue
-                if kwargs.get('method') and data.get('method') != kwargs['method']:
-                    continue
-                if kwargs.get('path') and kwargs['path'] not in data.get('path', ''):
-                    continue
-                
-                # Apply query search across multiple fields
-                if kwargs.get('query'):
-                    query = kwargs['query']
-                    # Parse structured queries like "method:GET" or "status:200"
-                    if ':' in query:
-                        field, value = query.split(':', 1)
-                        field_lower = field.lower()
-                        value_lower = value.lower()
-                        
-                        # Map field names to data keys
-                        field_map = {
-                            'method': 'method',
-                            'status': 'status_code', 
-                            'path': 'path',
-                            'user': 'user_id',
-                            'ip': 'client_ip',
-                            'proxy_hostname': 'proxy_hostname',
-                            'component': 'component',
-                            'level': 'level',
-                            'error': 'error'
-                        }
-                        
-                        if field_lower in field_map:
-                            data_field = field_map[field_lower]
-                            data_value = str(data.get(data_field, '')).lower()
-                            # For method comparison, need exact match
-                            if field_lower == 'method':
-                                if data_value != value_lower:
+                if entries:
+                    _, data = entries[0]
+                    
+                    # Apply additional filters if needed (for multi-filter queries)
+                    # This is much faster than before since we're only checking the already-filtered results
+                    if kwargs.get('status') and index_key != f"log:idx:status:{kwargs['status']}":
+                        if str(data.get('status_code', '')) != str(kwargs['status']):
+                            continue
+                    if kwargs.get('method') and index_key != f"log:idx:method:{kwargs['method']}":
+                        if data.get('method') != kwargs['method']:
+                            continue
+                    if kwargs.get('path') and kwargs['path'] not in data.get('path', ''):
+                        continue
+                    
+                    # Apply query search if specified
+                    if kwargs.get('query'):
+                        query = kwargs['query']
+                        # Parse structured queries like "method:GET" or "status:200"
+                        if ':' in query:
+                            field, value = query.split(':', 1)
+                            field_lower = field.lower()
+                            value_lower = value.lower()
+                            
+                            # Map field names to data keys
+                            field_map = {
+                                'method': 'method',
+                                'status': 'status_code',
+                                'path': 'path',
+                                'user': 'user_id',
+                                'ip': 'client_ip',
+                                'proxy_hostname': 'proxy_hostname',
+                                'component': 'component',
+                                'level': 'level',
+                                'error': 'error'
+                            }
+                            
+                            if field_lower in field_map:
+                                data_field = field_map[field_lower]
+                                data_value = str(data.get(data_field, '')).lower()
+                                # For method comparison, need exact match
+                                if field_lower == 'method':
+                                    if data_value != value_lower:
+                                        continue
+                                # For other fields, allow partial matching
+                                elif value_lower not in data_value:
                                     continue
-                            # For other fields, allow partial matching
-                            elif value_lower not in data_value:
+                            else:
+                                # Unknown field in structured query, skip this entry
                                 continue
-                            # If we get here, the structured query matched, so keep this entry
                         else:
-                            # Unknown field in structured query, skip this entry
-                            continue
-                    else:
-                        # General text search across all fields
-                        query_lower = query.lower()
-                        searchable = [
-                            data.get('path', ''),
-                            data.get('method', ''),
-                            data.get('message', ''),
-                            data.get('user_id', ''),
-                            data.get('client_ip', ''),
-                            data.get('proxy_hostname', ''),
-                            data.get('error', ''),
-                            data.get('component', '')
-                        ]
-                        if not any(query_lower in str(field).lower() for field in searchable if field):
-                            continue
-                
-                # Convert stream entry to log format
-                log_entry = {
-                    'timestamp': data.get('timestamp_iso') or data.get('timestamp', ''),
-                    'timestamp_unix': int(data.get('timestamp', 0)) if data.get('timestamp') else 0,  # Unix timestamp as integer (milliseconds)
-                    'client_ip': data.get('client_ip', ''),
-                    'client_hostname': data.get('client_hostname', ''),
-                    'proxy_hostname': data.get('proxy_hostname', ''),
-                    'method': data.get('method', ''),
-                    'path': data.get('path', ''),
-                    'query': data.get('query', ''),
-                    'status_code': self._safe_int(data.get('status_code')) or self._safe_int(data.get('status')) or 0,
-                    'response_time_ms': float(data.get('response_time_ms', 0)) if data.get('response_time_ms') else float(data.get('duration_ms', 0)) if data.get('duration_ms') else 0.0,
-                    'user_id': data.get('user_id', 'anonymous'),
-                    'user_agent': data.get('user_agent', ''),
-                    'referrer': data.get('referrer', ''),
-                    'referer': data.get('referer', ''),  # Support both spellings
-                    'bytes_sent': int(data.get('bytes_sent', 0)) if data.get('bytes_sent') else 0,
-                    'auth_type': data.get('auth_type', ''),
-                    'oauth_client_id': data.get('oauth_client_id', ''),
-                    'oauth_username': data.get('oauth_username', ''),
-                    'message': data.get('message', ''),
-                    'level': data.get('level', 'INFO'),
-                    'component': data.get('component', ''),
-                    'log_type': data.get('log_type', 'http_request'),
-                    'error': data.get('error', ''),
-                    'error_type': data.get('error_type', ''),
-                    # Include additional debug fields
-                    'headers': data.get('headers', ''),  # Request headers (JSON string)
-                    'body': data.get('body', ''),  # Request body
-                    'backend_url': data.get('backend_url', ''),  # Backend URL for proxy requests
-                    'session_id': data.get('session_id', ''),  # Session ID
-                    'trace_id': data.get('trace_id', ''),  # Trace ID for correlation
-                    'event_type': data.get('event_type', ''),  # Event type
-                    'worker_id': data.get('worker_id', '')  # Worker ID for debugging
-                }
-                
-                logs.append(log_entry)
+                            # General text search across all fields
+                            query_lower = query.lower()
+                            searchable = [
+                                data.get('path', ''),
+                                data.get('method', ''),
+                                data.get('message', ''),
+                                data.get('user_id', ''),
+                                data.get('client_ip', ''),
+                                data.get('proxy_hostname', ''),
+                                data.get('error', ''),
+                                data.get('component', '')
+                            ]
+                            if not any(query_lower in str(field).lower() for field in searchable if field):
+                                continue
+                    
+                    # Convert stream entry to log format
+                    log_entry = {
+                        'timestamp': data.get('timestamp_iso') or data.get('timestamp', ''),
+                        'timestamp_unix': int(data.get('timestamp', 0)) if data.get('timestamp') else 0,
+                        'client_ip': data.get('client_ip', ''),
+                        'client_hostname': data.get('client_hostname', ''),
+                        'proxy_hostname': data.get('proxy_hostname', ''),
+                        # Standard field names with request_ prefix
+                        'request_method': data.get('request_method') or data.get('method', ''),
+                        'request_path': data.get('request_path') or data.get('path', ''),
+                        'request_query': data.get('request_query') or data.get('query', ''),
+                        'status_code': self._safe_int(data.get('status_code')) or self._safe_int(data.get('status')) or 0,
+                        'response_time_ms': float(data.get('response_time_ms', 0)) if data.get('response_time_ms') else float(data.get('duration_ms', 0)) if data.get('duration_ms') else 0.0,
+                        'user_id': data.get('user_id', 'anonymous'),
+                        'user_agent': data.get('user_agent', ''),
+                        'referrer': data.get('referrer', ''),
+                        'referer': data.get('referer', ''),
+                        'bytes_sent': int(data.get('bytes_sent', 0)) if data.get('bytes_sent') else 0,
+                        'auth_type': data.get('auth_type', ''),
+                        'oauth_client_id': data.get('oauth_client_id') or data.get('client_id', ''),
+                        'oauth_username': data.get('oauth_username') or data.get('oauth_user', ''),
+                        'message': data.get('message', ''),
+                        'level': data.get('level', 'INFO'),
+                        'component': data.get('component', ''),
+                        'log_type': data.get('log_type') or data.get('type', 'http_request'),
+                        'error': data.get('error', ''),
+                        'error_type': data.get('error_type', ''),
+                        # Include additional debug fields
+                        'headers': data.get('headers', ''),
+                        'body': data.get('body', ''),
+                        'backend_url': data.get('backend_url', ''),
+                        'session_id': data.get('session_id', ''),
+                        'trace_id': data.get('trace_id') or data.get('request_id', ''),
+                        'event_type': data.get('event_type', ''),
+                        'worker_id': data.get('worker_id', '')
+                    }
+                    
+                    logs.append(log_entry)
             
             # Enrich logs with metadata from trace storage
             enriched_logs = await self.get_logs_with_metadata(logs)
@@ -290,8 +502,11 @@ class AsyncLogStorage:
     
     async def get_logs_by_ip(self, client_ip: str, hours: int = 24, limit: int = 100) -> List[Dict]:
         """Get logs by client IP address."""
+        logger.info(f"get_logs_by_ip called with: client_ip={client_ip}, hours={hours}, limit={limit}")
         result = await self.search_logs(client_ip=client_ip, hours=hours, limit=limit)
-        return result.get('logs', [])
+        logs = result.get('logs', [])
+        logger.info(f"get_logs_by_ip returning {len(logs)} logs")
+        return logs
     
     async def get_logs_by_hostname(self, proxy_hostname: str, hours: int = 24, limit: int = 100) -> List[Dict]:
         """Get logs by proxy hostname."""

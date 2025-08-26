@@ -14,6 +14,7 @@ The API module provides the main FastAPI application, routers, and web interface
 - ALL requests come through proxy instances (OAuth validated)
 - Full FastAPI with async lifespan management
 - Background tasks for certificate renewal and cleanup
+- **Special MCP Handling**: `/mcp` requests bypass FastAPI via MCPASGIMiddleware (see [MCP Documentation](routers/mcp/CLAUDE.md))
 
 ### Directory Structure
 ```
@@ -123,8 +124,9 @@ if not is_admin:
 - Protocol versions: 2024-11-05, 2025-03-26, 2025-06-18
 
 ### MCP Features
-- **Direct Mounting**: MCP SDK's Starlette app mounted directly on FastAPI
-- **SSE Streaming**: Proper Server-Sent Events streaming for real-time responses
+- **ASGI Interception**: MCP SDK accessed via MCPASGIMiddleware that bypasses FastAPI completely
+- **Middleware Bypass**: Avoids BaseHTTPMiddleware SSE bug by intercepting `/mcp` before FastAPI
+- **SSE Streaming**: Proper Server-Sent Events streaming without disconnect errors
 - **Session Management**: Stateful sessions with task group initialization
 - **Tool Integration**: 10+ tools for system management (proxies, certificates, services)
 - **Claude.ai Compatible**: Fully tested with Claude.ai connection requirements

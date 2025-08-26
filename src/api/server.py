@@ -2,6 +2,7 @@
 
 import os
 import logging
+import asyncio
 from contextlib import asynccontextmanager
 from typing import Optional
 
@@ -22,6 +23,44 @@ from .oauth.auth_authlib import AuthManager
 from .oauth.routes import create_oauth_router
 
 logger = logging.getLogger(__name__)
+
+
+class DisconnectHandlerMiddleware(BaseHTTPMiddleware):
+    """Safety net middleware to catch any remaining disconnect issues we haven't fixed yet.
+    
+    This should NOT be catching things in normal operation. If it does, we have
+    more bugs to fix properly instead of just suppressing them.
+    """
+    
+    async def dispatch(self, request: Request, call_next):
+        """Handle request and catch disconnect-related exceptions as a safety net."""
+        try:
+            response = await call_next(request)
+            return response
+        except asyncio.CancelledError:
+            # This should be handled properly in the actual handlers now
+            logger.warning(f"SAFETY NET: Caught unhandled CancelledError for {request.url.path} - FIX THE HANDLER!")
+            return PlainTextResponse("", status_code=499)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as e:
+            # These should be handled in the actual handlers
+            logger.warning(f"SAFETY NET: Caught unhandled {type(e).__name__} for {request.url.path} - FIX THE HANDLER!")
+            return PlainTextResponse("", status_code=499)
+        except GeneratorExit:
+            # Generator cleanup should be handled properly
+            logger.warning(f"SAFETY NET: Caught unhandled GeneratorExit for {request.url.path} - FIX THE HANDLER!")
+            return PlainTextResponse("", status_code=499)
+        except Exception as e:
+            # Check if this is a wrapped disconnect exception
+            error_str = str(e).lower()
+            if any(x in error_str for x in ['disconnect', 'cancelled', 'broken pipe', 'connection reset']):
+                logger.warning(f"SAFETY NET: Caught wrapped disconnect ({type(e).__name__}) for {request.url.path} - FIX THE HANDLER!")
+                return PlainTextResponse("", status_code=499)
+            # Check for the specific MCP error that we should have fixed
+            if "Unexpected message received: http.request" in str(e):
+                logger.error(f"SAFETY NET: MCP SSE bug NOT FIXED! Still catching error for {request.url.path}")
+                return PlainTextResponse("", status_code=499)
+            # Re-raise real errors
+            raise
 
 
 class ProxyHeadersMiddleware(BaseHTTPMiddleware):
@@ -102,7 +141,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         description="Certificate and proxy management API",
         version="1.0.0",
         lifespan=lifespan,
-        redirect_slashes=True
+        redirect_slashes=False  # Disabled to prevent /mcp -> /mcp/ redirects
     )
     
     # Store dependencies
@@ -136,6 +175,10 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+    
+    # Add disconnect handler middleware as the outermost layer (added last = runs first)
+    # This catches all disconnect exceptions before they bubble up and crash the ASGI framework
+    app.add_middleware(DisconnectHandlerMiddleware)
     
     # Add middleware to identify instance
     @app.middleware("http")

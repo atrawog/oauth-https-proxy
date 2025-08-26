@@ -12,12 +12,43 @@ from starlette.applications import Starlette
 from starlette.routing import Route
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.exceptions import HTTPException
+import asyncio
 # Lazy import UnifiedProxyHandler to avoid circular dependency
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, set_global_logger
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..middleware.proxy_client_middleware import ProxyClientMiddleware
 from ..api.oauth.metadata_handler import OAuthMetadataHandler
 from ..api.oauth.config import Settings
+
+
+class DisconnectHandlerMiddleware(BaseHTTPMiddleware):
+    """Safety net middleware for proxy app - should not be needed if handlers are fixed properly."""
+    
+    async def dispatch(self, request: Request, call_next):
+        """Catch disconnect exceptions that handlers missed - these indicate bugs to fix."""
+        try:
+            response = await call_next(request)
+            return response
+        except asyncio.CancelledError:
+            # Should be handled in handle_proxy()
+            log_warning(f"SAFETY NET: Unhandled CancelledError in proxy for {request.url.path}", component="disconnect_middleware")
+            return PlainTextResponse("", status_code=499)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as e:
+            # Should be handled in handle_proxy()
+            log_warning(f"SAFETY NET: Unhandled {type(e).__name__} in proxy for {request.url.path}", component="disconnect_middleware")
+            return PlainTextResponse("", status_code=499)
+        except GeneratorExit:
+            # Should be handled in streaming responses
+            log_warning(f"SAFETY NET: Unhandled GeneratorExit in proxy for {request.url.path}", component="disconnect_middleware")
+            return PlainTextResponse("", status_code=499)
+        except Exception as e:
+            # Check if this is a wrapped disconnect exception
+            error_str = str(e).lower()
+            if any(x in error_str for x in ['disconnect', 'cancelled', 'broken pipe', 'connection reset']):
+                log_warning(f"SAFETY NET: Wrapped {type(e).__name__} in proxy for {request.url.path}", component="disconnect_middleware")
+                return PlainTextResponse("", status_code=499)
+            # Re-raise real errors
+            raise
 
 
 class ProxyOnlyApp:
@@ -86,6 +117,10 @@ class ProxyOnlyApp:
             return response
         
         self.app.add_middleware(BaseHTTPMiddleware, dispatch=add_instance_header)
+        
+        # Add disconnect handler middleware as the outermost layer
+        # This catches all disconnect exceptions before they bubble up
+        self.app.add_middleware(DisconnectHandlerMiddleware)
     
     async def startup(self):
         """Minimal startup - no lifespan complexity."""
@@ -185,24 +220,38 @@ class ProxyOnlyApp:
     
     async def handle_proxy(self, request: Request) -> Response:
         """Handle all proxy requests."""
-        print(f"PROXY APP: Received request to {request.url.path}")
+        import asyncio
+        log_debug(f"PROXY APP: Received request to {request.url.path}", component="proxy_app")
         try:
             # Initialize proxy handler on first request if needed
             if not self.proxy_handler:
-                print(f"PROXY APP: Initializing proxy handler")
+                log_debug(f"PROXY APP: Initializing proxy handler", component="proxy_app")
                 await self._ensure_initialized()
                 if not self.proxy_handler:
-                    print(f"PROXY APP: Failed to initialize proxy handler")
+                    log_error(f"PROXY APP: Failed to initialize proxy handler", component="proxy_app")
                     return PlainTextResponse(
                         "Service initialization failed",
                         status_code=503
                     )
             # Use the enhanced proxy handler
-            print(f"PROXY APP: Calling proxy_handler.handle_request")
+            log_debug(f"PROXY APP: Calling proxy_handler.handle_request", component="proxy_app")
             return await self.proxy_handler.handle_request(request)
+        except asyncio.CancelledError:
+            # Client disconnected - this is NORMAL, not an error
+            log_debug(f"PROXY APP: Client disconnected during request", component="proxy_app")
+            # Return 499 Client Closed Request (nginx standard)
+            return PlainTextResponse("", status_code=499)
+        except (ConnectionResetError, BrokenPipeError, ConnectionAbortedError) as e:
+            # Client connection issues - also normal
+            log_debug(f"PROXY APP: Client connection lost: {type(e).__name__}", component="proxy_app")
+            return PlainTextResponse("", status_code=499)
+        except GeneratorExit:
+            # Generator cleanup when client disconnects during streaming
+            log_debug(f"PROXY APP: Generator cleanup on client disconnect", component="proxy_app")
+            return PlainTextResponse("", status_code=499)
         except HTTPException as he:
             # Handle HTTPException from the proxy handler
-            print(f"PROXY APP: Caught HTTPException status={he.status_code} detail={he.detail}")
+            log_warning(f"PROXY APP: Caught HTTPException status={he.status_code} detail={he.detail}", component="proxy_app")
             return PlainTextResponse(
                 str(he.detail),
                 status_code=he.status_code
@@ -213,9 +262,14 @@ class ProxyOnlyApp:
                 status_code=e.response.status_code
             )
         except Exception as e:
-            print(f"PROXY APP: Caught exception type={type(e).__name__}, msg={str(e)}")
+            # Check if this is a disconnect-related exception wrapped in another exception
+            if "disconnect" in str(e).lower() or "cancelled" in str(e).lower():
+                log_debug(f"PROXY APP: Wrapped disconnect exception: {type(e).__name__}", component="proxy_app")
+                return PlainTextResponse("", status_code=499)
+            
+            log_error(f"PROXY APP: Caught exception type={type(e).__name__}, msg={str(e)}", component="proxy_app", error=e)
             import traceback
-            print(f"PROXY APP: Traceback: {traceback.format_exc()}")
+            log_debug(f"PROXY APP: Traceback: {traceback.format_exc()}", component="proxy_app")
             # Handle exceptions that might contain async generators
             try:
                 error_msg = str(e)

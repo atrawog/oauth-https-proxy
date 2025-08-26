@@ -343,10 +343,10 @@ class AuthManager:
 
         except JoseError as e:
             # Token validation failed
-            print(f"Token validation error: {e}")
+            log_error(f"Token validation error: {e}", component="oauth_auth", error=e)
             return None
         except Exception as e:
-            print(f"Unexpected error during token validation: {e}")
+            log_error(f"Unexpected error during token validation: {e}", component="oauth_auth", error=e)
             return None
 
     async def create_refresh_token(self, user_data: dict, redis_client: redis.Redis) -> str:

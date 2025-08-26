@@ -12,6 +12,8 @@ from ..storage.redis_clients import RedisClients, initialize_redis_clients
 from ..storage import UnifiedStorage
 from ..shared.unified_logger import UnifiedAsyncLogger
 from ..shared.logger import set_global_logger
+from ..shared.dual_logger import set_redis_logger_for_component
+from ..shared.python_logger_config import should_use_dual_logging
 from ..consumers.metrics_processor import MetricsProcessor
 from ..consumers.alert_manager import AlertManager
 from ..docker.async_manager import AsyncDockerManager
@@ -69,6 +71,17 @@ class AsyncComponents:
             
             # Set as global logger for easy access
             set_global_logger(self.unified_logger)
+            
+            # Set up dual logging for dispatcher and main if configured
+            if should_use_dual_logging('dispatcher'):
+                dispatcher_logger = UnifiedAsyncLogger(self.redis_clients, component="dispatcher")
+                set_redis_logger_for_component('dispatcher', dispatcher_logger)
+                logger.info("Dual logging configured for dispatcher")
+            
+            if should_use_dual_logging('redis_stream_consumer'):
+                consumer_logger = UnifiedAsyncLogger(self.redis_clients, component="redis_stream_consumer")
+                set_redis_logger_for_component('redis_stream_consumer', consumer_logger)
+                logger.info("Dual logging configured for redis_stream_consumer")
             
             logger.info("Unified logger initialized and set as global")
             

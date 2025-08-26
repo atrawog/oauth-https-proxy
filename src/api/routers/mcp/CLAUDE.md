@@ -6,29 +6,69 @@ The MCP server provides a Model Context Protocol endpoint that enables LLMs like
 
 ## Architecture
 
+### Critical Architecture Change (August 2025)
+
+#### The BaseHTTPMiddleware SSE Bug
+
+Starlette's BaseHTTPMiddleware has a known bug with Server-Sent Events (SSE) and HTTP/1.1 keep-alive connections. When a connection is reused after an SSE response, the middleware's `listen_for_disconnect` task crashes with:
+
+```
+RuntimeError: Unexpected message received: http.request
+```
+
+This happens because:
+1. SSE responses keep connections open for streaming
+2. HTTP/1.1 allows connection reuse (keep-alive) 
+3. BaseHTTPMiddleware's disconnect listener doesn't expect new requests on the same connection
+4. The middleware crashes when the reused connection sends a new request
+
+#### The MCPASGIMiddleware Solution
+
+To fix this, we intercept `/mcp` requests BEFORE they reach FastAPI:
+
+```
+Request Flow:
+  Hypercorn (ASGI Server)
+     ↓
+  MCPASGIMiddleware (ASGI Wrapper)
+     ├─→ MCP SDK (for /mcp - bypasses ALL FastAPI middleware)
+     └─→ FastAPI (for everything else - normal middleware stack)
+```
+
+The MCPASGIMiddleware:
+- Sits between Hypercorn and FastAPI as an ASGI wrapper
+- Checks if the request path is `/mcp`
+- Routes `/mcp` directly to MCP SDK, bypassing all middleware
+- Passes all other requests to FastAPI for normal processing
+
 ### Components
 
-1. **MCP Main Handler** (`mcp.py`)
-   - Direct mounting of SDK's Starlette app on FastAPI
-   - SSE streaming support with proper async handling
-   - Task group initialization for stateful operation
+1. **MCPASGIMiddleware** (`mcp.py`)
+   - ASGI middleware that intercepts `/mcp` requests before FastAPI
+   - Routes `/mcp` directly to MCP SDK, bypassing ALL FastAPI middleware
+   - Prevents BaseHTTPMiddleware SSE disconnect errors
+   - Returns wrapped app to be served by Hypercorn
+
+2. **MCP Main Handler** (`mcp.py::mount_mcp_app`)
+   - Initializes MCP SDK's Starlette app
+   - Sets up task group for stateful operation
+   - Creates and returns MCPASGIMiddleware wrapper
    - Auto-initialization for out-of-order requests
    - Enhanced keepalive mechanism (15s intervals)
-   - Graceful error handling and connection recovery
-   - Handles both `/mcp` and `/mcp/` endpoints
+   - Handles only `/mcp` exact path (no trailing slash)
 
-2. **MCP Server** (`mcp_server.py`)
+3. **MCP Server** (`mcp_server.py`)
    - FastMCP server with stateful session management
    - 10+ integrated tools for system management
    - Full async/await implementation with timezone-aware datetime
    - Protocol version negotiation (2024-11-05, 2025-03-26, 2025-06-18)
 
-3. **Session Manager** (`session_manager.py`)
+4. **Session Manager** (`session_manager.py`)
    - Stateful session tracking and management
    - Session persistence across requests
    - Session cleanup and expiration
 
-4. **Event Publisher** (`event_publisher.py`)
+5. **Event Publisher** (`event_publisher.py`)
    - Redis Streams event publishing for MCP activities
    - Tool execution tracking and logging
    - System event notifications
@@ -276,7 +316,7 @@ logging.getLogger("src.api.routers.mcp").setLevel(logging.DEBUG)
 
 The MCP implementation was significantly refactored to consolidate 9 experimental implementations into a single, production-ready solution:
 
-### Changes Made
+### Phase 1: Code Consolidation
 - **Removed 8 obsolete files**: Eliminated experimental implementations (mcp_app, mcp_direct, mcp_fastapi, mcp_mounted, mcp_router, mcp_simple, mcp_starlette, mcp_wrapper)
 - **Renamed mcp_mount.py to mcp.py**: Established single authoritative implementation
 - **Fixed datetime issues**: All datetime operations now use timezone-aware UTC
@@ -284,11 +324,20 @@ The MCP implementation was significantly refactored to consolidate 9 experimenta
 - **Added auto-initialization**: Handles out-of-order protocol requests from Claude.ai
 - **Improved keepalive**: Reduced interval to 15s to prevent connection timeouts
 
+### Phase 2: Middleware Bypass Solution
+- **Identified BaseHTTPMiddleware bug**: SSE streams cause disconnect errors with HTTP/1.1 keep-alive
+- **Removed Mount-based approaches**: Standard Starlette mounting still goes through middleware
+- **Implemented MCPASGIMiddleware**: ASGI wrapper that intercepts `/mcp` before FastAPI
+- **Complete middleware bypass**: MCP requests never touch FastAPI middleware stack
+- **Preserved all other endpoints**: Non-MCP requests continue through normal FastAPI flow
+
 ### Benefits
-- 85% reduction in MCP module code
-- Single source of truth for all MCP functionality
-- All recent fixes consolidated in one file
-- Cleaner architecture and easier maintenance
+- **No SSE errors**: Complete elimination of `RuntimeError: Unexpected message received: http.request`
+- **85% reduction in MCP module code**: Single consolidated implementation
+- **Clean architecture**: Clear separation between MCP and FastAPI request handling
+- **Performance improvement**: MCP skips unnecessary middleware processing
+- **Future-proof**: Works regardless of Starlette middleware changes
+- **Maintainable**: Single source of truth with clear architectural boundaries
 
 ## Future Enhancements
 

@@ -13,7 +13,7 @@ from src.shared.logger import log_info, log_debug, log_warning, log_error
 logger = logging.getLogger(__name__)  # Keep for backward compat, but use log_* functions
 
 
-def register_all_routers(app: FastAPI) -> None:
+def register_all_routers(app: FastAPI):
     """Register all routers with the FastAPI app in a single, unified process.
     
     This is the single source of truth for router registration.
@@ -180,11 +180,12 @@ def register_all_routers(app: FastAPI) -> None:
     
     # ========== MOUNT MCP STARLETTE APP ==========
     
-    # Mount MCP Starlette app directly (not as router)
+    # Mount MCP Starlette app with ASGI wrapper
+    mcp_wrapper = None
     try:
-        logger.info("Mounting MCP Starlette app...")
-        _mount_mcp_app(app, async_storage, cert_manager, getattr(app.state, 'docker_manager', None), unified_logger)
-        successful_routers.append("MCP (/mcp) - Mounted as Starlette app")
+        logger.info("Mounting MCP Starlette app with ASGI wrapper...")
+        mcp_wrapper = _mount_mcp_app(app, async_storage, cert_manager, getattr(app.state, 'docker_manager', None), unified_logger)
+        successful_routers.append("MCP (/mcp) - Mounted with ASGI wrapper")
     except Exception as e:
         import traceback
         logger.error(f"Failed to mount MCP app: {e}")
@@ -214,6 +215,9 @@ def register_all_routers(app: FastAPI) -> None:
     logger.debug(f"All routes: {sorted(set(routes))}")
     
     logger.info("=" * 60)
+    
+    # Return the MCP wrapper if created, otherwise the app
+    return mcp_wrapper if mcp_wrapper else app
 
 
 # ========== ROUTER FACTORY FUNCTIONS ==========
@@ -288,7 +292,7 @@ def _create_debug_router() -> APIRouter:
     return create_debug_router()
 
 
-def _mount_mcp_app(app: FastAPI, async_storage, cert_manager, docker_manager, unified_logger) -> None:
+def _mount_mcp_app(app: FastAPI, async_storage, cert_manager, docker_manager, unified_logger):
     """Mount MCP Starlette app directly with proper task group initialization."""
     from .mcp import mount_mcp_app
-    mount_mcp_app(app, async_storage, cert_manager, docker_manager, unified_logger)
+    return mount_mcp_app(app, async_storage, cert_manager, docker_manager, unified_logger)

@@ -5,6 +5,7 @@ from typing import Optional
 import redis.asyncio as redis
 
 from .config import Settings
+from ...shared.logger import log_info
 
 
 class RedisManager:
@@ -24,7 +25,7 @@ class RedisManager:
         )
         # Test connection
         await self._pool.ping()
-        print("✓ Redis connection established")
+        log_info("✓ Redis connection established", component="oauth_redis")
 
     async def close(self):
         """Close Redis connection pool"""

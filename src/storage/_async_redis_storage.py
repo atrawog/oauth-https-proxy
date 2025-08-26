@@ -340,8 +340,7 @@ class AsyncRedisStorage:
     
     async def list_proxy_targets(self) -> List[ProxyTarget]:
         """List all proxy targets."""
-        import sys
-        print(f"DEBUG async_redis_storage.list_proxy_targets() called", file=sys.stderr)
+        log_debug(f"async_redis_storage.list_proxy_targets() called", component="async_redis_storage")
         
         # Ensure Redis client is initialized
         if not self.redis_client:

@@ -376,13 +376,14 @@ class UnifiedAsyncLogger:
         if body and LOG_REQUEST_BODY:
             truncated_body = body[:LOG_BODY_MAX_SIZE]
         
+        # Use standard field names with request_ prefix
         request_data = {
-            "method": method,
-            "path": path,
+            "request_method": method,
+            "request_path": path,
             "client_ip": client_ip,
             "proxy_hostname": proxy_hostname,      # The proxy being accessed
             "client_hostname": client_hostname,     # Reverse DNS of client
-            "query": query or "",
+            "request_query": query or "",
             "user_agent": user_agent or "",
             "referer": referer or "",
             "auth_type": auth_type or "",
@@ -472,11 +473,11 @@ class UnifiedAsyncLogger:
         if client_hostname:
             response_data["client_hostname"] = client_hostname
         if method:
-            response_data["method"] = method
+            response_data["request_method"] = method
         if path:
-            response_data["path"] = path
+            response_data["request_path"] = path
         if query:
-            response_data["query"] = query
+            response_data["request_query"] = query
         if user_agent:
             response_data["user_agent"] = user_agent
         if referer:

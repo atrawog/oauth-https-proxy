@@ -1,4 +1,4 @@
-"""FastMCP server implementation with integrated tools and Redis backing.
+"""Pure MCP server implementation with integrated tools and Redis backing.
 
 This module provides the core MCP server with tools for managing proxies,
 certificates, and system operations, all integrated with the existing
@@ -10,7 +10,8 @@ import time
 from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 
-from mcp.server.fastmcp import FastMCP
+from .pure_mcp_server import PureMCPServer
+from .mcp_starlette_app import MCPStarletteApp
 
 from ....shared.unified_logger import UnifiedAsyncLogger
 from ....storage import UnifiedStorage
@@ -79,12 +80,12 @@ class IntegratedMCPServer:
             cert_manager: Optional certificate manager for cert operations
             docker_manager: Optional Docker manager for service operations
         """
-        # Create FastMCP instance with root path since we mount at /mcp
-        # Keep stateful mode for proper session management
-        self.mcp = FastMCP(
-            "OAuth-HTTPS-Proxy-MCP", 
-            streamable_http_path="/",
-            stateless_http=False  # MUST be stateful for sessions
+        # Create Pure MCP server instance
+        self.mcp = PureMCPServer(
+            name="OAuth-HTTPS-Proxy-MCP",
+            version="2.0.0",
+            storage=async_storage,
+            unified_logger=unified_logger
         )
 
         # Store dependencies
@@ -121,9 +122,11 @@ class IntegratedMCPServer:
         self._register_core_tools()  # Register built-in tools
         self._register_modular_tools()  # Register modular tool categories
         
+        # Create Starlette app wrapper
+        self.starlette_app = MCPStarletteApp(self.mcp)
+        
         # Log how many tools were registered
-        # Check the tool manager directly since list_tools() is async
-        tool_count = len(self.mcp._tool_manager._tools) if hasattr(self.mcp, '_tool_manager') else 0
+        tool_count = len(self.mcp.tools)
         # Fire-and-forget info log
         import asyncio
         self._log_info_async(f"[MCP SERVER] Registered {tool_count} tools")
@@ -182,15 +185,6 @@ class IntegratedMCPServer:
         # ========== System Tools ==========
         self._log_info_async("[MCP SERVER] Registering echo tool")
 
-        @self.mcp.tool(
-            annotations={
-                "title": "Echo Message",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False
-            }
-        )
         async def echo(message: str) -> str:
             """Echo back a message for testing.
 
@@ -238,15 +232,6 @@ class IntegratedMCPServer:
 
         self._log_info_async("[MCP SERVER] Registering health_check tool")
         
-        @self.mcp.tool(
-            annotations={
-                "title": "System Health Check",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False
-            }
-        )
         async def health_check() -> Dict[str, Any]:
             """Check system health status.
 
@@ -280,15 +265,6 @@ class IntegratedMCPServer:
 
         # ========== Proxy Management Tools ==========
 
-        @self.mcp.tool(
-            annotations={
-                "title": "List Proxy Configurations",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False
-            }
-        )
         async def proxy_list(
             token: Optional[str] = None,
             include_details: bool = False
@@ -302,12 +278,8 @@ class IntegratedMCPServer:
             Returns:
                 Dictionary with list of proxy configurations
             """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
+            # Session ID will be passed via context in pure implementation
+            session_id = None  # Will be set by pure MCP server
 
             async with self.logger.trace_context(
                 "mcp_tool_list_proxies",
@@ -356,16 +328,26 @@ class IntegratedMCPServer:
                     "proxies": proxy_list,
                     "count": len(proxy_list)
                 }
-
-        @self.mcp.tool(
-            annotations={
-                "title": "Create Proxy Configuration",
-                "readOnlyHint": False,
-                "destructiveHint": False,
-                "idempotentHint": False,
-                "openWorldHint": False
+        
+        # Register the tool with pure MCP server
+        self.mcp.add_tool(
+            func=proxy_list,
+            name="proxy_list",
+            description="List configured proxy targets",
+            parameters={
+                "token": {
+                    "type": "string",
+                    "description": "Optional API token for authentication",
+                    "required": False
+                },
+                "include_details": {
+                    "type": "boolean",
+                    "description": "Include full proxy details",
+                    "required": False
+                }
             }
         )
+
         async def proxy_create(
             proxy_hostname: str,
             target_url: str,
@@ -387,12 +369,8 @@ class IntegratedMCPServer:
             Returns:
                 Dictionary with creation status
             """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
+            # Session ID will be passed via context in pure implementation
+            session_id = None  # Will be set by pure MCP server
 
             async with self.logger.trace_context(
                 "mcp_tool_create_proxy",
@@ -445,14 +423,43 @@ class IntegratedMCPServer:
                     "proxy_hostname": proxy_hostname,
                     "message": f"Proxy {proxy_hostname} created successfully"
                 }
-
-        @self.mcp.tool(
-            annotations={
-                "title": "Delete Proxy Configuration",
-                "readOnlyHint": False,
-                "destructiveHint": True,
-                "idempotentHint": True,
-                "openWorldHint": False
+        
+        # Register the tool with pure MCP server
+        self.mcp.add_tool(
+            func=proxy_create,
+            name="proxy_create",
+            description="Create a new proxy configuration",
+            parameters={
+                "proxy_hostname": {
+                    "type": "string",
+                    "description": "The hostname for the proxy",
+                    "required": True
+                },
+                "target_url": {
+                    "type": "string",
+                    "description": "The target URL to proxy to",
+                    "required": True
+                },
+                "token": {
+                    "type": "string",
+                    "description": "API token for authentication (required)",
+                    "required": True
+                },
+                "enable_http": {
+                    "type": "boolean",
+                    "description": "Enable HTTP (port 80)",
+                    "required": False
+                },
+                "enable_https": {
+                    "type": "boolean",
+                    "description": "Enable HTTPS (port 443)",
+                    "required": False
+                },
+                "auth_enabled": {
+                    "type": "boolean",
+                    "description": "Enable OAuth authentication",
+                    "required": False
+                }
             }
         )
         async def proxy_delete(
@@ -468,12 +475,8 @@ class IntegratedMCPServer:
             Returns:
                 Dictionary with deletion status
             """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
+            # Session ID will be passed via context in pure implementation
+            session_id = None  # Will be set by pure MCP server
 
             async with self.logger.trace_context(
                 "mcp_tool_delete_proxy",
@@ -496,7 +499,7 @@ class IntegratedMCPServer:
                     raise PermissionError("You can only delete proxies you own")
 
                 # Delete proxy
-                await self.storage.delete_proxy_target(hostname)
+                await self.storage.delete_proxy_target(proxy_hostname)
 
                 # Publish workflow event for instance deletion
                 await self.event_publisher.publish_workflow_event(
@@ -522,18 +525,28 @@ class IntegratedMCPServer:
                     "proxy_hostname": proxy_hostname,
                     "message": f"Proxy {proxy_hostname} deleted successfully"
                 }
+        
+        # Register the tool with pure MCP server
+        self.mcp.add_tool(
+            func=proxy_delete,
+            name="proxy_delete",
+            description="Delete a proxy configuration",
+            parameters={
+                "proxy_hostname": {
+                    "type": "string",
+                    "description": "The hostname of the proxy to delete",
+                    "required": True
+                },
+                "token": {
+                    "type": "string",
+                    "description": "API token for authentication (required)",
+                    "required": True
+                }
+            }
+        )
 
         # ========== Certificate Management Tools ==========
 
-        @self.mcp.tool(
-            annotations={
-                "title": "List SSL Certificates",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False
-            }
-        )
         async def cert_list(
             token: Optional[str] = None
         ) -> Dict[str, Any]:
@@ -545,12 +558,8 @@ class IntegratedMCPServer:
             Returns:
                 Dictionary with list of certificates
             """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
+            # Session ID will be passed via context in pure implementation
+            session_id = None  # Will be set by pure MCP server
 
             async with self.logger.trace_context(
                 "mcp_tool_list_certificates",
@@ -585,21 +594,26 @@ class IntegratedMCPServer:
                     "certificates": cert_list,
                     "count": len(cert_list)
                 }
+        
+        # Register the tool with pure MCP server
+        self.mcp.add_tool(
+            func=cert_list,
+            name="cert_list",
+            description="List available SSL certificates",
+            parameters={
+                "token": {
+                    "type": "string",
+                    "description": "Optional API token for filtering owned certificates",
+                    "required": False
+                }
+            }
+        )
 
         # Note: cert_create is now registered via CertificateTools in modular tools
         
         # ========== Service Management Tools (if Docker manager available) ==========
 
         if self.docker_manager:
-            @self.mcp.tool(
-                annotations={
-                    "title": "List Docker Services",
-                    "readOnlyHint": True,
-                    "destructiveHint": False,
-                    "idempotentHint": True,
-                    "openWorldHint": False
-                }
-            )
             async def service_list() -> Dict[str, Any]:
                 """List Docker services managed by the system.
 
@@ -633,30 +647,25 @@ class IntegratedMCPServer:
                         "services": service_list,
                         "count": len(service_list)
                     }
+            
+            # Register the tool with pure MCP server
+            self.mcp.add_tool(
+                func=service_list,
+                name="service_list",
+                description="List Docker services managed by the system",
+                parameters={}
+            )
 
         # ========== Route Management Tools ==========
 
-        @self.mcp.tool(
-            annotations={
-                "title": "List HTTP Routing Rules",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False
-            }
-        )
         async def route_list() -> Dict[str, Any]:
             """List HTTP routing rules.
 
             Returns:
                 Dictionary with list of routes
             """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
+            # Session ID will be passed via context in pure implementation
+            session_id = None  # Will be set by pure MCP server
 
             async with self.logger.trace_context(
                 "mcp_tool_list_routes",
@@ -680,18 +689,17 @@ class IntegratedMCPServer:
                     "routes": route_list,
                     "count": len(route_list)
                 }
+        
+        # Register the tool with pure MCP server
+        self.mcp.add_tool(
+            func=route_list,
+            name="route_list",
+            description="List HTTP routing rules",
+            parameters={}
+        )
 
         # ========== Log Query Tools ==========
 
-        @self.mcp.tool(
-            annotations={
-                "title": "Query System Logs",
-                "readOnlyHint": True,
-                "destructiveHint": False,
-                "idempotentHint": True,
-                "openWorldHint": False
-            }
-        )
         async def logs(
             hours: int = 24,
             hostname: Optional[str] = None,
@@ -709,12 +717,8 @@ class IntegratedMCPServer:
             Returns:
                 Dictionary with matching log entries
             """
-            # Get context using FastMCP's method
-            try:
-                context = self.mcp.get_context()
-                session_id = getattr(context, 'session_id', None) if context else None
-            except (LookupError, AttributeError):
-                session_id = None
+            # Session ID will be passed via context in pure implementation
+            session_id = None  # Will be set by pure MCP server
 
             async with self.logger.trace_context(
                 "mcp_tool_query_logs",
@@ -766,11 +770,48 @@ class IntegratedMCPServer:
                         "offset": 0
                     }
                 }
+        
+        # Register the tool with pure MCP server
+        self.mcp.add_tool(
+            func=logs,
+            name="logs",
+            description="Query system logs with filters",
+            parameters={
+                "hours": {
+                    "type": "integer",
+                    "description": "How many hours back to search",
+                    "required": False
+                },
+                "hostname": {
+                    "type": "string",
+                    "description": "Filter by proxy hostname",
+                    "required": False
+                },
+                "status_code": {
+                    "type": "integer",
+                    "description": "Filter by HTTP status code",
+                    "required": False
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum number of results",
+                    "required": False
+                }
+            }
+        )
 
-    def get_server(self) -> FastMCP:
-        """Get the FastMCP server instance.
+    def get_server(self):
+        """Get the Pure MCP server instance.
 
         Returns:
-            The FastMCP server instance
+            The PureMCPServer instance
         """
         return self.mcp
+    
+    def get_starlette_app(self):
+        """Get the Starlette app for mounting.
+        
+        Returns:
+            The Starlette app instance
+        """
+        return self.starlette_app.app
