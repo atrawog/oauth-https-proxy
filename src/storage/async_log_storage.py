@@ -277,25 +277,32 @@ class AsyncLogStorage:
                 'client_ip': log_entry.get('client_ip', '127.0.0.1'),
                 'client_hostname': log_entry.get('client_hostname', ''),
                 'proxy_hostname': log_entry.get('proxy_hostname', ''),
-                'method': log_entry.get('method', 'GET'),
-                'path': log_entry.get('path', '/'),
-                'query': log_entry.get('query', ''),
-                'status_code': str(log_entry.get('status_code', 0)),
-                'response_time_ms': str(log_entry.get('response_time_ms', 0)),
+                'method': log_entry.get('method', log_entry.get('request_method', 'GET')),
+                'path': log_entry.get('path', log_entry.get('request_path', '/')),
+                'query': log_entry.get('query', log_entry.get('request_query', '')),
+                'status_code': str(log_entry.get('status_code', log_entry.get('status', 0))),
+                'response_time_ms': str(log_entry.get('response_time_ms', log_entry.get('duration_ms', 0))),
                 'user_id': log_entry.get('user_id', 'anonymous'),
                 'user_agent': log_entry.get('user_agent', ''),
                 'referrer': log_entry.get('referrer', ''),
                 'bytes_sent': str(log_entry.get('bytes_sent', 0)),
                 'auth_type': log_entry.get('auth_type', ''),
-                'client_id': log_entry.get('client_id', ''),  # OAuth client ID
-                'oauth_user': log_entry.get('oauth_user', ''),  # OAuth username
+                'auth_user': log_entry.get('auth_user', log_entry.get('oauth_user', '')),  # Auth user
+                'auth_scopes': log_entry.get('auth_scopes', ''),  # Auth scopes
+                'auth_email': log_entry.get('auth_email', ''),  # Auth email
+                'auth_client_id': log_entry.get('auth_client_id', log_entry.get('client_id', '')),  # Auth client ID
+                'backend_url': log_entry.get('backend_url', ''),  # Backend URL for proxied requests
+                'route_id': log_entry.get('route_id', ''),  # Route ID if matched
+                'session_id': log_entry.get('session_id', ''),  # Session ID
+                'worker_id': log_entry.get('worker_id', ''),  # Worker ID
                 'mcp_session_id': log_entry.get('mcp_session_id', ''),  # MCP session
                 'error': log_entry.get('error', ''),
                 'error_type': log_entry.get('error_type', ''),
                 'message': log_entry.get('message', ''),
                 'level': log_entry.get('level', 'INFO'),
-                'component': log_entry.get('component', 'request_logger'),
-                'log_type': 'http_request'
+                'component': log_entry.get('component', 'unknown'),  # Component that generated the log
+                'log_type': log_entry.get('log_type', 'http_request'),
+                'response_type': log_entry.get('response_type', '')  # Type of response (route_forward, proxy_forward, error, etc.)
             }
             
             # Write to the unified log stream
@@ -468,14 +475,20 @@ class AsyncLogStorage:
                         'referer': data.get('referer', ''),
                         'bytes_sent': int(data.get('bytes_sent', 0)) if data.get('bytes_sent') else 0,
                         'auth_type': data.get('auth_type', ''),
+                        'auth_user': data.get('auth_user', ''),  # Auth user
+                        'auth_scopes': data.get('auth_scopes', ''),  # Auth scopes
+                        'auth_email': data.get('auth_email', ''),  # Auth email
+                        'auth_client_id': data.get('auth_client_id', data.get('oauth_client_id', data.get('client_id', ''))),  # Auth client ID
                         'oauth_client_id': data.get('oauth_client_id') or data.get('client_id', ''),
-                        'oauth_username': data.get('oauth_username') or data.get('oauth_user', ''),
+                        'oauth_username': data.get('oauth_username') or data.get('oauth_user', data.get('auth_user', '')),
                         'message': data.get('message', ''),
                         'level': data.get('level', 'INFO'),
-                        'component': data.get('component', ''),
+                        'component': data.get('component', 'unknown'),
                         'log_type': data.get('log_type') or data.get('type', 'http_request'),
                         'error': data.get('error', ''),
                         'error_type': data.get('error_type', ''),
+                        'response_type': data.get('response_type', ''),  # Type of response
+                        'route_id': data.get('route_id', ''),  # Route ID if matched
                         # Include additional debug fields
                         'headers': data.get('headers', ''),
                         'body': data.get('body', ''),
@@ -483,7 +496,8 @@ class AsyncLogStorage:
                         'session_id': data.get('session_id', ''),
                         'trace_id': data.get('trace_id') or data.get('request_id', ''),
                         'event_type': data.get('event_type', ''),
-                        'worker_id': data.get('worker_id', '')
+                        'worker_id': data.get('worker_id', ''),
+                        'mcp_session_id': data.get('mcp_session_id', '')  # MCP session if applicable
                     }
                     
                     logs.append(log_entry)

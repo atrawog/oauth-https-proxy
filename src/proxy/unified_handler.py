@@ -19,8 +19,12 @@ from ..proxy.unified_routing import (
     RoutingDecisionType
 )
 from ..shared.logger import log_debug, log_info, log_warning, log_error, log_trace, log_request, log_response
+from ..shared.dual_logger import create_dual_logger
 from ..shared.dns_resolver import get_dns_resolver
 from ..proxy.auth_exclusions import merge_exclusions
+
+# Create dual logger for critical proxy errors that need to be visible in BOTH Docker and Redis
+dual_logger = create_dual_logger('proxy_handler')
 
 
 class UnifiedProxyHandler:
@@ -471,8 +475,9 @@ class UnifiedProxyHandler:
         
         # Authentication successful - store auth info in request state
         request.state.auth_user = token_info.get('username', token_info.get('sub', 'unknown'))
-        request.state.auth_scopes = ' '.join(token_scopes)
+        request.state.auth_scopes = token_scopes  # Store as list for consistency
         request.state.auth_email = token_info.get('email', '')
+        request.state.auth_client_id = token_info.get('client_id', 'unknown')
         
         # Update log context with auth info
         log_ctx.update({
@@ -693,19 +698,18 @@ class UnifiedProxyHandler:
                     log_response(
                         status=auth_response.status_code,
                         duration_ms=duration_ms,
-                        trace_id=trace_id,
-                        client_ip=client_ip,
-                        proxy_hostname=proxy_hostname,
-                        method=method,
-                        path=path,
-                        query=request_log_ctx.get('query', ''),
-                        user_agent=request_log_ctx.get('user_agent', ''),
-                        referer=request_log_ctx.get('referer', ''),
-                        client_hostname=request_log_ctx.get('client_hostname', ''),
+                        component="proxy_handler",
+                        **request_log_ctx,
                         auth_status="failed",
                         response_type="auth_error"
                     )
                     return auth_response  # Return auth error or redirect
+                # Authentication successful - update request_log_ctx with auth info
+                if hasattr(request.state, 'auth_user'):
+                    request_log_ctx['auth_user'] = request.state.auth_user
+                    request_log_ctx['auth_scopes'] = ','.join(request.state.auth_scopes) if request.state.auth_scopes else ''
+                    request_log_ctx['auth_email'] = getattr(request.state, 'auth_email', '')
+                    request_log_ctx['auth_client_id'] = getattr(request.state, 'auth_client_id', '')
             except Exception as e:
                 log_error(f"Auth check failed with exception type: {type(e).__name__}, message: {e}", component="proxy_handler", **log_ctx)
                 log_error(f"Auth check traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
@@ -728,17 +732,12 @@ class UnifiedProxyHandler:
                 log_response(
                     status=response.status_code,
                     duration_ms=duration_ms,
-                    trace_id=trace_id,
-                    client_ip=client_ip,
-                    proxy_hostname=proxy_hostname,
-                    method=method,
-                    path=path,
-                    query=request_log_ctx.get('query', ''),
-                    user_agent=request_log_ctx.get('user_agent', ''),
-                    referer=request_log_ctx.get('referer', ''),
-                    client_hostname=request_log_ctx.get('client_hostname', ''),
+                    component="proxy_handler",
+                    **request_log_ctx,
                     route_id=decision.route_id,
                     backend_url=decision.target,
+                    auth_user=getattr(request.state, 'auth_user', None),
+                    auth_scopes=','.join(getattr(request.state, 'auth_scopes', [])) if hasattr(request.state, 'auth_scopes') else None,
                     response_type="route_forward"
                 )
                 return response
@@ -752,15 +751,8 @@ class UnifiedProxyHandler:
                 log_response(
                     status=response.status_code,
                     duration_ms=duration_ms,
-                    trace_id=trace_id,
-                    client_ip=client_ip,
-                    proxy_hostname=proxy_hostname,
-                    method=method,
-                    path=path,
-                    query=request_log_ctx.get('query', ''),
-                    user_agent=request_log_ctx.get('user_agent', ''),
-                    referer=request_log_ctx.get('referer', ''),
-                    client_hostname=request_log_ctx.get('client_hostname', ''),
+                    component="proxy_handler",
+                    **request_log_ctx,
                     backend_url=decision.target,
                     response_type="proxy_forward"
                 )
@@ -774,15 +766,8 @@ class UnifiedProxyHandler:
                 log_response(
                     status=404,
                     duration_ms=duration_ms,
-                    trace_id=trace_id,
-                    client_ip=client_ip,
-                    proxy_hostname=proxy_hostname,
-                    method=method,
-                    path=path,
-                    query=request_log_ctx.get('query', ''),
-                    user_agent=request_log_ctx.get('user_agent', ''),
-                    referer=request_log_ctx.get('referer', ''),
-                    client_hostname=request_log_ctx.get('client_hostname', ''),
+                    component="proxy_handler",
+                    **request_log_ctx,
                     error="no_route_or_proxy",
                     response_type="error"
                 )
@@ -792,45 +777,62 @@ class UnifiedProxyHandler:
             log_warning(f"HTTPException in handle_request: status_code={he.status_code}, detail={he.detail}", component="proxy_handler", **log_ctx)
             # Log response for HTTP exception
             duration_ms = (time.time() - start_time) * 1000
-            log_response(
-                status=he.status_code,
-                duration_ms=duration_ms,
-                trace_id=trace_id,
-                client_ip=client_ip,
-                proxy_hostname=proxy_hostname,
-                method=method,
-                path=path,
-                query=request_log_ctx.get('query', '') if 'request_log_ctx' in locals() else '',
-                user_agent=request_log_ctx.get('user_agent', '') if 'request_log_ctx' in locals() else '',
-                referer=request_log_ctx.get('referer', '') if 'request_log_ctx' in locals() else '',
-                client_hostname=request_log_ctx.get('client_hostname', '') if 'request_log_ctx' in locals() else '',
-                error=str(he.detail),
-                error_type="http_exception",
-                response_type="error"
-            )
+            if 'request_log_ctx' in locals():
+                log_response(
+                    status=he.status_code,
+                    duration_ms=duration_ms,
+                    component="proxy_handler",
+                    **request_log_ctx,
+                    error=str(he.detail),
+                    error_type="http_exception",
+                    response_type="error"
+                )
+            else:
+                log_response(
+                    status=he.status_code,
+                    duration_ms=duration_ms,
+                    trace_id=trace_id if 'trace_id' in locals() else None,
+                    component="proxy_handler",
+                    client_ip=client_ip if 'client_ip' in locals() else 'unknown',
+                    proxy_hostname=proxy_hostname if 'proxy_hostname' in locals() else 'unknown',
+                    method=method if 'method' in locals() else request.method,
+                    path=path if 'path' in locals() else str(request.url.path),
+                    error=str(he.detail),
+                    error_type="http_exception",
+                    response_type="error"
+                )
             raise
         except Exception as e:
-            log_error(f"Unhandled exception in handle_request for {request.url}: {e}", component="proxy_handler", **log_ctx)
-            log_error(f"Exception type: {type(e).__name__}", component="proxy_handler", **log_ctx)
-            log_error(f"Full traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
+            # Use dual logger for critical errors so they appear in BOTH Docker and Redis
+            dual_logger.error(f"Unhandled exception in handle_request for {request.url}: {e}", **log_ctx)
+            dual_logger.error(f"Exception type: {type(e).__name__}", **log_ctx)
+            dual_logger.error(f"Full traceback: {traceback.format_exc()}", **log_ctx)
             # Log response for unhandled exception
             duration_ms = (time.time() - start_time) * 1000
-            log_response(
-                status=500,
-                duration_ms=duration_ms,
-                trace_id=trace_id,
-                client_ip=client_ip,
-                proxy_hostname=proxy_hostname,
-                method=method if 'method' in locals() else request.method,
-                path=path if 'path' in locals() else str(request.url.path),
-                query=request_log_ctx.get('query', '') if 'request_log_ctx' in locals() else '',
-                user_agent=request_log_ctx.get('user_agent', '') if 'request_log_ctx' in locals() else '',
-                referer=request_log_ctx.get('referer', '') if 'request_log_ctx' in locals() else '',
-                client_hostname=request_log_ctx.get('client_hostname', '') if 'request_log_ctx' in locals() else '',
-                error=str(e),
-                error_type=type(e).__name__,
-                response_type="error"
-            )
+            if 'request_log_ctx' in locals():
+                log_response(
+                    status=500,
+                    duration_ms=duration_ms,
+                    component="proxy_handler",
+                    **request_log_ctx,
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    response_type="error"
+                )
+            else:
+                log_response(
+                    status=500,
+                    duration_ms=duration_ms,
+                    trace_id=trace_id if 'trace_id' in locals() else None,
+                    component="proxy_handler",
+                    client_ip=client_ip if 'client_ip' in locals() else 'unknown',
+                    proxy_hostname=proxy_hostname if 'proxy_hostname' in locals() else 'unknown',
+                    method=method if 'method' in locals() else request.method,
+                    path=path if 'path' in locals() else str(request.url.path),
+                    error=str(e),
+                    error_type=type(e).__name__,
+                    response_type="error"
+                )
             raise HTTPException(500, "Internal server error")
     
     async def _forward_to_service(self, request: Request, decision, normalized, log_ctx: Dict[str, Any]):
@@ -863,7 +865,11 @@ class UnifiedProxyHandler:
         # Add auth headers if available
         if hasattr(request.state, 'auth_user'):
             custom_headers["X-Auth-User"] = request.state.auth_user
-            custom_headers["X-Auth-Scopes"] = request.state.auth_scopes
+            # Convert scopes list to space-separated string for headers
+            scopes = request.state.auth_scopes
+            if isinstance(scopes, list):
+                scopes = ' '.join(scopes)
+            custom_headers["X-Auth-Scopes"] = scopes
             custom_headers["X-Auth-Email"] = request.state.auth_email
         
         # Forward using common logic
@@ -894,9 +900,13 @@ class UnifiedProxyHandler:
         custom_headers = decision.custom_headers or {}
         if hasattr(request.state, 'auth_user'):
             custom_headers["X-Auth-User"] = request.state.auth_user
-            custom_headers["X-Auth-Scopes"] = request.state.auth_scopes
+            # Convert scopes list to space-separated string for headers
+            scopes = request.state.auth_scopes
+            if isinstance(scopes, list):
+                scopes = ' '.join(scopes)
+            custom_headers["X-Auth-Scopes"] = scopes
             custom_headers["X-Auth-Email"] = request.state.auth_email
-            log_info(f"Added auth headers - User: {request.state.auth_user}, Scopes: {request.state.auth_scopes}", component="proxy_handler", **log_ctx)
+            log_info(f"Added auth headers - User: {request.state.auth_user}, Scopes: {scopes}", component="proxy_handler", **log_ctx)
         else:
             log_warning("No auth_user in request.state, not adding auth headers", component="proxy_handler", **log_ctx)
         
@@ -1099,8 +1109,9 @@ class UnifiedProxyHandler:
             log_debug("Request cancelled by client", component="proxy_handler", **log_ctx)
             return Response(content="", status_code=499)
         except Exception as e:
-            log_error(f"Unexpected error in backend request: {e}", component="proxy_handler", **log_ctx)
-            log_error(f"Traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
+            # Use dual logger for critical errors so they appear in BOTH Docker and Redis
+            dual_logger.error(f"Unexpected error in backend request: {e}", **log_ctx)
+            dual_logger.error(f"Traceback: {traceback.format_exc()}", **log_ctx)
             raise HTTPException(500, "Internal server error")
     
     async def close(self):

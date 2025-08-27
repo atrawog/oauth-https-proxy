@@ -9,8 +9,12 @@ import logging
 from typing import List, Tuple, Optional
 from fastapi import FastAPI, APIRouter
 from src.shared.logger import log_info, log_debug, log_warning, log_error
+from src.shared.dual_logger import create_dual_logger
 
-logger = logging.getLogger(__name__)  # Keep for backward compat, but use log_* functions
+logger = logging.getLogger(__name__)  # Keep for backward compat, but use dual_logger for critical errors
+
+# Create a dual logger for registry that writes to BOTH Docker logs AND Redis
+dual_logger = create_dual_logger('registry')
 
 
 def register_all_routers(app: FastAPI):
@@ -164,13 +168,13 @@ def register_all_routers(app: FastAPI):
             successful_routers.append(f"{name} ({prefix})")
         except ImportError as e:
             error_msg = f"Failed to import {name} router: {e}"
-            logger.warning(error_msg)
+            dual_logger.warning(error_msg)  # Goes to BOTH Docker and Redis
             failed_routers.append(f"{name}: {str(e)}")
         except Exception as e:
             error_msg = f"Failed to register {name} router: {e}"
-            logger.error(error_msg)
+            dual_logger.error(error_msg)  # Goes to BOTH Docker and Redis
             import traceback
-            logger.error(f"Traceback for {name}: {traceback.format_exc()}")
+            dual_logger.error(f"Traceback for {name}: {traceback.format_exc()}")  # Goes to BOTH Docker and Redis
             failed_routers.append(f"{name}: {str(e)}")
             # For critical routers, we might want to raise here
             if name in ['certificates', 'proxy']:
@@ -189,8 +193,8 @@ def register_all_routers(app: FastAPI):
         successful_routers.append("MCP (/mcp) - Mounted with ASGI wrapper")
     except Exception as e:
         import traceback
-        logger.error(f"Failed to mount MCP: {e}")
-        logger.error(f"MCP traceback: {traceback.format_exc()}")
+        dual_logger.error(f"Failed to mount MCP: {e}")  # Goes to BOTH Docker and Redis
+        dual_logger.error(f"MCP traceback: {traceback.format_exc()}")  # Goes to BOTH Docker and Redis
         failed_routers.append(f"MCP: {str(e)}")
     
     logger.info("=" * 60)

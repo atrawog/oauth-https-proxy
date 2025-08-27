@@ -635,12 +635,14 @@ class UnifiedDispatcher:
             if not data:
                 log_warning(
                     "No data received in HTTPS connection",
+                    component="dispatcher",
                     client_ip=client_ip
                 )
                 return
             
             log_debug(
                 "HTTPS data received",
+                component="dispatcher",
                 client_ip=client_ip,
                 data_len=len(data)
             )
@@ -652,6 +654,7 @@ class UnifiedDispatcher:
                 dual_logger.warning(f"Python logging: No SNI hostname found from {client_ip}")
                 log_warning(
                     "No SNI hostname found in connection",
+                    component="dispatcher",
                     client_ip=client_ip
                 )
                 writer.close()
@@ -1115,7 +1118,8 @@ class UnifiedMultiInstanceServer:
             f"HTTPS:{https_ready} (port {instance.https_port}), "
             f"HTTPS_pending:{proxy_target.enable_https and not https_ready}, "
             f"target_url:{proxy_target.target_url}, "
-            f"cert_name:{proxy_target.cert_name if proxy_target.cert_name else 'none'}"
+            f"cert_name:{proxy_target.cert_name if proxy_target.cert_name else 'none'}",
+            component="dispatcher"
         )
     
     async def remove_instance_for_proxy(self, proxy_hostname: str):

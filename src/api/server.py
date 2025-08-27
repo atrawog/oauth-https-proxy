@@ -207,40 +207,33 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         """Health check endpoint with async architecture."""
         try:
             # Get async components from app state
+            # Always use async storage - no fallback
             async_storage = request.app.state.async_storage
             
-            if async_storage:
-                # Use async storage for all operations
-                certs = await async_storage.list_certificates()
-                
-                # Count orphaned resources
-                orphaned_count = 0
-                # Check for orphaned proxy certificates
-                proxy_targets = await async_storage.list_proxy_targets()
-                proxy_certs = {target.cert_name for target in proxy_targets if target.cert_name}
-                all_certs = {cert.cert_name for cert in certs}
-                orphaned_certs = all_certs - proxy_certs - {"localhost-self-signed"}
-                orphaned_count += len(orphaned_certs)
-                
-                # Check stream consumer health if available
-                consumer_healthy = True
-                if hasattr(request.app.state, 'metrics_processor') and request.app.state.metrics_processor:
-                    try:
-                        lag = await request.app.state.metrics_processor.get_lag()
-                        max_lag = max(lag.values()) if lag else 0
-                        consumer_healthy = max_lag < 1000  # Less than 1 second
-                    except:
-                        pass
-                
-                # Check Redis health
-                redis_healthy = await async_storage.health_check()
-            else:
-                # Fallback to sync storage
-                storage = request.app.state.storage
-                certs = storage.list_certificates()
-                orphaned_count = 0
-                redis_healthy = storage.redis_client.ping()
-                consumer_healthy = True
+            # Use async storage for all operations
+            certs = await async_storage.list_certificates()
+            
+            # Count orphaned resources
+            orphaned_count = 0
+            # Check for orphaned proxy certificates
+            proxy_targets = await async_storage.list_proxy_targets()
+            proxy_certs = {target.cert_name for target in proxy_targets if target.cert_name}
+            all_certs = {cert.cert_name for cert in certs}
+            orphaned_certs = all_certs - proxy_certs - {"localhost-self-signed"}
+            orphaned_count += len(orphaned_certs)
+            
+            # Check stream consumer health if available
+            consumer_healthy = True
+            if hasattr(request.app.state, 'metrics_processor') and request.app.state.metrics_processor:
+                try:
+                    lag = await request.app.state.metrics_processor.get_lag()
+                    max_lag = max(lag.values()) if lag else 0
+                    consumer_healthy = max_lag < 1000  # Less than 1 second
+                except:
+                    pass
+            
+            # Check Redis health
+            redis_healthy = await async_storage.health_check()
             
             return HealthStatus(
                 status="healthy" if redis_healthy and consumer_healthy else "degraded",
@@ -258,15 +251,8 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     @app.get("/.well-known/acme-challenge/{token}", response_class=PlainTextResponse)
     async def acme_challenge(token: str, request: Request):
         """Handle ACME challenge validation with async storage."""
-        # Try async storage first
-        if hasattr(request.app.state, 'async_storage') and request.app.state.async_storage:
-            authorization = await request.app.state.async_storage.get_challenge(token)
-        else:
-            # Fallback to sync storage
-            storage = request.app.state.storage
-            authorization = storage.redis_client.get(f"acme:challenge:{token}")
-            if authorization and isinstance(authorization, bytes):
-                authorization = authorization.decode('utf-8')
+        # Always use async storage - no fallback
+        authorization = await request.app.state.async_storage.get_challenge(token)
         
         if authorization:
             logger.info(f"ACME challenge served for token: {token}")
@@ -307,27 +293,15 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             
             # Get proxy target
             logger.info(f"Looking up proxy target for hostname: {proxy_hostname}")
-            # Check if storage has async method
-            if hasattr(request.app.state.storage, 'get_proxy_target'):
-                import asyncio
-                if asyncio.iscoroutinefunction(request.app.state.storage.get_proxy_target):
-                    target = await request.app.state.storage.get_proxy_target(proxy_hostname)
-                else:
-                    target = request.app.state.storage.get_proxy_target(proxy_hostname)
-            else:
-                target = None
+            # UnifiedStorage handles sync/async automatically - no fallback needed
+            target = await request.app.state.storage.get_proxy_target(proxy_hostname)
             logger.info(f"Got proxy target: {target}")
             if not target:
                 # Get available proxies for debugging
                 available_proxies = []
                 try:
-                    if hasattr(request.app.state.storage, 'list_proxy_targets'):
-                        import asyncio
-                        if asyncio.iscoroutinefunction(request.app.state.storage.list_proxy_targets):
-                            proxy_list = await request.app.state.storage.list_proxy_targets()
-                        else:
-                            proxy_list = request.app.state.storage.list_proxy_targets()
-                        available_proxies = [p.proxy_hostname for p in proxy_list][:10]
+                    proxy_list = await request.app.state.storage.list_proxy_targets()
+                    available_proxies = [p.proxy_hostname for p in proxy_list][:10]
                 except Exception:
                     pass
                 

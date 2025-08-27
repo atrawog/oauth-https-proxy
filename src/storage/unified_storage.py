@@ -25,6 +25,7 @@ class UnifiedStorage:
         self.redis_url = redis_url
         self._async_pool: Optional[redis_async.ConnectionPool] = None
         self._async_storage: Optional['AsyncRedisStorage'] = None
+        self._async_log_storage: Optional['AsyncLogStorage'] = None
         self._initialized = False
         
     def initialize(self):
@@ -78,10 +79,15 @@ class UnifiedStorage:
         
         # Initialize AsyncRedisStorage with the pool
         from ._async_redis_storage import AsyncRedisStorage
+        from .async_log_storage import AsyncLogStorage
+        
         self._async_storage = AsyncRedisStorage(self.redis_url)
         
         # Initialize the Redis client
         await self._async_storage.initialize()
+        
+        # Initialize AsyncLogStorage for log queries (pass Redis client)
+        self._async_log_storage = AsyncLogStorage(self._async_storage.redis_client)
         
         # CRITICAL: Initialize defaults (fixes OAuth bug)
         log_info("Initializing default proxies and routes", component="unified_storage")
@@ -96,8 +102,13 @@ class UnifiedStorage:
             log_debug(f"Auto-initializing UnifiedStorage on first use of {name}", component="unified_storage")
             self.initialize()
             
-        # Get the attribute from async storage
-        attr = getattr(self._async_storage, name)
+        # Check if it's a log-related method
+        if name in ['search_logs', 'get_logs_by_ip', 'get_logs_by_hostname', 'get_log_stats']:
+            # Get the attribute from async log storage
+            attr = getattr(self._async_log_storage, name)
+        else:
+            # Get the attribute from async storage
+            attr = getattr(self._async_storage, name)
         
         # Non-coroutine attributes pass through
         if not asyncio.iscoroutinefunction(attr):
@@ -108,7 +119,11 @@ class UnifiedStorage:
         if name.endswith('_sync'):
             # User explicitly wants sync version
             actual_name = name[:-5]  # Remove _sync suffix
-            actual_attr = getattr(self._async_storage, actual_name)
+            # Check which storage to use
+            if actual_name in ['search_logs', 'get_logs_by_ip', 'get_logs_by_hostname', 'get_log_stats']:
+                actual_attr = getattr(self._async_log_storage, actual_name)
+            else:
+                actual_attr = getattr(self._async_storage, actual_name)
             return async_to_sync(actual_attr)
             
         # Check execution context

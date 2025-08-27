@@ -14,6 +14,8 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 import redis.asyncio as redis_async
 
+from ..shared.log_levels import TRACE
+
 logger = logging.getLogger(__name__)
 
 
@@ -198,7 +200,7 @@ class UnifiedStreamPublisher:
                         break
                     result_idx += len(by_stream[stream_key])
             
-            logger.debug(f"Batch published {len(to_process)} entries to {len(by_stream)} streams")
+            logger.log(TRACE, f"Batch published {len(to_process)} entries to {len(by_stream)} streams")
             
         except Exception as e:
             logger.error(f"Batch processing error: {e}")
@@ -286,7 +288,7 @@ class UnifiedStreamPublisher:
             
             # Execute pipeline
             await pipe.execute()
-            logger.debug(f"Added entry {stream_id} to indexes")
+            logger.log(TRACE, f"Added entry {stream_id} to indexes")
             
         except Exception as e:
             logger.error(f"Error adding to indexes: {e}")
@@ -345,7 +347,7 @@ class UnifiedStreamPublisher:
         # Also publish to master event stream (non-batched for immediate visibility)
         await self.publish(self.master_event_stream, event_data, trace_id, batch=False)
         
-        logger.debug(f"Published {event_type} event for trace {trace_id}")
+        logger.log(TRACE, f"Published {event_type} event for trace {trace_id}")
         return event_id
     
     # Log publishing methods
@@ -403,40 +405,58 @@ class UnifiedStreamPublisher:
     # Specialized publishing methods
     
     async def publish_http_request(self, request_data: dict,
-                                  trace_id: Optional[str] = None) -> Optional[str]:
+                                  trace_id: Optional[str] = None,
+                                  component: Optional[str] = None) -> Optional[str]:
         """Publish HTTP request log.
         
         Args:
             request_data: Request details (method, path, ip, etc.)
             trace_id: Request trace ID
+            component: Component that generated this log
             
         Returns:
             Log ID
         """
+        # Extract component from request_data if not provided
+        if not component:
+            component = request_data.pop('component', 'unknown')
+        else:
+            # Always remove component from request_data to avoid duplicate
+            request_data.pop('component', None)
+            
         return await self.publish_log(
             level="INFO",
             message=f"{request_data.get('request_method', request_data.get('method', 'UNKNOWN'))} {request_data.get('request_path', request_data.get('path', '/'))}",
-            component="proxy_handler",
+            component=component,
             trace_id=trace_id,
             log_type="http_request",
             **request_data
         )
     
     async def publish_http_response(self, response_data: dict,
-                                   trace_id: Optional[str] = None) -> Optional[str]:
+                                   trace_id: Optional[str] = None,
+                                   component: Optional[str] = None) -> Optional[str]:
         """Publish HTTP response log.
         
         Args:
             response_data: Response details (status, duration_ms, etc.)
             trace_id: Request trace ID
+            component: Component that generated this log
             
         Returns:
             Log ID
         """
+        # Extract component from response_data if not provided
+        if not component:
+            component = response_data.pop('component', 'unknown')
+        else:
+            # Always remove component from response_data to avoid duplicate
+            response_data.pop('component', None)
+            
         return await self.publish_log(
             level="INFO",
             message=f"Response: {response_data['status']} in {response_data.get('duration_ms', 0):.2f}ms",
-            component="proxy_handler",
+            component=component,
             trace_id=trace_id,
             log_type="http_response",
             **response_data

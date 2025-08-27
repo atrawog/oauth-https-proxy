@@ -239,13 +239,3 @@ class RequestLogger:
         
         return results
     
-    async def search_logs(self, query: str = None, hours: int = 24, 
-                         event: str = None, level: str = None, 
-                         proxy_hostname: str = None, limit: int = 100) -> List[Dict[str, Any]]:
-        """Search logs with multiple filters."""
-        if not self.redis_client:
-            return []
-        
-        # For now, return empty results
-        # Full implementation would filter by all parameters
-        return []

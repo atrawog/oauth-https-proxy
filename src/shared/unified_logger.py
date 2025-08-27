@@ -397,7 +397,10 @@ class UnifiedAsyncLogger:
         if truncated_body:
             request_data["body"] = truncated_body.decode('utf-8', errors='ignore')
         
-        return await self.publisher.publish_http_request(request_data, trace_id)
+        # Extract component from extra if present, default to instance component
+        component = extra.get('component', self._component)
+        
+        return await self.publisher.publish_http_request(request_data, trace_id, component)
     
     async def log_response(self, 
                           status: int, 
@@ -499,7 +502,10 @@ class UnifiedAsyncLogger:
         if truncated_body:
             response_data["body"] = truncated_body.decode('utf-8', errors='ignore')
         
-        return await self.publisher.publish_http_response(response_data, trace_id)
+        # Extract component from extra if present, default to instance component
+        component = extra.get('component', self._component)
+        
+        return await self.publisher.publish_http_response(response_data, trace_id, component)
     
     
     async def log_audit(self, actor: str, action: str,
