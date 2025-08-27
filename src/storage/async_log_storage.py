@@ -121,6 +121,15 @@ class AsyncLogStorage:
                 pipe.zadd(f"log:idx:method:{method}", {stream_id: timestamp_ms})
                 pipe.expire(f"log:idx:method:{method}", ttl_seconds)
             
+            # Index by request path
+            # Support both old and new field names
+            path = stream_data.get('request_path') or stream_data.get('path')
+            if path and path != '/' and path != '':
+                # Normalize path - remove query parameters for indexing
+                clean_path = path.split('?')[0]
+                pipe.zadd(f"log:idx:path:{clean_path}", {stream_id: timestamp_ms})
+                pipe.expire(f"log:idx:path:{clean_path}", ttl_seconds)
+            
             # Index by log level (for non-HTTP logs)
             level = stream_data.get('level')
             if level and level != 'INFO':
@@ -355,6 +364,10 @@ class AsyncLogStorage:
                 index_key = f"log:idx:status:{kwargs['status']}"
             elif kwargs.get('method'):
                 index_key = f"log:idx:method:{kwargs['method']}"
+            elif kwargs.get('path'):
+                # Normalize path - remove query parameters for indexing
+                clean_path = kwargs['path'].split('?')[0]
+                index_key = f"log:idx:path:{clean_path}"
             else:
                 # No specific filter, use global index
                 index_key = "log:idx:all"
@@ -402,8 +415,14 @@ class AsyncLogStorage:
                     if kwargs.get('method') and index_key != f"log:idx:method:{kwargs['method']}":
                         if data.get('method') != kwargs['method']:
                             continue
-                    if kwargs.get('path') and kwargs['path'] not in data.get('path', ''):
-                        continue
+                    # Only apply path filtering if we're not already using the path index
+                    if kwargs.get('path'):
+                        clean_path = kwargs['path'].split('?')[0]
+                        if index_key != f"log:idx:path:{clean_path}":
+                            # For secondary path filtering, check if the path matches
+                            data_path = data.get('path', '')
+                            if clean_path not in data_path:
+                                continue
                     
                     # Apply query search if specified
                     if kwargs.get('query'):

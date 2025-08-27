@@ -582,13 +582,27 @@ class UnifiedDispatcher:
                 await writer.drain()
                 return
             
-            dual_logger.info(
-                f"Forwarding HTTP connection for {proxy_hostname}",
-                client_ip=client_ip,
-                client_port=client_port,
-                proxy_hostname=proxy_hostname,
-                protocol="HTTP"
-            )
+            # Log at DEBUG level for localhost (system operations) to prevent log pollution
+            # Use INFO level for external traffic only
+            if proxy_hostname == "localhost" and client_ip in ["127.0.0.1", "172.20.0.1", "::1"]:
+                # Localhost connections are usually system operations (log queries, health checks)
+                # Log at DEBUG to reduce noise
+                dual_logger.debug(
+                    f"Forwarding HTTP connection for {proxy_hostname}",
+                    client_ip=client_ip,
+                    client_port=client_port,
+                    proxy_hostname=proxy_hostname,
+                    protocol="HTTP"
+                )
+            else:
+                # External traffic - log at INFO level for visibility
+                dual_logger.info(
+                    f"Forwarding HTTP connection for {proxy_hostname}",
+                    client_ip=client_ip,
+                    client_port=client_port,
+                    proxy_hostname=proxy_hostname,
+                    protocol="HTTP"
+                )
             
             # Find proxy instance port for hostname  
             target_port = self.hostname_to_http_port.get(proxy_hostname)
@@ -741,14 +755,25 @@ class UnifiedDispatcher:
             
             
             # Forward to the target instance with PROXY protocol enabled for HTTPS
-            dual_logger.info(
-                f"Forwarding HTTPS connection for {proxy_hostname}",
-                client_ip=client_ip,
-                client_port=client_port,
-                proxy_hostname=proxy_hostname,
-                protocol="HTTPS",
-                target_port=target_port
-            )
+            # Log at DEBUG level for localhost (system operations) to prevent log pollution
+            if proxy_hostname == "localhost" and client_ip in ["127.0.0.1", "172.20.0.1", "::1"]:
+                dual_logger.debug(
+                    f"Forwarding HTTPS connection for {proxy_hostname}",
+                    client_ip=client_ip,
+                    client_port=client_port,
+                    proxy_hostname=proxy_hostname,
+                    protocol="HTTPS",
+                    target_port=target_port
+                )
+            else:
+                dual_logger.info(
+                    f"Forwarding HTTPS connection for {proxy_hostname}",
+                    client_ip=client_ip,
+                    client_port=client_port,
+                    proxy_hostname=proxy_hostname,
+                    protocol="HTTPS",
+                    target_port=target_port
+                )
             await self._forward_connection(
                 reader, writer, data, '127.0.0.1', target_port, 
                 client_ip=client_ip, client_port=client_port, use_proxy_protocol=True, proxy_hostname=proxy_hostname, service_name=service_name
