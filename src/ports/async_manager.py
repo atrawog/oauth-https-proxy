@@ -25,7 +25,11 @@ class AsyncPortManager:
     INTERNAL_HTTP_END = 9999
     INTERNAL_HTTPS_START = 10000
     INTERNAL_HTTPS_END = 10999
-    EXPOSED_PORT_START = 11000
+    PROXY_HTTP_START = 12000
+    PROXY_HTTP_END = 12999
+    PROXY_HTTPS_START = 13000
+    PROXY_HTTPS_END = 13999
+    EXPOSED_PORT_START = 14000
     EXPOSED_PORT_END = 65535
     
     # Restricted ports that should not be allocated
@@ -71,6 +75,10 @@ class AsyncPortManager:
                 start, end = self.INTERNAL_HTTP_START, self.INTERNAL_HTTP_END
             elif purpose == "internal_https":
                 start, end = self.INTERNAL_HTTPS_START, self.INTERNAL_HTTPS_END
+            elif purpose == "proxy_http":
+                start, end = self.PROXY_HTTP_START, self.PROXY_HTTP_END
+            elif purpose == "proxy_https":
+                start, end = self.PROXY_HTTPS_START, self.PROXY_HTTPS_END
             else:  # exposed
                 start, end = self.EXPOSED_PORT_START, self.EXPOSED_PORT_END
             
@@ -140,6 +148,8 @@ class AsyncPortManager:
         # Add to appropriate set
         if purpose.startswith("internal"):
             await self.redis.sadd("ports:internal", str(port))
+        elif purpose.startswith("proxy"):
+            await self.redis.sadd(f"ports:{purpose}", str(port))
         else:
             await self.redis.sadd("ports:exposed", str(port))
         
@@ -191,9 +201,7 @@ class AsyncPortManager:
                 "service_name": service_port.service_name,
                 "port_name": service_port.port_name,
                 "container_port": service_port.container_port,
-                "bind_address": service_port.bind_address,
-                "source_token_hash": service_port.source_token_hash,
-                "require_token": service_port.require_token
+                "bind_address": service_port.bind_address
             }
             await self.redis.set(
                 f"port:{service_port.host_port}",
@@ -329,41 +337,3 @@ class AsyncPortManager:
         return ranges
     
     # Port access validation
-    
-    async def validate_port_access(self, port: int, token_value: Optional[str]) -> bool:
-        """Validate access to a port using a token.
-        
-        This simplified version only checks if the provided token matches
-        the port's configured source_token.
-        
-        Args:
-            port: Port number to access
-            token_value: Token value provided for access
-            
-        Returns:
-            True if access is allowed, False otherwise
-        """
-        # Get port configuration
-        port_data = await self.redis.get(f"port:{port}")
-        if not port_data:
-            logger.warning(f"Port {port} not found")
-            return False
-        
-        port_config = json.loads(port_data)
-        
-        # Check if token is required
-        if not port_config.get("require_token", False):
-            return True
-        
-        if not token_value:
-            logger.warning(f"Token required for port {port} but none provided")
-            return False
-        
-        # Validate token matches the port's source token
-        token_hash = hashlib.sha256(token_value.encode()).hexdigest()
-        
-        if token_hash == port_config.get("source_token_hash"):
-            return True
-        
-        logger.warning(f"Invalid token for port {port}")
-        return False

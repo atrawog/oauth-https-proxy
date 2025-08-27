@@ -72,8 +72,8 @@ def create_docker_router(async_storage) -> APIRouter:
         is_admin = "admin" in auth_scopes
         manager = await get_docker_manager(request)
         
-        # No ownership filtering without tokens
-        services = await manager.list_services(None)
+        # No ownership filtering
+        services = await manager.list_services()
         
         return DockerServiceListResponse(
             services=services,
@@ -86,7 +86,7 @@ def create_docker_router(async_storage) -> APIRouter:
         config: DockerServiceConfig,
         auto_proxy: bool = Query(False, description="Automatically create proxy configuration"),
     ):
-        """Create a new Docker service.
+        """Create a new Docker service."""
         
         # Get auth info from headers (set by proxy)
         auth_user = request.headers.get("X-Auth-User")
@@ -95,8 +95,6 @@ def create_docker_router(async_storage) -> APIRouter:
         auth_scopes = request.headers.get("X-Auth-Scopes", "").split()
         is_admin = "admin" in auth_scopes
         
-        Requires admin token or special docker:create permission.
-        """
         # Check permissions - admin scope required for create
         has_permission = is_admin
         if not has_permission:
@@ -110,7 +108,7 @@ def create_docker_router(async_storage) -> APIRouter:
         
         try:
             # Create service (no token ownership)
-            service_info = await manager.create_service(config, None)
+            service_info = await manager.create_service(config)
             
             response = DockerServiceCreateResponse(
                 service=service_info,
@@ -367,10 +365,9 @@ def create_docker_router(async_storage) -> APIRouter:
         if not service_info:
             raise HTTPException(404, f"Service {service_name} not found")
         
-        # Check ownership (logs may contain sensitive info)
-        is_owner = service_info.owner_token_hash == auth.token_hash
-        is_admin = auth.is_admin
-        if not (is_owner or is_admin):
+        # Check permissions (logs may contain sensitive info)
+        # Admin scope required to view logs
+        if not is_admin:
             raise HTTPException(403, "Admin access required to view service logs")
         
         try:

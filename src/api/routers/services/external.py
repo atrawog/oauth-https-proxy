@@ -73,7 +73,6 @@ def create_external_router(async_storage) -> APIRouter:
                 description=config.description,
                 routing_enabled=config.routing_enabled,
                 created_at=datetime.now(timezone.utc),
-                owner_token_hash=None,  # No token ownership
                 created_by=auth_user
             )
             
@@ -249,7 +248,6 @@ def create_external_router(async_storage) -> APIRouter:
                                 docker_info=ds,
                                 description=f"Docker container: {ds.image or 'custom'}",
                                 created_at=ds.created_at,
-                                owner_token_hash=ds.owner_token_hash,
                                 created_by=None  # DockerServiceInfo doesn't have created_by field
                             ))
             

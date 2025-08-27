@@ -14,13 +14,7 @@ class ServicePort(BaseModel):
     bind_address: str = Field("127.0.0.1", description="Bind address (127.0.0.1 or 0.0.0.0)")
     protocol: str = Field("tcp", description="Protocol (tcp or udp)")
     
-    # Access control
-    source_token_hash: Optional[str] = Field(None, description="Hash of token required to access this port")
-    source_token_name: Optional[str] = Field(None, description="Human-readable token identifier")
-    require_token: bool = Field(False, description="Whether token is required for access")
-    
     # Metadata
-    created_by: Optional[str] = Field(None, description="User that created this port")
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     description: Optional[str] = Field(None, description="Description of what this port is for")
     
@@ -66,7 +60,6 @@ class PortConfiguration(BaseModel):
     container: int = Field(..., ge=1, le=65535, description="Container port")
     bind: str = Field("127.0.0.1", description="Bind address")
     protocol: str = Field("tcp", description="Protocol")
-    token: Optional[str] = Field(None, description="Source token for access control")
     description: Optional[str] = Field(None, description="Port description")
 
 

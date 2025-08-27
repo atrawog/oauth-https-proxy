@@ -26,7 +26,7 @@ class CertificateManager:
         self.acme_client = ACMEClient(self.storage)
         self.ssl_contexts: Dict[str, any] = {}
     
-    def create_certificate(self, request: CertificateRequest, owner_token_hash: str = None, created_by: str = None) -> Certificate:
+    def create_certificate(self, request: CertificateRequest, created_by: str = None) -> Certificate:
         """Create new certificate from request."""
         logger.info(f"Creating certificate {request.cert_name} for {request.domain}")
         
@@ -36,7 +36,6 @@ class CertificateManager:
             email=request.email,
             acme_directory_url=request.acme_directory_url,
             cert_name=request.cert_name,
-            owner_token_hash=owner_token_hash,
             created_by=created_by
         )
         
@@ -45,7 +44,7 @@ class CertificateManager:
         
         return certificate
     
-    def create_multi_domain_certificate(self, request, owner_token_hash: str = None, created_by: str = None) -> Certificate:
+    def create_multi_domain_certificate(self, request, created_by: str = None) -> Certificate:
         """Create multi-domain certificate from request."""
         logger.info(f"Creating multi-domain certificate {request.cert_name} for {', '.join(request.domains)}")
         
@@ -55,7 +54,6 @@ class CertificateManager:
             email=request.email,
             acme_directory_url=request.acme_directory_url,
             cert_name=request.cert_name,
-            owner_token_hash=owner_token_hash,
             created_by=created_by
         )
         
@@ -135,6 +133,7 @@ class CertificateManager:
         try:
             import asyncio
             import os
+            import threading
             from ..storage.redis_stream_publisher import RedisStreamPublisher
             
             async def publish_event():
@@ -159,8 +158,13 @@ class CertificateManager:
                 loop = asyncio.get_running_loop()
                 asyncio.create_task(publish_event())
             except RuntimeError:
-                # No running loop, create one
-                asyncio.run(publish_event())
+                # No running loop, use thread to create a new event loop
+                def run_in_thread():
+                    asyncio.run(publish_event())
+                
+                thread = threading.Thread(target=run_in_thread, daemon=True)
+                thread.start()
+                logger.debug(f"Started thread to publish certificate_ready event for {cert_name}")
                 
         except Exception as e:
             logger.error(f"Failed to publish certificate_ready event: {e}", exc_info=True)

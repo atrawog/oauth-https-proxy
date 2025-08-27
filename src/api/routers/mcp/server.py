@@ -4,6 +4,7 @@ import asyncio
 import base64
 import json
 import secrets
+import socket
 import time
 import inspect
 from typing import Dict, Any, Callable, Optional
@@ -14,6 +15,7 @@ from starlette.routing import Route
 
 from ....storage import UnifiedStorage
 from ....shared.logger import log_info, log_debug, log_warning, log_error, log_trace
+from ....shared.client_ip import get_real_client_ip
 
 
 class MCPServer:
@@ -33,16 +35,158 @@ class MCPServer:
         
         # The Starlette app - handle all MCP requests
         self.app = Starlette(routes=[
-            Route("/", self.handle_request, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD", "PUT", "PATCH"])
+            Route("/", self.handle_request, methods=["GET", "POST", "DELETE", "OPTIONS", "HEAD", "PUT", "PATCH"]),
+            Route("/debug", self.handle_debug, methods=["GET"])
         ])
         
         # Schedule periodic session cleanup (fire-and-forget)
         asyncio.create_task(self._periodic_session_cleanup())
         
+        # Schedule logging verification (fire-and-forget)
+        asyncio.create_task(self._verify_logging())
+        
         # Fire-and-forget startup log
         log_info("MCP server initialized", component="mcp")
     
     # Removed logger methods - using direct log_* functions from shared.logger
+    
+    async def _reverse_dns_lookup(self, ip: str) -> str:
+        """Perform reverse DNS lookup with timeout."""
+        try:
+            # Run in executor to avoid blocking
+            loop = asyncio.get_event_loop()
+            hostname = await asyncio.wait_for(
+                loop.run_in_executor(None, socket.gethostbyaddr, ip),
+                timeout=0.5
+            )
+            return hostname[0] if hostname else ip
+        except (socket.herror, socket.gaierror, asyncio.TimeoutError, Exception):
+            return ip
+    
+    async def _get_request_context(self, request) -> Dict[str, Any]:
+        """Extract comprehensive request context for logging."""
+        # Get proxy hostname (which proxy is being accessed)
+        proxy_hostname = request.headers.get("x-forwarded-host", "")
+        if not proxy_hostname:
+            proxy_hostname = request.headers.get("host", "unknown")
+        if ":" in proxy_hostname:
+            proxy_hostname = proxy_hostname.split(":")[0]
+        
+        # Get client IP (who is making the request)
+        client_ip = get_real_client_ip(request)
+        
+        # Get client hostname (reverse DNS or from headers)
+        client_hostname = request.headers.get("x-client-hostname", "")
+        if not client_hostname and client_ip and client_ip != "unknown":
+            # Check for known IPs
+            if client_ip == "34.162.102.82":
+                client_hostname = "claude.ai"
+            else:
+                # Attempt reverse DNS lookup (with timeout)
+                try:
+                    client_hostname = await self._reverse_dns_lookup(client_ip)
+                except:
+                    client_hostname = client_ip
+        
+        if not client_hostname:
+            client_hostname = client_ip
+        
+        # Get request path
+        path = request.url.path
+        
+        # Get user agent for additional context
+        user_agent = request.headers.get("user-agent", "")
+        
+        # Detect if this is Claude.ai
+        is_claude = (
+            client_ip == "34.162.102.82" or
+            "claude" in client_hostname.lower() or
+            "anthropic" in user_agent.lower()
+        )
+        
+        return {
+            "proxy_hostname": proxy_hostname,
+            "client_ip": client_ip,
+            "client_hostname": client_hostname,
+            "path": path,
+            "method": request.method,
+            "user_agent": user_agent[:100],  # Truncate long user agents
+            "is_claude": is_claude
+        }
+    
+    async def _verify_logging(self):
+        """Verify logging is working correctly to Redis."""
+        await asyncio.sleep(2)  # Wait for system to stabilize
+        
+        try:
+            import uuid
+            test_id = str(uuid.uuid4())
+            
+            # Write a test log with unique identifier
+            log_info(
+                f"MCP logging verification test: {test_id}",
+                component="mcp_test",
+                test_id=test_id,
+                verification=True
+            )
+            
+            # Wait a bit for log to be written
+            await asyncio.sleep(0.5)
+            
+            # Try to verify the log was written to Redis
+            try:
+                # Check if we can access Redis streams
+                result = await self.storage.redis_client.xrevrange(
+                    "log:stream",
+                    count=100
+                )
+                
+                # Look for our test log
+                found = False
+                for entry_id, data in result:
+                    if test_id in str(data):
+                        found = True
+                        break
+                
+                if found:
+                    log_info(
+                        "✅ MCP logging verification PASSED - Redis writes working",
+                        component="mcp",
+                        test_id=test_id
+                    )
+                else:
+                    log_warning(
+                        "⚠️ MCP logging verification UNCERTAIN - test log not found in recent entries",
+                        component="mcp",
+                        test_id=test_id
+                    )
+                    # Try alternate log location
+                    try:
+                        # Check if logs might be in a different stream
+                        keys = await self.storage.redis_client.keys("log:*")
+                        log_info(f"Available log streams: {keys}", component="mcp")
+                    except:
+                        pass
+                        
+            except Exception as e:
+                log_error(
+                    f"❌ MCP logging verification FAILED - Cannot read from Redis: {e}",
+                    component="mcp",
+                    error=str(e)
+                )
+                # Fallback logging to stderr
+                import sys
+                print(f"[MCP FALLBACK] Logging verification failed: {e}", file=sys.stderr)
+                
+        except Exception as e:
+            log_error(
+                f"❌ MCP logging verification ERROR: {e}",
+                component="mcp",
+                error=str(e)
+            )
+            # Fallback to stderr
+            import sys
+            print(f"[MCP FALLBACK] Logging verification error: {e}", file=sys.stderr)
     
     async def send_list_changed_notification(self, resource_type: str, session_id: str = None):
         """Send listChanged notification to connected clients.
@@ -179,6 +323,9 @@ class MCPServer:
         method = request.method
         trace_id = f"mcp_{secrets.token_hex(8)}"
         
+        # Get comprehensive request context
+        context = await self._get_request_context(request)
+        
         # Extract session or generate unique ID
         session_id = request.headers.get("mcp-session-id")
         
@@ -192,35 +339,29 @@ class MCPServer:
             # Use standard base64 encoding and strip padding
             # This gives us ~43 characters with full entropy across a-z, A-Z, 0-9, +, /
             session_id = base64.b64encode(random_bytes).decode('ascii').rstrip('=')
-            log_debug(f"Generated new session ID: {session_id}", component="mcp")
+            log_debug(
+                f"Generated new session ID: {session_id}",
+                component="mcp",
+                **context,
+                session_id=session_id
+            )
         
-        client_ip = request.client.host if request.client else "unknown"
-        user_agent = request.headers.get("user-agent", "")
-        
-        # Detect Claude.ai connections
-        is_claude = any(indicator in user_agent.lower() for indicator in ["anthropic", "claude", "34.162.102"])
-        
-        # Enhanced logging for Claude.ai
-        if is_claude:
+        # Enhanced logging with full context
+        if context.get("is_claude"):
             log_info(
-                f"🤖 Claude.ai MCP {method} request detected",
+                f"🤖 Claude.ai MCP {method} {context['path']} from {context['client_hostname']}",
                 component="mcp",
                 trace_id=trace_id,
-                method=method,
                 session_id=session_id,
-                client_ip=client_ip,
-                user_agent=user_agent,
-                is_claude=True
+                **context
             )
         else:
             log_info(
-                f"MCP {method} request",
+                f"MCP {method} {context['path']} from {context['client_hostname']}",
                 component="mcp",
                 trace_id=trace_id,
-                method=method,
                 session_id=session_id,
-                client_ip=client_ip,
-                user_agent=user_agent
+                **context
             )
         
         # Handle HEAD for discovery
@@ -252,16 +393,34 @@ class MCPServer:
             deleted = await self.storage.redis_client.delete(session_key)
             if deleted:
                 await self._publish_event("session_terminated", {"session_id": session_id})
-                log_info(f"Deleted MCP session from Redis: {session_id}", component="mcp")
+                log_info(
+                    f"Deleted MCP session from {context['client_hostname']}: {session_id}",
+                    component="mcp",
+                    **context,
+                    session_id=session_id,
+                    trace_id=trace_id
+                )
             return Response("", status_code=204)
         
         # Handle GET for SSE stream
         if method == "GET":
-            log_info("Creating SSE StreamingResponse", component="mcp", trace_id=trace_id)
+            log_info(
+                f"Creating SSE stream for {context['client_hostname']}",
+                component="mcp",
+                **context,
+                session_id=session_id,
+                trace_id=trace_id
+            )
             
             # Create generator and log it
-            generator = self._sse_stream(session_id, trace_id)
-            log_info(f"Created SSE generator: {generator}", component="mcp", trace_id=trace_id)
+            generator = self._sse_stream(session_id, trace_id, context)
+            log_debug(
+                f"Created SSE generator for {context['client_hostname']}",
+                component="mcp",
+                **context,
+                session_id=session_id,
+                trace_id=trace_id
+            )
             
             response = StreamingResponse(
                 generator,
@@ -275,16 +434,46 @@ class MCPServer:
                     "Access-Control-Allow-Origin": "*.anthropic.com"
                 }
             )
-            log_info("Returning SSE StreamingResponse", component="mcp", trace_id=trace_id)
+            log_info(
+                f"SSE stream started for {context['client_hostname']}",
+                component="mcp",
+                **context,
+                session_id=session_id,
+                trace_id=trace_id
+            )
             return response
         
         # Handle POST for JSON-RPC
         if method == "POST":
             body = await request.json()
             
+            # CRITICAL DEBUG: Log the exact request from Claude.ai
+            if context.get("is_claude"):
+                log_info(
+                    f"🤖 Claude.ai POST request - Method: {body.get('method', 'NONE')}",
+                    component="mcp",
+                    **context,
+                    session_id=session_id,
+                    trace_id=trace_id,
+                    request_method=body.get('method'),
+                    has_id=('id' in body),
+                    has_params=('params' in body)
+                )
+            
             # Check if this is a notification (no id field) 
             # Per MCP spec: notifications MUST return 202 Accepted with no body
             method_name = body.get("method", "")
+            
+            # DEBUG: Track what methods are being called
+            log_debug(
+                f"Processing {method_name} from {context['client_hostname']}",
+                component="mcp",
+                **context,
+                session_id=session_id,
+                is_notification=("id" not in body),
+                method_name=method_name
+            )
+            
             if "id" not in body and method_name.startswith("notifications/"):
                 # Process the notification without returning a response body
                 if method_name == "notifications/initialized":
@@ -299,7 +488,55 @@ class MCPServer:
                             self.session_ttl,
                             json.dumps(session_data)
                         )
-                        log_info(f"Client ready notification processed", component="mcp", session_id=session_id, trace_id=trace_id)
+                        log_info(
+                            f"Client ready notification from {context['client_hostname']}",
+                            component="mcp",
+                            **context,
+                            session_id=session_id,
+                            trace_id=trace_id
+                        )
+                        
+                        # CRITICAL: Send proactive tool announcement for Claude.ai
+                        # Claude.ai expects tools to be pushed, not pulled
+                        if session_id in self.sse_connections:
+                            log_info(
+                                f"🔧 PROACTIVELY sending tool list to {context['client_hostname']} (Claude.ai compatibility)",
+                                component="mcp",
+                                **context,
+                                session_id=session_id,
+                                tools_count=len(self.tools)
+                            )
+                            
+                            # Create tools notification with all available tools
+                            tools_notification = {
+                                "jsonrpc": "2.0",
+                                "method": "notifications/tools/list",
+                                "params": {
+                                    "tools": [
+                                        {
+                                            "name": name,
+                                            "description": tool["description"],
+                                            "inputSchema": tool["inputSchema"]
+                                        }
+                                        for name, tool in self.tools.items()
+                                    ]
+                                }
+                            }
+                            
+                            try:
+                                await self.sse_connections[session_id].put(tools_notification)
+                                log_info(
+                                    f"✅ Proactively sent {len(self.tools)} tools to {context['client_hostname']}",
+                                    component="mcp",
+                                    **context,
+                                    session_id=session_id
+                                )
+                            except Exception as e:
+                                log_error(
+                                    f"Failed to send proactive tools to {session_id}: {e}",
+                                    component="mcp",
+                                    **context
+                                )
                 
                 # Return 202 Accepted with no body for notifications
                 return Response(
@@ -323,7 +560,12 @@ class MCPServer:
                     session_exists = await self.storage.redis_client.exists(session_key)
                     if not session_exists:
                         # Session doesn't exist - return 404 per MCP spec
-                        log_info(f"Session not found: {provided_session_id}", component="mcp", trace_id=trace_id)
+                        log_info(
+                            f"Session not found for {context['client_hostname']}: {provided_session_id}",
+                            component="mcp",
+                            **context,
+                            trace_id=trace_id
+                        )
                         error_response = {
                             "jsonrpc": "2.0",
                             "id": body.get("id"),
@@ -343,7 +585,33 @@ class MCPServer:
                             }
                         )
             
-            result = await self._handle_jsonrpc(body, session_id, trace_id)
+            result = await self._handle_jsonrpc(body, session_id, trace_id, context)
+            
+            # Handle notification responses (no ID = notification)
+            if result is None:
+                # This was a notification that shouldn't return a body
+                return Response(
+                    "",
+                    status_code=202,
+                    headers={
+                        "Mcp-Session-Id": session_id,
+                        "Cache-Control": "no-cache, no-store, must-revalidate",
+                        "X-Content-Type-Options": "nosniff",
+                        "Access-Control-Allow-Origin": "*.anthropic.com"
+                    }
+                )
+            
+            # DEBUG: Log what we're returning to Claude.ai
+            if context.get("is_claude") and result and "result" in result:
+                if method_name == "tools/list":
+                    tools_in_result = len(result.get("result", {}).get("tools", []))
+                    log_info(
+                        f"🤖✅ Returning {tools_in_result} tools to Claude.ai",
+                        component="mcp",
+                        **context,
+                        session_id=session_id,
+                        tools_count=tools_in_result
+                    )
             
             # IMPORTANT: Always return JSON for POST requests
             # SSE is only for GET requests that establish streaming connections
@@ -359,7 +627,81 @@ class MCPServer:
                 }
             )
     
-    async def _handle_jsonrpc(self, message, session_id, trace_id):
+    async def handle_debug(self, request):
+        """Debug endpoint to verify MCP server state."""
+        try:
+            # Get request context
+            context = await self._get_request_context(request)
+            
+            # Get session information
+            session_keys = await self.storage.redis_client.keys("mcp:session:*")
+            session_count = len(session_keys)
+            
+            # Get recent sessions (last 5)
+            recent_sessions = []
+            for key in session_keys[:5]:
+                session_data = await self.storage.redis_client.get(key)
+                if session_data:
+                    try:
+                        data = json.loads(session_data)
+                        recent_sessions.append({
+                            "id": data.get("id", "unknown")[:20] + "...",
+                            "created": data.get("created", "unknown"),
+                            "initialized": data.get("initialized", False),
+                            "ready": data.get("ready", False)
+                        })
+                    except:
+                        pass
+            
+            # Build debug response
+            debug_info = {
+                "status": "operational",
+                "request_context": context,
+                "tools": {
+                    "registered": len(self.tools),
+                    "names": list(self.tools.keys())
+                },
+                "sessions": {
+                    "total": session_count,
+                    "active_streams": len(self.sse_connections),
+                    "recent": recent_sessions
+                },
+                "server_info": {
+                    "name": "OAuth-HTTPS-Proxy-MCP",
+                    "version": "3.0.0",
+                    "protocol_versions": ["2025-06-18", "2025-03-26", "2024-11-05"]
+                },
+                "endpoints": {
+                    "main": "/mcp",
+                    "debug": "/mcp/debug"
+                }
+            }
+            
+            # Log debug access
+            log_info(
+                f"MCP debug accessed from {context['client_hostname']}",
+                component="mcp",
+                **context
+            )
+            
+            return Response(
+                json.dumps(debug_info, indent=2),
+                media_type="application/json",
+                headers={
+                    "Cache-Control": "no-cache, no-store, must-revalidate",
+                    "X-Content-Type-Options": "nosniff"
+                }
+            )
+            
+        except Exception as e:
+            log_error(f"MCP debug error: {e}", component="mcp", exc_info=True)
+            return Response(
+                json.dumps({"error": str(e)}),
+                status_code=500,
+                media_type="application/json"
+            )
+    
+    async def _handle_jsonrpc(self, message, session_id, trace_id, context):
         """Handle JSON-RPC with proper error handling and logging."""
         # Validate JSON-RPC 2.0 compliance
         jsonrpc_version = message.get("jsonrpc")
@@ -367,10 +709,15 @@ class MCPServer:
         
         # JSON-RPC 2.0 requires "jsonrpc": "2.0" field in all requests
         if jsonrpc_version != "2.0":
-            log_warning(f"Invalid or missing jsonrpc field: {jsonrpc_version}", component="mcp", trace_id=trace_id)
+            log_warning(
+                f"Invalid jsonrpc field from {context['client_hostname']}: {jsonrpc_version}",
+                component="mcp",
+                **context,
+                trace_id=trace_id
+            )
             return {
                 "jsonrpc": "2.0",
-                "id": msg_id,
+                "id": msg_id if msg_id is not None else None,
                 "error": {
                     "code": -32600,  # Invalid Request per JSON-RPC spec
                     "message": "Invalid Request: missing or incorrect 'jsonrpc' field. Must be '2.0'"
@@ -378,7 +725,22 @@ class MCPServer:
             }
         
         method = message.get("method")
+        
+        # Method is required for all JSON-RPC requests
+        if not method:
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id if msg_id is not None else None,
+                "error": {
+                    "code": -32600,  # Invalid Request
+                    "message": "Invalid Request: 'method' field is required"
+                }
+            }
+        
+        # Handle params - should be object or array (we accept missing as empty object)
         params = message.get("params", {})
+        if params is None:
+            params = {}
         
         # Get or create session in Redis
         session_key = f"mcp:session:{session_id}"
@@ -403,7 +765,11 @@ class MCPServer:
                 log_debug(f"Created new MCP session in Redis: {session_id}", component="mcp")
             else:
                 # Session doesn't exist and this isn't initialize - shouldn't happen due to check above
-                log_warning(f"Session {session_id} doesn't exist for method {method}", component="mcp")
+                log_warning(
+                    f"Session {session_id} doesn't exist for {context['client_hostname']}, method: {method}",
+                    component="mcp",
+                    **context
+                )
                 session_data = {}
         else:
             session_data = json.loads(session_json)
@@ -430,7 +796,11 @@ class MCPServer:
                 else:
                     # Unknown version - default to latest stable
                     protocol_version = "2025-06-18"
-                    log_warning(f"Unknown protocol version requested: {requested_version}, using {protocol_version}", component="mcp")
+                    log_warning(
+                        f"Unknown protocol version from {context['client_hostname']}: {requested_version}, using {protocol_version}",
+                        component="mcp",
+                        **context
+                    )
                 
                 result = {
                     "protocolVersion": protocol_version,
@@ -449,6 +819,7 @@ class MCPServer:
                 session_data["initialized"] = True
                 session_data["protocol_version"] = protocol_version
                 session_data["client_info"] = client_info
+                session_data["methods_called"] = session_data.get("methods_called", []) + ["initialize"]
                 await self.storage.redis_client.setex(
                     session_key,
                     self.session_ttl,  # Reset TTL
@@ -465,46 +836,70 @@ class MCPServer:
                 client_name = client_info.get("name", "unknown")
                 is_claude_client = "anthropic" in client_name.lower() or "claude" in client_name.lower()
                 
-                if is_claude_client:
+                if is_claude_client or context.get("is_claude"):
                     log_info(
-                        f"🤖 Claude.ai session initialized",
+                        f"🤖 Claude.ai session initialized from {context['client_hostname']}",
                         component="mcp",
+                        **context,
                         session_id=session_id,
                         protocol=protocol_version,
                         client=client_name,
-                        is_claude=True
+                        trace_id=trace_id
                     )
                 else:
                     log_info(
-                        "Session initialized",
+                        f"Session initialized from {context['client_hostname']}",
                         component="mcp",
+                        **context,
                         session_id=session_id,
                         protocol=protocol_version,
-                        client=client_name
+                        client=client_name,
+                        trace_id=trace_id
                     )
             
             elif method == "tools/list":
-                # Log tools list request
+                # Track that tools/list was called
+                if session_data:
+                    session_data["methods_called"] = session_data.get("methods_called", []) + ["tools/list"]
+                    await self.storage.redis_client.setex(
+                        session_key,
+                        self.session_ttl,
+                        json.dumps(session_data)
+                    )
+                # Log tools list request with ENHANCED logging for debugging
                 # Detect if this is Claude.ai requesting tools
                 is_claude_request = session_data.get("client_info", {}).get("name", "").lower() in ["anthropic/claudeai", "claude"]
                 
-                if is_claude_request:
+                if is_claude_request or context.get("is_claude"):
                     log_info(
-                        f"🤖 Claude.ai requesting tools list - found {len(self.tools)} tools",
+                        f"🤖 Claude.ai EXPLICITLY requesting tools from {context['proxy_hostname']} - found {len(self.tools)} tools",
                         component="mcp",
+                        **context,
                         trace_id=trace_id,
                         session_id=session_id,
-                        tools=list(self.tools.keys()),
-                        is_claude=True
+                        tools_count=len(self.tools),
+                        tool_names=list(self.tools.keys())
                     )
                 else:
                     log_info(
-                        f"Tools list requested - found {len(self.tools)} tools",
+                        f"Tools list requested from {context['client_hostname']} at {context['proxy_hostname']} - found {len(self.tools)} tools",
                         component="mcp",
+                        **context,
                         trace_id=trace_id,
                         session_id=session_id,
-                        tools=list(self.tools.keys())
+                        tools_count=len(self.tools),
+                        tool_names=list(self.tools.keys())
                     )
+                
+                # CRITICAL DEBUG: Log exactly what we're about to return
+                log_info(
+                    f"📋 SENDING TOOLS RESPONSE with {len(self.tools)} tools to {context['client_hostname']}",
+                    component="mcp",
+                    **context,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    first_5_tools=list(self.tools.keys())[:5] if self.tools else []
+                )
                 
                 result = {
                     "tools": [
@@ -518,9 +913,12 @@ class MCPServer:
                 }
                 
                 log_info(
-                    f"Returning tools list with {len(result['tools'])} tools",
+                    f"Returning {len(result['tools'])} tools to {context['client_hostname']} at {context['proxy_hostname']}",
                     component="mcp",
-                    trace_id=trace_id
+                    **context,
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    response_size=len(json.dumps(result))
                 )
             
             elif method == "tools/call":
@@ -529,9 +927,11 @@ class MCPServer:
                 
                 # Log tool call
                 log_info(
-                    f"Calling tool: {tool_name}",
+                    f"Tool '{tool_name}' called by {context['client_hostname']} at {context['proxy_hostname']}",
                     component="mcp",
+                    **context,
                     tool=tool_name,
+                    tool_args=tool_args,
                     trace_id=trace_id,
                     session_id=session_id
                 )
@@ -570,18 +970,108 @@ class MCPServer:
                 else:
                     raise ValueError(f"Unknown tool: {tool_name}")
             
+            elif method == "prompts/list":
+                # Track that prompts/list was called
+                if session_data:
+                    session_data["methods_called"] = session_data.get("methods_called", []) + ["prompts/list"]
+                    await self.storage.redis_client.setex(
+                        session_key,
+                        self.session_ttl,
+                        json.dumps(session_data)
+                    )
+                    
+                    # CRITICAL: Log the method sequence to understand Claude.ai's behavior
+                    methods_sequence = session_data.get("methods_called", [])
+                    log_info(
+                        f"🔍 Claude.ai method sequence so far: {' -> '.join(methods_sequence)}",
+                        component="mcp",
+                        **context,
+                        trace_id=trace_id,
+                        session_id=session_id,
+                        methods_called=methods_sequence,
+                        has_called_tools_list=("tools/list" in methods_sequence)
+                    )
+                
+                # Return empty prompts list (we don't have prompts)
+                log_info(
+                    f"Prompts list requested from {context['client_hostname']} - returning empty list",
+                    component="mcp",
+                    **context,
+                    trace_id=trace_id,
+                    session_id=session_id
+                )
+                result = {
+                    "prompts": []  # Empty list since we don't have prompts
+                }
+            
+            elif method == "resources/list":
+                # Return empty resources list (we don't have resources)
+                log_info(
+                    f"Resources list requested from {context['client_hostname']} - returning empty list",
+                    component="mcp",
+                    **context,
+                    trace_id=trace_id,
+                    session_id=session_id
+                )
+                result = {
+                    "resources": []  # Empty list since we don't have resources
+                }
+            
             elif method == "ping":
                 # Keepalive ping
                 result = {"pong": True}
             
             else:
-                raise ValueError(f"Unknown method: {method}")
+                # Unknown method - return proper JSON-RPC error
+                return {
+                    "jsonrpc": "2.0",
+                    "id": msg_id,
+                    "error": {
+                        "code": -32601,  # Method not found
+                        "message": f"Method not found: {method}"
+                    }
+                }
             
             # Return success response
-            return {"jsonrpc": "2.0", "id": msg_id, "result": result}
+            # If no ID provided (notification), don't return a response per JSON-RPC spec
+            if msg_id is None:
+                # This is a notification - no response should be sent
+                # Signal to caller to return 202 with no body
+                return None  # This will be handled by the caller
             
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id if msg_id is not None else None,
+                "result": result
+            }
+            
+        except ValueError as e:
+            # Application-level errors (e.g., tool not found)
+            log_warning(
+                f"MCP application error from {context['client_hostname']}: {e}",
+                component="mcp",
+                **context,
+                trace_id=trace_id,
+                mcp_method=method,
+                error=str(e)
+            )
+            return {
+                "jsonrpc": "2.0",
+                "id": msg_id if msg_id is not None else None,
+                "error": {
+                    "code": -32602,  # Invalid params
+                    "message": str(e)
+                }
+            }
         except Exception as e:
-            log_error(f"MCP error: {e}", component="mcp", trace_id=trace_id, method=method)
+            log_error(
+                f"MCP internal error from {context['client_hostname']}: {e}",
+                component="mcp",
+                **context,
+                trace_id=trace_id,
+                mcp_method=method,  # Renamed to avoid conflict with context['method']
+                error=str(e)
+            )
             await self._publish_event("mcp_error", {
                 "session_id": session_id,
                 "method": method,
@@ -589,29 +1079,74 @@ class MCPServer:
             })
             return {
                 "jsonrpc": "2.0",
-                "id": msg_id,
-                "error": {"code": -32603, "message": str(e)}
+                "id": msg_id if msg_id is not None else None,
+                "error": {
+                    "code": -32603,  # Internal error
+                    "message": "Internal error",
+                    "data": str(e)
+                }
             }
     
-    async def _sse_stream(self, session_id, trace_id):
+    async def _sse_stream(self, session_id, trace_id, context):
         """Generate SSE keepalive stream with listChanged notification support."""
-        log_info(f"SSE stream generator started", component="mcp", session_id=session_id, trace_id=trace_id)
+        log_info(
+            f"SSE stream started for {context['client_hostname']} at {context['proxy_hostname']}",
+            component="mcp",
+            **context,
+            session_id=session_id,
+            trace_id=trace_id
+        )
         
         # Create notification queue for this session
         notification_queue = asyncio.Queue()
         self.sse_connections[session_id] = notification_queue
         
         try:
-            # Send initial hello immediately with proper encoding
-            hello_msg = f"data: {{\"type\":\"hello\",\"session_id\":\"{session_id}\"}}\n\n"
-            log_info(f"SSE about to yield hello: {repr(hello_msg)}", component="mcp", session_id=session_id)
+            # Send initial hello with tool count for Claude.ai
+            hello_data = {
+                "type": "hello",
+                "session_id": session_id,
+                "tools_available": len(self.tools),
+                "server": "OAuth-HTTPS-Proxy-MCP v3.0.0"
+            }
+            hello_msg = f"data: {json.dumps(hello_data)}\n\n"
+            log_debug(f"SSE yielding hello with {len(self.tools)} tools for {context['client_hostname']}", component="mcp", **context, session_id=session_id)
             yield hello_msg.encode('utf-8')
-            log_info(f"SSE sent hello message", component="mcp", session_id=session_id)
+            log_debug(f"SSE sent hello to {context['client_hostname']}", component="mcp", **context, session_id=session_id)
             
             # Force immediate flush with multiple newlines and a comment
             # This helps ensure the proxy flushes the data immediately
             yield b"\n\n: init\n\n"
             log_debug(f"SSE sent init flush", component="mcp", session_id=session_id)
+            
+            # CRITICAL: Immediately send tools announcement for Claude.ai
+            # Claude.ai may not call tools/list explicitly
+            if len(self.tools) > 0:
+                tools_announcement = {
+                    "jsonrpc": "2.0",
+                    "method": "notifications/tools/available",
+                    "params": {
+                        "count": len(self.tools),
+                        "tools": [
+                            {
+                                "name": name,
+                                "description": tool["description"][:100]  # Brief description
+                            }
+                            for name, tool in list(self.tools.items())[:5]  # First 5 as preview
+                        ],
+                        "message": f"{len(self.tools)} tools available. Call tools/list for complete details."
+                    }
+                }
+                announcement_msg = f"data: {json.dumps(tools_announcement)}\n\n"
+                yield announcement_msg.encode('utf-8')
+                
+                log_info(
+                    f"🔔 PROACTIVELY announced {len(self.tools)} tools availability to {context['client_hostname']} via SSE",
+                    component="mcp",
+                    **context,
+                    session_id=session_id,
+                    tools_sent=list(self.tools.keys())[:5]
+                )
             
             # Then send periodic keepalives and notifications
             keep_alive_count = 0
@@ -636,10 +1171,23 @@ class MCPServer:
                     log_debug(f"SSE sent keepalive #{keep_alive_count}", component="mcp", session_id=session_id)
                     
         except asyncio.CancelledError:
-            log_info(f"SSE stream cancelled after {keep_alive_count} keepalives", component="mcp", session_id=session_id, trace_id=trace_id)
+            log_info(
+                f"SSE stream cancelled for {context['client_hostname']} after {keep_alive_count} keepalives",
+                component="mcp",
+                **context,
+                session_id=session_id,
+                trace_id=trace_id
+            )
             raise
         except Exception as e:
-            log_error(f"SSE stream error: {e}", component="mcp", session_id=session_id, trace_id=trace_id, exc_info=True)
+            log_error(
+                f"SSE stream error for {context['client_hostname']}: {e}",
+                component="mcp",
+                **context,
+                session_id=session_id,
+                trace_id=trace_id,
+                exc_info=True
+            )
             raise
         finally:
             # Clean up connection tracking

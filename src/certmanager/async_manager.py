@@ -8,6 +8,7 @@ import asyncio
 import logging
 import os
 import secrets
+import time
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone, timedelta
 from concurrent.futures import ThreadPoolExecutor
@@ -91,13 +92,11 @@ class AsyncCertificateManager:
         await self.logger.info("Certificate manager stopped")
     
     async def create_certificate(self, request: CertificateRequest,
-                                owner_token_hash: Optional[str] = None,
                                 created_by: Optional[str] = None) -> Certificate:
         """Create a new certificate with full tracing.
         
         Args:
             request: Certificate request
-            owner_token_hash: Owner token hash
             created_by: Creator identifier
             
         Returns:
@@ -119,7 +118,7 @@ class AsyncCertificateManager:
         
         # Start new generation
         task = asyncio.create_task(
-            self._generate_certificate_with_events(request, owner_token_hash, created_by)
+            self._generate_certificate_with_events(request, created_by)
         )
         ongoing_generations[cert_name] = task
         
@@ -132,13 +131,11 @@ class AsyncCertificateManager:
                 del ongoing_generations[cert_name]
     
     async def _generate_certificate_with_events(self, request: CertificateRequest,
-                                               owner_token_hash: Optional[str],
                                                created_by: Optional[str]) -> Certificate:
         """Generate certificate with comprehensive event publishing.
         
         Args:
             request: Certificate request
-            owner_token_hash: Owner token hash
             created_by: Creator identifier
             
         Returns:
@@ -178,7 +175,7 @@ class AsyncCertificateManager:
             generation_results[cert_name] = {
                 "status": "in_progress",
                 "message": f"Generating certificate for {request.domain}",
-                "started_at": asyncio.get_event_loop().time(),
+                "started_at": time.time(),
                 "trace_id": trace_id
             }
             
@@ -195,18 +192,16 @@ class AsyncCertificateManager:
                 raise RuntimeError(error_msg)
             
             logger.info(f"[CERT_GEN] Running sync certificate generation in executor for {cert_name}")
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             certificate = await loop.run_in_executor(
                 executor,
                 self.sync_manager.create_certificate,
                 request,
-                owner_token_hash,
                 created_by
             )
             logger.info(f"[CERT_GEN] Sync certificate generation completed for {cert_name}")
             
-            # Add ownership info
-            certificate.owner_token_hash = owner_token_hash
+            # Add creator info
             certificate.created_by = created_by
             
             # Store certificate
@@ -232,7 +227,7 @@ class AsyncCertificateManager:
             generation_results[cert_name] = {
                 "status": "completed",
                 "message": f"Certificate generated successfully",
-                "completed_at": asyncio.get_event_loop().time(),
+                "completed_at": time.time(),
                 "trace_id": trace_id,
                 "expires_at": certificate.expires_at.isoformat() if certificate.expires_at else None
             }
@@ -263,7 +258,7 @@ class AsyncCertificateManager:
             generation_results[cert_name] = {
                 "status": "failed",
                 "message": str(e),
-                "failed_at": asyncio.get_event_loop().time(),
+                "failed_at": time.time(),
                 "trace_id": trace_id,
                 "error": str(e)
             }
@@ -272,13 +267,11 @@ class AsyncCertificateManager:
             raise
     
     async def create_multi_domain_certificate(self, request,
-                                             owner_token_hash: Optional[str] = None,
                                              created_by: Optional[str] = None) -> Certificate:
         """Create a multi-domain certificate with full tracing.
         
         Args:
             request: Multi-domain certificate request
-            owner_token_hash: Owner token hash
             created_by: Creator identifier
             
         Returns:
@@ -310,12 +303,11 @@ class AsyncCertificateManager:
             )
             
             # Run ACME operations in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             certificate = await loop.run_in_executor(
                 executor,
                 self.sync_manager.create_multi_domain_certificate,
                 request,
-                owner_token_hash,
                 created_by
             )
             
@@ -404,7 +396,7 @@ class AsyncCertificateManager:
             )
             
             # Run renewal in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             renewed_cert = await loop.run_in_executor(
                 executor,
                 self.sync_manager.renew_certificate,
@@ -709,7 +701,6 @@ class AsyncCertificateManager:
             # Generate production certificate
             production_cert = await self.create_certificate(
                 production_request,
-                owner_token_hash=existing_cert.owner_token_hash,
                 created_by=existing_cert.created_by
             )
             

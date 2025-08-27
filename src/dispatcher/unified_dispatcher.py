@@ -28,7 +28,7 @@ from ..shared.logger import log_info, log_warning, log_error, log_debug, log_tra
 from ..shared.dual_logger import create_dual_logger, set_redis_logger_for_component
 from ..shared.config import Config
 from ..shared.unified_logger import UnifiedAsyncLogger
-from ..ports.manager import PortManager
+from ..ports.async_manager import AsyncPortManager
 from ..shared.dns_resolver import get_dns_resolver
 
 # Create dual logger for dispatcher
@@ -986,7 +986,7 @@ class UnifiedMultiInstanceServer:
         self.dispatcher = UnifiedDispatcher(host, storage, async_components)
         
         # Initialize PortManager for Redis-based port allocation
-        self.port_manager = PortManager(storage)
+        self.port_manager = AsyncPortManager(storage)
         
         # Redis client for port mappings
         self.redis = storage.redis_client if storage else None

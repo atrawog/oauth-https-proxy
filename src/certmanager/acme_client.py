@@ -29,6 +29,12 @@ class ACMEClient:
         from ..shared.config import Config
         self.account_key_size = Config.RSA_KEY_SIZE
         self.cert_key_size = Config.RSA_KEY_SIZE
+        
+        # Initialize sync Redis client for use in sync context
+        import redis
+        import os
+        redis_url = os.getenv('REDIS_URL', 'redis://localhost:6379/0')
+        self._sync_redis = redis.from_url(redis_url, decode_responses=True)
     
     def _generate_rsa_key(self, key_size: int) -> Tuple[rsa.RSAPrivateKey, str]:
         """Generate RSA key pair."""
@@ -52,8 +58,9 @@ class ACMEClient:
         parsed = urlparse(provider)
         provider_name = parsed.hostname.replace('.', '_')
         
-        # Check for existing key
-        key_pem = self.storage.get_account_key(provider_name, email)
+        # Use sync Redis directly to avoid event loop issues
+        account_key_name = f"acme:account:{provider_name}:{email}"
+        key_pem = self._sync_redis.get(account_key_name)
         
         if key_pem:
             private_key = serialization.load_pem_private_key(
@@ -66,8 +73,8 @@ class ACMEClient:
         # Generate new key
         private_key, private_pem = self._generate_rsa_key(self.account_key_size)
         
-        # Store key
-        self.storage.store_account_key(provider_name, email, private_pem)
+        # Store key using sync Redis
+        self._sync_redis.set(account_key_name, private_pem)
         
         # Convert to JWKRSA for ACME
         return jose.JWKRSA(key=private_key)
@@ -114,7 +121,6 @@ class ACMEClient:
         email: str,
         acme_directory_url: str,
         cert_name: str,
-        owner_token_hash: str = None,
         created_by: str = None
     ) -> Certificate:
         """Generate certificate using ACME protocol."""
@@ -169,18 +175,36 @@ class ACMEClient:
             fingerprint=fingerprint,
             fullchain_pem=fullchain_pem,
             private_key_pem=cert_key_pem,
-            owner_token_hash=owner_token_hash,
             created_by=created_by
         )
         
-        # Store certificate
-        if not self.storage.store_certificate(cert_name, certificate):
+        # Store certificate using sync Redis directly
+        import json
+        cert_key = f"cert:{cert_name}"
+        cert_json = json.dumps({
+            "cert_name": certificate.cert_name,
+            "domains": certificate.domains,
+            "email": certificate.email,
+            "acme_directory_url": certificate.acme_directory_url,
+            "status": certificate.status,
+            "expires_at": certificate.expires_at.isoformat(),
+            "issued_at": certificate.issued_at.isoformat(),
+            "fingerprint": certificate.fingerprint,
+            "fullchain_pem": certificate.fullchain_pem,
+            "private_key_pem": certificate.private_key_pem,
+            "created_by": certificate.created_by
+        })
+        
+        if not self._sync_redis.set(cert_key, cert_json):
             logger.error(f"Failed to store certificate in Redis for {cert_name}")
             raise Exception(f"Failed to store certificate in Redis for {cert_name}")
         
+        # Store domain mapping
+        for domain in certificate.domains:
+            self._sync_redis.set(f"cert:domain:{domain}", cert_name)
+        
         # Verify certificate was stored
-        stored = self.storage.get_certificate(cert_name)
-        if not stored:
+        if not self._sync_redis.exists(cert_key):
             logger.error(f"Certificate verification failed - not found in Redis after storage for {cert_name}")
             raise Exception(f"Certificate not found in Redis after storage for {cert_name}")
             
@@ -236,12 +260,24 @@ class ACMEClient:
         logger.info(f"Challenge validation: {validation[:50]}...")
         logger.info(f"Response details: typ={getattr(response, 'typ', 'N/A')}, key_authorization={getattr(response, 'key_authorization', 'N/A')}")
         
-        success = self.storage.store_challenge(token, validation)
+        # Store challenge using sync Redis directly in the correct format
+        import json
+        from datetime import datetime, timedelta, timezone
+        challenge_key = f"challenge:{token}"
+        
+        # Create challenge token object matching what the API expects
+        challenge_data = {
+            "token": token,
+            "authorization": validation,
+            "expires_at": (datetime.now(timezone.utc) + timedelta(minutes=5)).isoformat()
+        }
+        
+        success = self._sync_redis.setex(challenge_key, 300, json.dumps(challenge_data))  # 5 minute TTL
         if not success:
             raise Exception("Failed to store challenge in Redis")
         
         # Verify storage
-        stored = self.storage.get_challenge(token)
+        stored = self._sync_redis.get(challenge_key)
         if not stored:
             raise Exception("Challenge not found after storage")
         logger.info(f"Challenge stored successfully, retrieved: {stored[:50]}...")
@@ -348,11 +384,29 @@ class ACMEClient:
     
     def renew_certificate(self, cert_name: str) -> Optional[Certificate]:
         """Renew existing certificate."""
-        # Get existing certificate
-        existing_cert = self.storage.get_certificate(cert_name)
-        if not existing_cert:
+        # Get existing certificate using sync Redis
+        import json
+        cert_json = self._sync_redis.get(f"cert:{cert_name}")
+        if not cert_json:
             logger.error(f"Certificate {cert_name} not found")
             return None
+        
+        cert_data = json.loads(cert_json)
+        from .models import Certificate
+        from datetime import datetime, timezone
+        existing_cert = Certificate(
+            cert_name=cert_data['cert_name'],
+            domains=cert_data['domains'],
+            email=cert_data['email'],
+            acme_directory_url=cert_data['acme_directory_url'],
+            status=cert_data.get('status', 'active'),
+            expires_at=datetime.fromisoformat(cert_data['expires_at']).replace(tzinfo=timezone.utc),
+            issued_at=datetime.fromisoformat(cert_data['issued_at']).replace(tzinfo=timezone.utc),
+            fingerprint=cert_data.get('fingerprint'),
+            fullchain_pem=cert_data.get('fullchain_pem'),
+            private_key_pem=cert_data.get('private_key_pem'),
+            created_by=cert_data.get('created_by')
+        )
         
         logger.info(f"Renewing certificate {cert_name}")
         
@@ -362,6 +416,5 @@ class ACMEClient:
             email=existing_cert.email,
             acme_directory_url=existing_cert.acme_directory_url,
             cert_name=cert_name,
-            owner_token_hash=existing_cert.owner_token_hash,
             created_by=existing_cert.created_by
         )

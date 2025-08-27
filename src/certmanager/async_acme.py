@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import os
+from datetime import datetime, timezone
 from typing import Dict, Any
 from concurrent.futures import ThreadPoolExecutor
 
@@ -42,18 +43,16 @@ async def generate_certificate_async(
             # Use async method directly
             certificate = await manager.create_certificate(
                 request,
-                owner_token_hash,
                 created_by
             )
         else:
             logger.info(f"[BACKGROUND_TASK] Using sync create_certificate method in executor")
             # Fall back to running sync method in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             certificate = await loop.run_in_executor(
                 executor,
                 manager.create_certificate,
                 request,
-                owner_token_hash,
                 created_by
             )
         
@@ -71,7 +70,7 @@ async def generate_multi_domain_certificate_async(
     created_by: str = None
 ) -> Certificate:
     """Generate multi-domain certificate in a thread to avoid blocking."""
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     
     # Run the blocking certificate generation in a thread
     certificate = await loop.run_in_executor(
@@ -113,7 +112,7 @@ async def create_certificate_task(
             generation_results[cert_name] = {
                 "status": "in_progress",
                 "message": f"Generating certificate for {request.domain}",
-                "started_at": asyncio.get_event_loop().time()
+                "started_at": datetime.now(timezone.utc).isoformat()
             }
             
             # Generate certificate with ownership info
@@ -171,7 +170,7 @@ async def create_certificate_task(
             generation_results[cert_name] = {
                 "status": "completed",
                 "message": f"Certificate generated successfully for {request.domain}",
-                "completed_at": asyncio.get_event_loop().time()
+                "completed_at": time.time()
             }
             
             return certificate
@@ -183,7 +182,7 @@ async def create_certificate_task(
                 "status": "failed",
                 "message": f"Certificate generation failed: {str(e)}",
                 "error": str(e),
-                "failed_at": asyncio.get_event_loop().time()
+                "failed_at": time.time()
             }
             
             raise
@@ -229,7 +228,7 @@ async def create_multi_domain_certificate_task(
             generation_results[cert_name] = {
                 "status": "in_progress",
                 "message": f"Generating certificate for {', '.join(request.domains)}",
-                "started_at": asyncio.get_event_loop().time()
+                "started_at": time.time()
             }
             
             # Generate multi-domain certificate with ownership info
@@ -284,7 +283,7 @@ async def create_multi_domain_certificate_task(
             generation_results[cert_name] = {
                 "status": "completed",
                 "message": f"Certificate generated successfully for {', '.join(request.domains)}",
-                "completed_at": asyncio.get_event_loop().time()
+                "completed_at": time.time()
             }
             
             return certificate
@@ -296,7 +295,7 @@ async def create_multi_domain_certificate_task(
                 "status": "failed",
                 "message": f"Certificate generation failed: {str(e)}",
                 "error": str(e),
-                "failed_at": asyncio.get_event_loop().time()
+                "failed_at": time.time()
             }
             
             raise
@@ -325,7 +324,7 @@ def get_generation_status(cert_name: str) -> Dict[str, Any]:
         # Clean up old results after 5 minutes
         if "completed_at" in result or "failed_at" in result:
             try:
-                elapsed = asyncio.get_event_loop().time() - result.get("completed_at", result.get("failed_at", 0))
+                elapsed = time.time() - result.get("completed_at", result.get("failed_at", 0))
                 retention_seconds = int(os.getenv('CERT_STATUS_RETENTION_SECONDS'))
                 if elapsed > retention_seconds:
                     generation_results.pop(cert_name, None)

@@ -53,7 +53,7 @@ class AsyncDockerManager:
         
         # Docker configuration
         self.docker_host = os.getenv('DOCKER_HOST')
-        self.network_name = "mcp-http-proxy_proxy_network"
+        self.network_name = "oauth-https-proxy_proxy_network"
         self.port_range = (11000, 20000)
         self.managed_label = "managed=true"
         
@@ -75,12 +75,11 @@ class AsyncDockerManager:
             logger.error(f"Failed to connect to Docker: {e}")
             raise
     
-    async def create_service(self, config: DockerServiceConfig, token_hash: str) -> DockerServiceInfo:
+    async def create_service(self, config: DockerServiceConfig) -> DockerServiceInfo:
         """Create and start a new Docker service with full tracing.
         
         Args:
             config: Service configuration
-            token_hash: Hash of the token creating this service
             
         Returns:
             Service information
@@ -95,7 +94,7 @@ class AsyncDockerManager:
         
         try:
             # Log service creation start
-            await self.logger.info(
+            self.logger.info(
                 f"Creating Docker service: {config.service_name}",
                 trace_id=trace_id,
                 image=config.image,
@@ -104,7 +103,7 @@ class AsyncDockerManager:
             
             # Build image if Dockerfile provided
             if config.dockerfile_path:
-                await self.logger.debug(
+                self.logger.debug(
                     f"Building image from Dockerfile: {config.dockerfile_path}",
                     trace_id=trace_id
                 )
@@ -112,7 +111,7 @@ class AsyncDockerManager:
                 image_tag = await self._build_image_async(config, trace_id)
                 config.image = image_tag
                 
-                await self.logger.info(
+                self.logger.info(
                     f"Built image {image_tag} for service {config.service_name}",
                     trace_id=trace_id
                 )
@@ -132,7 +131,7 @@ class AsyncDockerManager:
             try:
                 container = await self._create_container_async(config, trace_id)
                 
-                await self.logger.info(
+                self.logger.info(
                     f"Created container {container.id[:12]} for service {config.service_name}",
                     trace_id=trace_id,
                     container_id=container.id
@@ -150,7 +149,6 @@ class AsyncDockerManager:
                 status="running",
                 container_id=container.id,
                 created_at=datetime.now(timezone.utc),
-                owner_token_hash=token_hash,
                 allocated_port=0,  # Deprecated field
                 exposed_ports=config.port_configs if config.expose_ports else []
             )
@@ -159,7 +157,7 @@ class AsyncDockerManager:
             
             # Register ports with port manager
             if config.expose_ports and config.port_configs:
-                await self._register_service_ports(config, token_hash, trace_id)
+                await self._register_service_ports(config, trace_id)
             
             # Publish service created event
             await self.logger.log_service_event(
@@ -179,7 +177,7 @@ class AsyncDockerManager:
             
         except Exception as e:
             # Log failure
-            await self.logger.error(
+            self.logger.error(
                 f"Failed to create service {config.service_name}: {str(e)}",
                 trace_id=trace_id,
                 error_type=type(e).__name__
@@ -210,14 +208,14 @@ class AsyncDockerManager:
         self.logger.add_span(trace_id, "build_image", 
                             dockerfile=config.dockerfile_path)
         
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         image_tag = await loop.run_in_executor(
             executor,
             self._sync_build_image,
             config
         )
         
-        await self.logger.debug(
+        self.logger.debug(
             f"Image build completed: {image_tag}",
             trace_id=trace_id
         )
@@ -249,7 +247,7 @@ class AsyncDockerManager:
             First exposed port or None
         """
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             exposed_port = await loop.run_in_executor(
                 executor,
                 self._sync_detect_ports,
@@ -257,7 +255,7 @@ class AsyncDockerManager:
             )
             
             if exposed_port:
-                await self.logger.debug(
+                self.logger.debug(
                     f"Detected exposed port {exposed_port} from image {image_tag}",
                     trace_id=trace_id
                 )
@@ -265,7 +263,7 @@ class AsyncDockerManager:
             return exposed_port
             
         except Exception as e:
-            await self.logger.warning(
+            self.logger.warning(
                 f"Failed to detect exposed ports: {e}",
                 trace_id=trace_id
             )
@@ -301,7 +299,7 @@ class AsyncDockerManager:
                 )
                 
                 if allocated_port != port_config['host']:
-                    await self.logger.warning(
+                    self.logger.warning(
                         f"Could not allocate requested port {port_config['host']}, got {allocated_port}",
                         trace_id=trace_id
                     )
@@ -309,7 +307,7 @@ class AsyncDockerManager:
                 
                 allocated_ports.append(allocated_port)
                 
-                await self.logger.debug(
+                self.logger.debug(
                     f"Allocated port {allocated_port} for {port_config['name']}",
                     trace_id=trace_id
                 )
@@ -335,7 +333,7 @@ class AsyncDockerManager:
         self.logger.add_span(trace_id, "create_container",
                             image=config.image)
         
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         container = await loop.run_in_executor(
             executor,
             self._sync_create_container,
@@ -347,14 +345,13 @@ class AsyncDockerManager:
     def _sync_create_container(self, config: DockerServiceConfig):
         """Synchronously create Docker container."""
         # Prepare port bindings
-        ports = {}
+        publish = []
         if config.expose_ports and config.port_configs:
             for port_config in config.port_configs:
                 bind_address = port_config.get('bind', config.bind_address)
-                # python-on-whales format: (host_binding, container_port)
-                ports[f"{port_config['container']}/{port_config.get('protocol', 'tcp')}"] = (
-                    f"{bind_address}:{port_config['host']}",
-                    port_config['container']
+                # python-on-whales format: "host:port:container/protocol"
+                publish.append(
+                    f"{bind_address}:{port_config['host']}:{port_config['container']}/{port_config.get('protocol', 'tcp')}"
                 )
         
         # Create and start container
@@ -362,17 +359,16 @@ class AsyncDockerManager:
             config.image,
             name=config.service_name,
             detach=True,
-            ports=ports,
-            environment=config.environment or {},
+            publish=publish if publish else [],
+            envs=config.environment or {},
             networks=[self.network_name],
             labels={
                 self.managed_label: "true",
                 "service": config.service_name,
                 **(config.labels or {})
             },
-            command=config.command,
-            mem_limit=config.memory_limit,
-            cpus=config.cpu_limit
+            memory=config.memory_limit,
+            cpus=str(config.cpu_limit)
         )
         
         return container
@@ -389,18 +385,16 @@ class AsyncDockerManager:
         
         await self.storage.redis_client.set(key, value)
         
-        await self.logger.debug(
+        self.logger.debug(
             f"Stored service info for {service_info.service_name}",
             trace_id=trace_id
         )
     
-    async def _register_service_ports(self, config: DockerServiceConfig, 
-                                     token_hash: str, trace_id: str):
+    async def _register_service_ports(self, config: DockerServiceConfig, trace_id: str):
         """Register service ports with port manager.
         
         Args:
             config: Service configuration
-            token_hash: Owner token hash
             trace_id: Trace ID for correlation
         """
         for port_config in config.port_configs:
@@ -411,16 +405,12 @@ class AsyncDockerManager:
                 container_port=port_config['container'],
                 bind_address=port_config.get('bind', config.bind_address),
                 protocol=port_config.get('protocol', 'tcp'),
-                source_token_hash=port_config.get('source_token_hash'),
-                source_token_name=port_config.get('source_token_name'),
-                require_token=bool(port_config.get('source_token')),
-                owner_token_hash=token_hash,
                 description=port_config.get('description')
             )
             
             await self.port_manager.add_service_port(service_port)
             
-            await self.logger.debug(
+            self.logger.debug(
                 f"Registered port {service_port.port_name} for service {config.service_name}",
                 trace_id=trace_id
             )
@@ -473,14 +463,13 @@ class AsyncDockerManager:
                 memory_limit=updates.memory_limit or service_info.memory_limit,
                 cpu_limit=updates.cpu_limit or service_info.cpu_limit,
                 environment=updates.environment or service_info.environment,
-                command=service_info.command,
                 networks=service_info.networks,
                 labels=updates.labels or service_info.labels,
                 expose_ports=service_info.expose_ports,
                 port_configs=service_info.port_configs,
                 bind_address=service_info.bind_address
             )
-            return await self.create_service(config, service_info.owner_token_hash)
+            return await self.create_service(config)
         
         # Store updated service info
         key = f"docker_service:{service_name}"
@@ -518,13 +507,13 @@ class AsyncDockerManager:
                                           service_name=service_name)
         
         try:
-            await self.logger.info(
+            self.logger.info(
                 f"Starting service {service_name}",
                 trace_id=trace_id
             )
             
             # Start container in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 executor,
                 self._sync_start_container,
@@ -545,7 +534,7 @@ class AsyncDockerManager:
             return True
             
         except Exception as e:
-            await self.logger.error(
+            self.logger.error(
                 f"Failed to start service {service_name}: {e}",
                 trace_id=trace_id
             )
@@ -578,13 +567,13 @@ class AsyncDockerManager:
                                           service_name=service_name)
         
         try:
-            await self.logger.info(
+            self.logger.info(
                 f"Stopping service {service_name}",
                 trace_id=trace_id
             )
             
             # Stop container in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 executor,
                 self._sync_stop_container,
@@ -605,7 +594,7 @@ class AsyncDockerManager:
             return True
             
         except Exception as e:
-            await self.logger.error(
+            self.logger.error(
                 f"Failed to stop service {service_name}: {e}",
                 trace_id=trace_id
             )
@@ -640,7 +629,7 @@ class AsyncDockerManager:
                                           force=force)
         
         try:
-            await self.logger.info(
+            self.logger.info(
                 f"Deleting service {service_name} (force={force})",
                 trace_id=trace_id
             )
@@ -649,7 +638,7 @@ class AsyncDockerManager:
             await self.port_manager.remove_all_service_ports(service_name)
             
             # Delete container in executor
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             await loop.run_in_executor(
                 executor,
                 self._sync_delete_container,
@@ -672,7 +661,7 @@ class AsyncDockerManager:
             return True
             
         except Exception as e:
-            await self.logger.error(
+            self.logger.error(
                 f"Failed to delete service {service_name}: {e}",
                 trace_id=trace_id
             )
@@ -714,7 +703,7 @@ class AsyncDockerManager:
                                           service_name=service_name)
         
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             logs = await loop.run_in_executor(
                 executor,
                 self._sync_get_logs,
@@ -723,7 +712,7 @@ class AsyncDockerManager:
                 timestamps
             )
             
-            await self.logger.debug(
+            self.logger.debug(
                 f"Retrieved {len(logs.splitlines())} log lines for {service_name}",
                 trace_id=trace_id
             )
@@ -732,7 +721,7 @@ class AsyncDockerManager:
             return logs
             
         except Exception as e:
-            await self.logger.error(
+            self.logger.error(
                 f"Failed to get logs for {service_name}: {e}",
                 trace_id=trace_id
             )
@@ -757,14 +746,14 @@ class AsyncDockerManager:
                                           service_name=service_name)
         
         try:
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             stats = await loop.run_in_executor(
                 executor,
                 self._sync_get_stats,
                 service_name
             )
             
-            await self.logger.debug(
+            self.logger.debug(
                 f"Retrieved stats for {service_name}",
                 trace_id=trace_id,
                 cpu_percent=stats.cpu_percent,
@@ -775,7 +764,7 @@ class AsyncDockerManager:
             return stats
             
         except Exception as e:
-            await self.logger.error(
+            self.logger.error(
                 f"Failed to get stats for {service_name}: {e}",
                 trace_id=trace_id
             )
@@ -824,16 +813,13 @@ class AsyncDockerManager:
             service_info['status'] = status
             await self.storage.redis_client.set(key, json.dumps(service_info))
             
-            await self.logger.debug(
+            self.logger.debug(
                 f"Updated service {service_name} status to {status}",
                 trace_id=trace_id
             )
     
-    async def list_services(self, owner_hash: Optional[str] = None) -> List[DockerServiceInfo]:
+    async def list_services(self) -> List[DockerServiceInfo]:
         """List all managed Docker services.
-        
-        Args:
-            owner_hash: Optional token hash to filter by owner
         
         Returns:
             List of service information
@@ -845,9 +831,7 @@ class AsyncDockerManager:
             if service_data:
                 try:
                     service_info = DockerServiceInfo.parse_raw(service_data)
-                    # Filter by owner if specified
-                    if owner_hash is None or service_info.owner_token_hash == owner_hash:
-                        services.append(service_info)
+                    services.append(service_info)
                 except Exception as e:
                     logger.error(f"Failed to parse service data: {e}")
         
@@ -891,7 +875,7 @@ class AsyncDockerManager:
         
         try:
             # Get all containers with our label
-            loop = asyncio.get_event_loop()
+            loop = asyncio.get_running_loop()
             containers = await loop.run_in_executor(
                 executor,
                 self._sync_list_containers
@@ -903,7 +887,7 @@ class AsyncDockerManager:
             # Find orphaned containers
             for container in containers:
                 if container.name not in redis_services:
-                    await self.logger.warning(
+                    self.logger.warning(
                         f"Found orphaned container: {container.name}",
                         trace_id=trace_id
                     )
@@ -916,17 +900,17 @@ class AsyncDockerManager:
                         )
                         cleaned += 1
                         
-                        await self.logger.info(
+                        self.logger.info(
                             f"Removed orphaned container: {container.name}",
                             trace_id=trace_id
                         )
                     except Exception as e:
-                        await self.logger.error(
+                        self.logger.error(
                             f"Failed to remove orphaned container {container.name}: {e}",
                             trace_id=trace_id
                         )
             
-            await self.logger.info(
+            self.logger.info(
                 f"Cleaned up {cleaned} orphaned services",
                 trace_id=trace_id
             )
@@ -935,7 +919,7 @@ class AsyncDockerManager:
             return cleaned
             
         except Exception as e:
-            await self.logger.error(
+            self.logger.error(
                 f"Failed during orphaned service cleanup: {e}",
                 trace_id=trace_id
             )

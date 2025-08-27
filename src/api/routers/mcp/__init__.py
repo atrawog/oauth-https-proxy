@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import sys
 from datetime import datetime, timezone
 from .server import init_mcp_server
 from . import tools
@@ -21,35 +22,74 @@ def mount_mcp(app, storage, unified_logger):
     from ....shared.logger import log_info, log_debug, log_error
     
     try:
-        log_info("Initializing MCP server...", component="mcp")
+        # Use multiple logging methods for visibility
+        separator = "=" * 60
+        log_info(separator, component="mcp")
+        log_info("MCP SERVER INITIALIZATION STARTING", component="mcp")
+        log_info(separator, component="mcp")
+        
+        # Also print to stderr for Docker logs
+        print(f"\n{separator}", file=sys.stderr, flush=True)
+        print(f"MCP SERVER INITIALIZATION STARTING at {datetime.now(timezone.utc).isoformat()}", file=sys.stderr, flush=True)
+        print(separator, file=sys.stderr, flush=True)
         
         # Initialize server with proper dependencies
         server = init_mcp_server(storage, unified_logger)
-        log_debug(f"MCP server created: {server}", component="mcp")
+        log_info(f"MCP server instance created successfully", component="mcp")
         
         # Setup all tools
-        log_info("Setting up MCP tools...", component="mcp")
+        log_info("Registering MCP tools...", component="mcp")
         tool_count = tools.setup_tools(server)
-        log_info(f"Setup {tool_count} tools", component="mcp")
         
-        # Log tool names
+        # Get tool names after registration
         tool_names = list(server.tools.keys()) if server.tools else []
-        log_info(
-            f"MCP server initialized with {tool_count} tools: {tool_names}",
-            component="mcp",
-            tools=tool_names[:10]  # Log first 10 tool names
-        )
+        
+        # Log detailed tool registration with enhanced visibility
+        log_info("=" * 60, component="mcp")
+        log_info(f"MCP TOOLS REGISTERED: {tool_count} tools", component="mcp")
+        log_info("=" * 60, component="mcp")
+        
+        # Print to stderr for visibility
+        print(f"\n{separator}", file=sys.stderr, flush=True)
+        print(f"🔧 MCP TOOLS REGISTERED: {tool_count} tools", file=sys.stderr, flush=True)
+        print(separator, file=sys.stderr, flush=True)
+        
+        # Log each tool name individually for clarity
+        if tool_names:
+            for i, name in enumerate(tool_names, 1):
+                log_info(f"  {i:2d}. {name}", component="mcp", tool_name=name)
+                if i <= 5:  # Print first 5 to stderr for visibility
+                    print(f"  {i:2d}. {name}", file=sys.stderr, flush=True)
+            if len(tool_names) > 5:
+                print(f"  ... and {len(tool_names) - 5} more tools", file=sys.stderr, flush=True)
+        else:
+            log_error("  ❌ NO TOOLS REGISTERED!", component="mcp")
+            print("  ❌ NO TOOLS REGISTERED!", file=sys.stderr, flush=True)
+        
+        log_info("=" * 60, component="mcp")
         
         # Verify tools are actually registered
         if not server.tools:
-            log_error("WARNING: No tools registered with MCP server!", component="mcp")
+            log_error("CRITICAL: No tools registered with MCP server!", component="mcp")
+            log_error("This will prevent Claude.ai from seeing any tools!", component="mcp")
         else:
-            log_info(f"Tools successfully registered: {', '.join(tool_names)}", component="mcp")
+            log_info(f"✅ All {tool_count} tools successfully registered and ready", component="mcp")
         
         # Create ASGI wrapper instead of mounting directly
         from .asgi_wrapper import MCPASGIWrapper
         wrapper = MCPASGIWrapper(app, server.app)
-        log_info("Created ASGI wrapper to bypass FastAPI middleware for /mcp", component="mcp")
+        log_info("Created ASGI wrapper to bypass FastAPI middleware", component="mcp")
+        
+        log_info("=" * 60, component="mcp")
+        log_info("✅ MCP SERVER READY AT /mcp", component="mcp")
+        log_info(f"✅ {tool_count} tools available for LLM integration", component="mcp")
+        log_info("=" * 60, component="mcp")
+        
+        # Print final status to stderr
+        print(f"{separator}", file=sys.stderr, flush=True)
+        print(f"✅ MCP SERVER READY AT /mcp", file=sys.stderr, flush=True)
+        print(f"✅ {tool_count} tools available for LLM integration", file=sys.stderr, flush=True)
+        print(f"{separator}\n", file=sys.stderr, flush=True)
         
         # Publish startup event (fire-and-forget)
         try:

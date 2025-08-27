@@ -1325,6 +1325,200 @@ class MCPComplianceTest:
                 duration_ms=(time.time() - start_time) * 1000,
             )
     
+    async def test_proactive_tool_announcements(self) -> ComplianceTestResult:
+        """Test that tools are proactively announced to clients.
+        
+        This tests the enhanced behavior where:
+        1. SSE hello includes tools_available count
+        2. Tools are pushed after client sends initialized notification
+        3. SSE stream includes tools availability announcement
+        """
+        self.log("Testing proactive tool announcements...", "TOOL")
+        start_time = time.time()
+        
+        try:
+            async with httpx.AsyncClient(verify=False, timeout=10) as client:
+                # Step 1: Initialize session (Claude.ai pattern)
+                self.log("Initializing session as Claude.ai...", "DEBUG")
+                init_response = await client.post(
+                    self.mcp_url,
+                    json={
+                        "method": "initialize",
+                        "params": {
+                            "protocolVersion": "2025-06-18",
+                            "capabilities": {},
+                            "clientInfo": {
+                                "name": "Anthropic/ClaudeAI",
+                                "version": "1.0.0"
+                            }
+                        },
+                        "jsonrpc": "2.0",
+                        "id": 0
+                    },
+                    headers={
+                        "Accept": "application/json, text/event-stream",
+                        "User-Agent": "Claude-User"
+                    }
+                )
+                
+                session_id = init_response.headers.get("mcp-session-id", init_response.headers.get("Mcp-Session-Id"))
+                self.log(f"Session initialized: {session_id}", "DEBUG")
+                
+                # Step 2: Send initialized notification
+                self.log("Sending initialized notification...", "DEBUG")
+                notif_response = await client.post(
+                    self.mcp_url,
+                    json={
+                        "jsonrpc": "2.0",
+                        "method": "notifications/initialized"
+                    },
+                    headers={
+                        "Accept": "application/json, text/event-stream",
+                        "mcp-session-id": session_id,
+                        "User-Agent": "Claude-User"
+                    }
+                )
+                
+                # Should return 202 for notifications
+                if notif_response.status_code != 202:
+                    self.log(f"Warning: Expected 202 for notification, got {notif_response.status_code}", "WARNING")
+                
+                # Step 3: Open SSE stream to check for proactive announcements
+                self.log("Opening SSE stream to check for tool announcements...", "DEBUG")
+                tools_found_in_hello = False
+                tools_announced = False
+                tools_available_count = 0
+                
+                async with client.stream(
+                    "GET",
+                    self.mcp_url,
+                    headers={
+                        "Accept": "text/event-stream",
+                        "mcp-session-id": session_id,
+                        "User-Agent": "Claude-User"
+                    },
+                    timeout=3.0
+                ) as response:
+                    if response.status_code != 200:
+                        return ComplianceTestResult(
+                            "Proactive Tool Announcements",
+                            TestCategory.TOOLS_ADVANCED,
+                            False,
+                            f"Failed to open SSE stream: HTTP {response.status_code}",
+                            spec_reference="Enhanced tool discovery for Claude.ai compatibility",
+                            duration_ms=(time.time() - start_time) * 1000,
+                        )
+                    
+                    chunks_received = 0
+                    max_wait_time = 2.0  # Reduced from 5.0 seconds
+                    start_stream_time = time.time()
+                    
+                    async for line in response.aiter_lines():
+                        if line.startswith("data:"):
+                            data = line[5:].strip()
+                            try:
+                                msg = json.loads(data)
+                                self.log(f"SSE Message: {msg.get('type', msg.get('method', 'unknown'))}", "DEBUG")
+                                
+                                # Check if hello includes tools_available
+                                if msg.get('type') == 'hello' and 'tools_available' in msg:
+                                    tools_available_count = msg.get('tools_available', 0)
+                                    tools_found_in_hello = True
+                                    self.log(f"✅ Hello includes tools_available: {tools_available_count}", "SUCCESS")
+                                
+                                # Check for tools announcements
+                                if 'tools' in str(msg).lower() or msg.get('method', '').endswith('/tools/available'):
+                                    tools_announced = True
+                                    self.log(f"✅ Tools proactively announced via SSE", "SUCCESS")
+                                    
+                                    # Check if it includes actual tool data
+                                    if msg.get('params', {}).get('tools'):
+                                        tool_count = len(msg['params']['tools'])
+                                        self.log(f"  - Announced {tool_count} tools proactively", "DEBUG")
+                                
+                            except json.JSONDecodeError:
+                                pass
+                        
+                        chunks_received += 1
+                        
+                        # Exit early if we found what we need
+                        if tools_found_in_hello and tools_announced:
+                            self.log("Found all proactive announcements, exiting SSE stream early", "DEBUG")
+                            break
+                        
+                        # Also exit if we've waited too long or received enough chunks
+                        if chunks_received > 5 or (time.time() - start_stream_time) > max_wait_time:
+                            break
+                
+                # Step 4: Verify tools are accessible even without explicit request
+                # (Fallback test - explicitly request to verify they exist)
+                self.log("Verifying tools are actually available...", "DEBUG")
+                tools_response = await client.post(
+                    self.mcp_url,
+                    json={
+                        "method": "tools/list",
+                        "params": {},
+                        "jsonrpc": "2.0",
+                        "id": 1
+                    },
+                    headers={
+                        "mcp-session-id": session_id,
+                        "Accept": "application/json"
+                    }
+                )
+                
+                actual_tools_count = 0
+                if tools_response.status_code == 200:
+                    tools_data = tools_response.json()
+                    if tools_data.get('result', {}).get('tools'):
+                        actual_tools_count = len(tools_data['result']['tools'])
+                
+                # Evaluate results
+                passed = True
+                warnings = []
+                details = {
+                    "tools_in_hello": tools_found_in_hello,
+                    "tools_announced": tools_announced,
+                    "hello_tool_count": tools_available_count,
+                    "actual_tool_count": actual_tools_count
+                }
+                
+                if not tools_found_in_hello:
+                    warnings.append("Hello message doesn't include tools_available count")
+                    passed = False
+                
+                if not tools_announced:
+                    warnings.append("Tools not proactively announced via SSE")
+                    passed = False
+                
+                if tools_available_count != actual_tools_count and tools_available_count > 0:
+                    warnings.append(f"Hello reports {tools_available_count} tools but actually has {actual_tools_count}")
+                
+                message = "Proactive announcements working" if passed else "Missing proactive tool announcements"
+                if tools_found_in_hello:
+                    message += f" (hello shows {tools_available_count} tools)"
+                
+                return ComplianceTestResult(
+                    "Proactive Tool Announcements",
+                    TestCategory.TOOLS_ADVANCED,
+                    passed,
+                    message,
+                    spec_reference="Enhanced tool discovery for Claude.ai compatibility",
+                    duration_ms=(time.time() - start_time) * 1000,
+                    details=details,
+                    warnings=warnings
+                )
+                
+        except Exception as e:
+            return ComplianceTestResult(
+                "Proactive Tool Announcements",
+                TestCategory.TOOLS_ADVANCED,
+                False,
+                f"Error: {e}",
+                spec_reference="Enhanced tool discovery",
+                duration_ms=(time.time() - start_time) * 1000,
+            )
+    
     # ============================================================================
     # PROTOCOL TESTS
     # ============================================================================
@@ -1733,13 +1927,8 @@ class MCPComplianceTest:
                 else:
                     tests_passed.append(False)
                 
-                # Test 2: Missing jsonrpc field should fail
-                # NOTE: This test has incorrect assumptions. Per JSON-RPC 2.0 spec,
-                # errors should return HTTP 200 with error in the response body.
-                # The test expects HTTP status != 200, but our implementation correctly
-                # returns HTTP 200 with {"error": {"code": -32600, "message": "..."}}.
-                # This is why we get 2/3 tests passing - our implementation is MORE
-                # correct than what the test expects!
+                # Test 2: Missing jsonrpc field should return error
+                # Per JSON-RPC 2.0 spec, errors return HTTP 200 with error in body
                 response = await client.post(
                     self.mcp_url,
                     json={
@@ -1749,9 +1938,15 @@ class MCPComplianceTest:
                     },
                     headers={"Mcp-Session-Id": session_id}
                 )
-                tests_passed.append(response.status_code != 200)
+                if response.status_code == 200:
+                    data = response.json()
+                    # Check for proper error response
+                    has_error = "error" in data and data.get("error", {}).get("code") == -32600
+                    tests_passed.append(has_error)
+                else:
+                    tests_passed.append(False)
                 
-                # Test 3: Notification (no id) should work
+                # Test 3: Notification (no id) should return 202 Accepted
                 response = await client.post(
                     self.mcp_url,
                     json={
@@ -1761,9 +1956,10 @@ class MCPComplianceTest:
                     },
                     headers={"Mcp-Session-Id": session_id}
                 )
-                tests_passed.append(response.status_code == 200)
+                # Notifications should return 202 Accepted with no body
+                tests_passed.append(response.status_code == 202 and not response.text)
                 
-                passed = sum(tests_passed) >= 2  # At least 2/3 tests should pass
+                passed = sum(tests_passed) >= 3  # All 3 tests should pass
                 
                 return ComplianceTestResult(
                     "JSON-RPC Compliance",
@@ -2634,6 +2830,7 @@ class MCPComplianceTest:
                 self.test_tool_invalid_call(),
                 self.test_tool_parameter_validation(),
                 self.test_tool_concurrent_execution(),
+                self.test_proactive_tool_announcements(),  # Test proactive tool discovery
                 return_exceptions=False
             ))
         
