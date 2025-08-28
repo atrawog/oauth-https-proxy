@@ -18,6 +18,7 @@ from ..consumers.metrics_processor import MetricsProcessor
 from ..consumers.alert_manager import AlertManager
 from ..docker.async_manager import AsyncDockerManager
 from ..certmanager.async_manager import AsyncCertificateManager
+from ..logging.oauth_events import init_oauth_logger
 
 logger = logging.getLogger(__name__)
 
@@ -91,6 +92,10 @@ class AsyncComponents:
             
             self.cert_manager = AsyncCertificateManager(self.async_storage, self.redis_clients)
             logger.info("Async Certificate manager initialized")
+            
+            # Initialize OAuth event logger
+            await init_oauth_logger(self.redis_clients.async_redis)
+            logger.info("OAuth event logger initialized")
             
             # Initialize consumers
             self.metrics_processor = MetricsProcessor(self.redis_clients.stream_redis)

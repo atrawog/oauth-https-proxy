@@ -117,21 +117,27 @@ def register_all_routers(app: FastAPI):
         "Docker service management"
     ))
     
-    # OAuth status endpoints (optional)
-    if hasattr(app.state, 'oauth_components'):
-        routers_config.append((
-            "oauth_status",
-            lambda: _create_oauth_status_router(storage),
-            "/oauth",
-            "OAuth status and metadata"
-        ))
-        
-        routers_config.append((
-            "oauth_admin",
-            lambda: _create_oauth_admin_router(storage),
-            "/oauth",
-            "OAuth admin endpoints"
-        ))
+    # OAuth endpoints (always enabled)
+    routers_config.append((
+        "oauth_status",
+        lambda: _create_oauth_status_router(storage),
+        "/oauth",
+        "OAuth status and metadata"
+    ))
+    
+    routers_config.append((
+        "oauth_admin",
+        lambda: _create_oauth_admin_router(storage),
+        "/oauth",
+        "OAuth admin endpoints"
+    ))
+    
+    routers_config.append((
+        "oauth_events",
+        lambda: _create_oauth_events_router(),
+        "/oauth",
+        "OAuth event queries"
+    ))
     
     # Log query endpoints
     routers_config.append((
@@ -265,6 +271,12 @@ def _create_oauth_admin_router(storage) -> APIRouter:
     """Create OAuth admin router."""
     from .oauth.oauth_admin import create_router
     return create_router(storage)
+
+
+def _create_oauth_events_router() -> APIRouter:
+    """Create OAuth events router."""
+    from .oauth.events import router
+    return router
 
 
 def _create_logs_router(async_storage) -> APIRouter:

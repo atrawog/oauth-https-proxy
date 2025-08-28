@@ -124,6 +124,19 @@ oauth *args:
 log *args:
     @pixi run proxy-client log {{args}}
 
+# Generate comprehensive connection report for IP to proxy
+report ip proxy hours="24" output="":
+    #!/usr/bin/env bash
+    if [ -z "{{output}}" ]; then
+        pixi run proxy-client report connection {{ip}} {{proxy}} --hours {{hours}}
+    else
+        pixi run proxy-client report connection {{ip}} {{proxy}} --hours {{hours}} --output {{output}}
+    fi
+
+# Generate summary report for IP to proxy connections
+report-summary ip proxy hours="24":
+    @pixi run proxy-client report summary {{ip}} {{proxy}} --hours {{hours}}
+
 # System management
 system *args:
     @pixi run proxy-client system {{args}}

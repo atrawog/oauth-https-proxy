@@ -26,6 +26,12 @@ from ...shared.logger import log_debug, log_info, log_warning, log_error, log_tr
 from ...shared.config import Config
 from ...shared.client_ip import get_real_client_ip
 from ...shared.dns_resolver import get_dns_resolver
+from ...shared.sanitizer import OAuthSanitizer
+from ...logging.oauth_events import (
+    OAuthEventLogger,
+    init_oauth_logger,
+    log_oauth_event
+)
 
 # Set up logging
 
@@ -620,6 +626,9 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Get proxy hostname from headers
         proxy_hostname_from_header = request.headers.get('x-forwarded-host', request.headers.get('host', 'unknown'))
         
+        # Create sanitizer for logging
+        sanitizer = OAuthSanitizer()
+        
         log_info(
             "OAuth authorization request - DETAILED WITH RESOURCES",
             proxy_hostname=proxy_hostname_from_header,
@@ -628,7 +637,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             client_id=client_id,
             redirect_uri=redirect_uri,
             scope=scope,
-            state=state,
+            state=sanitizer.sanitize_token(state),
             resource=resource,
             resource_count=len(resource) if resource else 0,
             resource_details=[{"uri": r, "is_valid_url": r.startswith(("http://", "https://"))} for r in (resource or [])],
@@ -636,7 +645,26 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             code_challenge_method=code_challenge_method if code_challenge else None,
             response_type=response_type,
             request_url=str(request.url),
-            request_headers={k: v for k, v in request.headers.items() if k.lower() not in ['authorization', 'cookie']}
+            request_headers=sanitizer.sanitize_headers({k: v for k, v in request.headers.items()})
+        )
+        
+        # Log OAuth authorization request event
+        await log_oauth_event(
+            event_type=OAuthEventLogger.EVENT_AUTH_REQUEST,
+            client_ip=client_ip,
+            proxy_hostname=proxy_hostname or proxy_hostname_from_header,
+            client_id=client_id,
+            event_data={
+                "redirect_uri": redirect_uri,
+                "response_type": response_type,
+                "scope": scope,
+                "state": sanitizer.sanitize_token(state),
+                "code_challenge": sanitizer.sanitize_token(code_challenge) if code_challenge else None,
+                "code_challenge_method": code_challenge_method,
+                "resource": resource,
+                "pkce_enabled": bool(code_challenge),
+                "client_hostname": client_hostname
+            }
         )
         
         # Log request with OAuth context
@@ -1055,15 +1083,35 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
     
     async def _handle_oauth_callback(request, code, state, error, error_description, redis_client, client_ip):
         
+        # Create sanitizer for logging
+        sanitizer = OAuthSanitizer()
+        
         log_info(
             "OAuth callback received from GitHub",
             client_ip=client_ip,
-            state=state,
-            code_preview=f"{code[:8]}..." if code else "no code",
+            state=sanitizer.sanitize_token(state),
+            code_preview=sanitizer.sanitize_token(code) if code else "no code",
             host_header=request.headers.get("host"),
             x_forwarded_host=request.headers.get("x-forwarded-host"),
             full_url=str(request.url),
+            error=error,
+            error_description=error_description,
             component="oauth_callback"
+        )
+        
+        # Log OAuth callback event
+        await log_oauth_event(
+            event_type=OAuthEventLogger.EVENT_AUTH_CALLBACK,
+            client_ip=client_ip,
+            success=not error,
+            error_reason=error_description if error else None,
+            event_data={
+                "state": sanitizer.sanitize_token(state),
+                "code": sanitizer.sanitize_token(code) if code else None,
+                "error": error,
+                "error_description": error_description,
+                "auth_source": "github"
+            }
         )
         
         # Log request with OAuth context
@@ -1229,6 +1277,8 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         # Assign scopes based on proxy configuration and GitHub username
         github_user = user_info.get("login")
+        github_email = user_info.get("email", "")
+        github_orgs = user_info.get("organizations", [])
         assigned_scopes = []
         
         # Get proxy configuration for scope assignment
@@ -1289,16 +1339,40 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         # Clean up state
         await redis_client.delete(f"oauth:state:{state}")
         
+        # Log comprehensive OAuth authorization success
+        sanitizer = OAuthSanitizer()
         log_info(
             "OAuth authorization code generated",
             client_ip=client_ip,
             client_id=auth_data.get('client_id'),
             user_id=str(user_info.get("id", "unknown")),
-            username=user_info.get("login", "unknown"),
-            email=user_info.get("email", ""),
+            username=github_user,
+            email=sanitizer.sanitize_email(github_email) if github_email else None,
             scope=auth_data.get("scope"),
+            assigned_scopes=assigned_scopes,
             resources=auth_data.get("resources"),
             redirect_uri=auth_data.get("redirect_uri", "")
+        )
+        
+        # Log successful GitHub authentication with scope assignment
+        await log_oauth_event(
+            event_type="github_auth_success",
+            client_ip=client_ip,
+            proxy_hostname=proxy_hostname,
+            user_id=github_user,
+            client_id=auth_data.get('client_id'),
+            success=True,
+            event_data={
+                "github_user_id": str(user_info.get("id")),
+                "github_username": github_user,
+                "github_email": sanitizer.sanitize_email(github_email) if github_email else None,
+                "github_orgs": github_orgs,
+                "assigned_scope": " ".join(assigned_scopes),
+                "requested_scope": auth_data.get("scope"),
+                "resources": auth_data.get("resources"),
+                "scope_assignment_source": "proxy_config" if proxy else "default",
+                "auth_code": sanitizer.sanitize_token(auth_code)
+            }
         )
 
         # Handle out-of-band redirect URI

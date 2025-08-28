@@ -22,6 +22,12 @@ from ..shared.logger import log_debug, log_info, log_warning, log_error, log_tra
 from ..shared.dual_logger import create_dual_logger
 from ..shared.dns_resolver import get_dns_resolver
 from ..proxy.auth_exclusions import merge_exclusions
+from ..shared.sanitizer import OAuthSanitizer
+from ..logging.oauth_events import (
+    log_oauth_event, 
+    log_oauth_validation,
+    OAuthEventLogger
+)
 
 # Create dual logger for critical proxy errors that need to be visible in BOTH Docker and Redis
 dual_logger = create_dual_logger('proxy_handler')
@@ -193,9 +199,13 @@ class UnifiedProxyHandler:
         """
         if log_ctx is None:
             log_ctx = {}
+        
+        start_time = time.time()
+        sanitizer = OAuthSanitizer()
+        token_preview = sanitizer.sanitize_token(token) if token else "NO_TOKEN"
             
         try:
-            log_info(f"Starting OAuth JWT validation", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN", **log_ctx)
+            log_info(f"Starting OAuth JWT validation", component="proxy_handler", token_preview=token_preview, **log_ctx)
             
             # Get public key for validation from Redis (single source of truth)
             log_info("Getting OAuth public key from Redis", component="proxy_handler", **log_ctx)
@@ -243,23 +253,90 @@ class UnifiedProxyHandler:
                 
                 log_info(f"Audience validation successful", component="proxy_handler", **log_ctx)
             
+            # Log comprehensive JWT validation with sanitized claims
+            duration_ms = (time.time() - start_time) * 1000
+            sanitized_claims = sanitizer.sanitize_jwt_claims(payload)
+            
             log_info(
-                f"JWT validated successfully: sub={payload.get('sub')}, scope={payload.get('scope')}, aud={payload.get('aud')}",
+                f"JWT validated successfully",
                 component="proxy_handler",
+                duration_ms=duration_ms,
+                jwt_claims=sanitized_claims,
+                token_preview=token_preview,
+                **log_ctx
+            )
+            
+            # Log detailed OAuth validation event
+            await log_oauth_validation(
+                client_ip=log_ctx.get('client_ip', 'unknown'),
+                proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+                token_preview=token_preview,
+                jwt_claims=sanitized_claims,
+                validation_result=True,
+                duration_ms=duration_ms
+            )
+            
+            # Log individual validation checks
+            log_debug(
+                "JWT validation details",
+                component="proxy_handler",
+                claims_present=list(payload.keys()),
+                token_age_seconds=time.time() - payload.get('iat', 0) if payload.get('iat') else None,
+                expires_in_seconds=payload.get('exp', 0) - time.time() if payload.get('exp') else None,
+                scope_list=payload.get('scope', '').split() if payload.get('scope') else [],
+                audience_list=audience if 'audience' in locals() else payload.get('aud'),
                 **log_ctx
             )
             
             return payload
             
         except jwt.ExpiredSignatureError as e:
-            log_warning(f"JWT token expired: {e}", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN", **log_ctx)
+            duration_ms = (time.time() - start_time) * 1000
+            log_warning(f"JWT token expired: {e}", component="proxy_handler", token_preview=token_preview, **log_ctx)
+            
+            # Log failed validation event
+            await log_oauth_validation(
+                client_ip=log_ctx.get('client_ip', 'unknown'),
+                proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+                token_preview=token_preview,
+                jwt_claims={},
+                validation_result=False,
+                error_reason="Token expired",
+                duration_ms=duration_ms
+            )
             return None
+            
         except jwt.InvalidTokenError as e:
-            log_warning(f"Invalid JWT token: {e}", component="proxy_handler", token_preview=token[:30] if token else "NO_TOKEN", error_type=type(e).__name__, **log_ctx)
+            duration_ms = (time.time() - start_time) * 1000
+            log_warning(f"Invalid JWT token: {e}", component="proxy_handler", token_preview=token_preview, error_type=type(e).__name__, **log_ctx)
+            
+            # Log failed validation event
+            await log_oauth_validation(
+                client_ip=log_ctx.get('client_ip', 'unknown'),
+                proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+                token_preview=token_preview,
+                jwt_claims={},
+                validation_result=False,
+                error_reason=f"Invalid token: {type(e).__name__}",
+                duration_ms=duration_ms
+            )
             return None
+            
         except Exception as e:
-            log_error(f"Unexpected error validating JWT: {e}", component="proxy_handler", error_type=type(e).__name__, token_preview=token[:30] if token else "NO_TOKEN", **log_ctx)
+            duration_ms = (time.time() - start_time) * 1000
+            log_error(f"Unexpected error validating JWT: {e}", component="proxy_handler", error_type=type(e).__name__, token_preview=token_preview, **log_ctx)
             log_error(f"Traceback: {traceback.format_exc()}", component="proxy_handler", **log_ctx)
+            
+            # Log failed validation event
+            await log_oauth_validation(
+                client_ip=log_ctx.get('client_ip', 'unknown'),
+                proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+                token_preview=token_preview,
+                jwt_claims={},
+                validation_result=False,
+                error_reason=f"Unexpected error: {str(e)}",
+                duration_ms=duration_ms
+            )
             return None
     
     def get_required_scopes(self, method: str, path: str) -> Optional[List[str]]:
@@ -271,20 +348,55 @@ class UnifiedProxyHandler:
         # Default to user scope for unmatched patterns
         return ["user"]
     
-    def validate_scopes(self, token_scopes: List[str], required_scopes: List[str]) -> bool:
+    async def validate_scopes(self, token_scopes: List[str], required_scopes: List[str], log_ctx: Dict[str, Any] = None) -> bool:
         """Check if token has required scopes.
         
         Admin scope implicitly includes user scope.
         """
+        if log_ctx is None:
+            log_ctx = {}
+            
         if not required_scopes:
             return True  # No scopes required (public endpoint)
         
         # Admin scope includes all other scopes
-        if "admin" in token_scopes:
+        admin_override = "admin" in token_scopes
+        if admin_override:
+            log_debug("Admin scope provides full access", component="proxy_handler", **log_ctx)
             return True
         
         # Check if user has at least one required scope
-        return any(scope in token_scopes for scope in required_scopes)
+        has_scope = any(scope in token_scopes for scope in required_scopes)
+        
+        # Log scope check event
+        await log_oauth_event(
+            event_type=OAuthEventLogger.EVENT_SCOPE_CHECK,
+            client_ip=log_ctx.get('client_ip', 'unknown'),
+            proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+            user_id=log_ctx.get('user_id', 'unknown'),
+            success=has_scope,
+            error_reason="Insufficient scopes" if not has_scope else None,
+            event_data={
+                "required_scopes": required_scopes,
+                "user_scopes": token_scopes,
+                "missing_scopes": list(set(required_scopes) - set(token_scopes)),
+                "admin_override": admin_override,
+                "request_path": log_ctx.get('request_path', ''),
+                "request_method": log_ctx.get('request_method', '')
+            }
+        )
+        
+        if not has_scope:
+            log_warning(
+                f"Scope validation failed",
+                component="proxy_handler",
+                required_scopes=required_scopes,
+                user_scopes=token_scopes,
+                missing_scopes=list(set(required_scopes) - set(token_scopes)),
+                **log_ctx
+            )
+        
+        return has_scope
     
     def get_auth_config(self, route: Any, proxy_config: Dict[str, Any]) -> Dict[str, Any]:
         """Get auth config from route or proxy."""
@@ -297,18 +409,36 @@ class UnifiedProxyHandler:
         # proxy_config itself IS the auth config, not nested under 'auth_config'
         return proxy_config or {'auth_type': 'oauth'}
     
-    def validate_user_access(self, token_info: Dict[str, Any], auth_config: Dict[str, Any], log_ctx: Dict[str, Any] = None) -> bool:
+    async def validate_user_access(self, token_info: Dict[str, Any], auth_config: Dict[str, Any], log_ctx: Dict[str, Any] = None) -> bool:
         """Validate user access based on allowed users/orgs/emails."""
         if log_ctx is None:
             log_ctx = {}
             
         username = token_info.get('sub', '')
+        user_email = token_info.get('email', '')
+        user_orgs = token_info.get('orgs', [])
         
         # Check allowed users
         allowed_users = auth_config.get('allowed_users', [])
         if allowed_users and allowed_users != ['*']:
             if username not in allowed_users:
                 log_info(f"User {username} not in allowed users", component="proxy_handler", **log_ctx)
+                
+                # Log user check event
+                await log_oauth_event(
+                    event_type=OAuthEventLogger.EVENT_USER_CHECK,
+                    client_ip=log_ctx.get('client_ip', 'unknown'),
+                    proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+                    user_id=username,
+                    success=False,
+                    error_reason="User not in allowlist",
+                    event_data={
+                        "user": username,
+                        "email": user_email,
+                        "allowed_users": allowed_users,
+                        "allowlist_type": "specific"
+                    }
+                )
                 return False
         
         # Check allowed organizations
@@ -337,7 +467,41 @@ class UnifiedProxyHandler:
             
             if not email_allowed:
                 log_info(f"User email {user_email} not in allowed emails", component="proxy_handler", **log_ctx)
+                
+                # Log failed email check
+                await log_oauth_event(
+                    event_type=OAuthEventLogger.EVENT_USER_CHECK,
+                    client_ip=log_ctx.get('client_ip', 'unknown'),
+                    proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+                    user_id=username,
+                    success=False,
+                    error_reason="Email not in allowed patterns",
+                    event_data={
+                        "user": username,
+                        "email": user_email,
+                        "allowed_emails": allowed_emails,
+                        "check_type": "email"
+                    }
+                )
                 return False
+        
+        # User passed all checks - log success
+        await log_oauth_event(
+            event_type=OAuthEventLogger.EVENT_USER_CHECK,
+            client_ip=log_ctx.get('client_ip', 'unknown'),
+            proxy_hostname=log_ctx.get('proxy_hostname', 'unknown'),
+            user_id=username,
+            success=True,
+            event_data={
+                "user": username,
+                "email": user_email,
+                "orgs": user_orgs,
+                "allowed_users": allowed_users if allowed_users else ['*'],
+                "allowed_orgs": auth_config.get('allowed_orgs', []),
+                "allowed_emails": allowed_emails,
+                "checks_passed": "all"
+            }
+        )
         
         return True
     
@@ -454,7 +618,10 @@ class UnifiedProxyHandler:
         
         # Validate scopes
         token_scopes = token_info.get('scope', '').split() if token_info.get('scope') else []
-        if not self.validate_scopes(token_scopes, required_scopes):
+        
+        # Add user info to log context for scope validation
+        scope_ctx = {**log_ctx, 'user_id': token_info.get('username') or token_info.get('sub')}
+        if not await self.validate_scopes(token_scopes, required_scopes, scope_ctx):
             log_warning(
                 f"Insufficient scopes: required={required_scopes}, token={token_scopes}",
                 component="proxy_handler",
@@ -466,7 +633,7 @@ class UnifiedProxyHandler:
             )
         
         # Validate user access
-        if not self.validate_user_access(token_info, auth_config, log_ctx):
+        if not await self.validate_user_access(token_info, auth_config, log_ctx):
             log_warning(f"User access denied based on access rules", component="proxy_handler", **log_ctx)
             return await self._return_auth_error(
                 request, proxy_target, log_ctx,
@@ -487,7 +654,43 @@ class UnifiedProxyHandler:
             'auth_client_id': token_info.get('client_id', 'unknown')
         })
         
-        log_info(f"Authentication successful for user {request.state.auth_user}", component="proxy_handler", **log_ctx)
+        # Log successful authentication with comprehensive context
+        sanitizer = OAuthSanitizer()
+        log_info(
+            f"OAuth authentication completed successfully",
+            component="proxy_handler",
+            user=request.state.auth_user,
+            email=sanitizer.sanitize_email(request.state.auth_email) if request.state.auth_email else None,
+            scopes=request.state.auth_scopes,
+            client_id=request.state.auth_client_id,
+            audience=token_info.get('aud', []),
+            issuer=token_info.get('iss'),
+            jwt_id=sanitizer.sanitize_token(token_info.get('jti')) if token_info.get('jti') else None,
+            **log_ctx
+        )
+        
+        # Log complete successful auth flow event
+        await log_oauth_event(
+            event_type="auth_complete",
+            client_ip=log_ctx.get('client_ip', 'unknown'),
+            proxy_hostname=proxy_hostname,
+            user_id=request.state.auth_user,
+            client_id=request.state.auth_client_id,
+            success=True,
+            event_data={
+                "path": request.url.path,
+                "method": request.method,
+                "scopes_granted": request.state.auth_scopes,
+                "required_scopes": required_scopes,
+                "audience": token_info.get('aud', []),
+                "issuer": token_info.get('iss'),
+                "token_id": sanitizer.sanitize_token(token_info.get('jti')) if token_info.get('jti') else None,
+                "auth_config_type": auth_config.get('auth_type', 'oauth'),
+                "route_override": bool(decision and getattr(decision.route, 'override_proxy_auth', False)) if decision else False,
+                "user_orgs": token_info.get('orgs', [])
+            }
+        )
+        
         return None
     
     async def _return_auth_error(self, request: Request, proxy_target, log_ctx: Dict[str, Any], error=None) -> Response:
