@@ -182,21 +182,6 @@ def register_all_routers(app: FastAPI):
     
     # ========== LOG SUMMARY ==========
     
-    # ========== MOUNT MCP SERVER WITH ASGI WRAPPER ==========
-    
-    # Mount MCP server and get wrapper
-    mcp_wrapper = None
-    try:
-        logger.info("Mounting MCP server with ASGI wrapper...")
-        from .mcp import mount_mcp
-        mcp_wrapper = mount_mcp(app, async_storage, unified_logger)
-        successful_routers.append("MCP (/mcp) - Mounted with ASGI wrapper")
-    except Exception as e:
-        import traceback
-        dual_logger.error(f"Failed to mount MCP: {e}")  # Goes to BOTH Docker and Redis
-        dual_logger.error(f"MCP traceback: {traceback.format_exc()}")  # Goes to BOTH Docker and Redis
-        failed_routers.append(f"MCP: {str(e)}")
-    
     logger.info("=" * 60)
     logger.info("ROUTER REGISTRATION SUMMARY")
     logger.info("=" * 60)
@@ -221,8 +206,8 @@ def register_all_routers(app: FastAPI):
     
     logger.info("=" * 60)
     
-    # Return the MCP wrapper if created, otherwise the app
-    return mcp_wrapper if mcp_wrapper else app
+    # Return the app directly
+    return app
 
 
 # ========== ROUTER FACTORY FUNCTIONS ==========

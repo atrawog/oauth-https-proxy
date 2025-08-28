@@ -58,7 +58,7 @@ class AsyncResourceProtector:
         
         www_auth_params = [
             'Bearer',
-            f'realm="MCP Server"',
+            f'realm="Protected Resource"',
             f'as_uri="{auth_server_url}/.well-known/oauth-authorization-server"',
             f'resource_uri="{resource_metadata_url}"'
         ]

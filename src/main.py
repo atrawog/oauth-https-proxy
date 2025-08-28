@@ -148,12 +148,8 @@ def create_asgi_app():
         dual_logger.info("Registering all routers with Unified Router Registry...")
         try:
             from .api.routers.registry import register_all_routers
-            # register_all_routers returns MCP wrapper if MCP is enabled
-            wrapped_app = register_all_routers(app)
-            if wrapped_app != app:
-                dual_logger.info("✓ MCP ASGI wrapper installed")
-                # Store the wrapper for later use
-                app.state.mcp_wrapper = wrapped_app
+            # register_all_routers now always returns the app directly
+            app = register_all_routers(app)
             dual_logger.info("✓ All routers registered successfully")
         except Exception as e:
             dual_logger.error(f"✗ Router registration failed: {e}")
@@ -219,8 +215,8 @@ async def run_server(config: Config) -> None:
     dual_logger.info("Step 3/5: Registering API routers")
     try:
         from .api.routers.registry import register_all_routers
-        # register_all_routers may return a wrapper for MCP
-        wrapped_app = register_all_routers(app)
+        # register_all_routers now always returns the app directly
+        app = register_all_routers(app)
         dual_logger.info("✓ All routers registered successfully")
     except Exception as e:
         dual_logger.error(f"✗ Router registration failed: {e}")
@@ -247,8 +243,8 @@ async def run_server(config: Config) -> None:
             dual_logger.info("API binding to 127.0.0.1:9000 (local mode)")
         
         api_config.loglevel = config.LOG_LEVEL.upper()
-        # Serve the wrapped app (may include MCP wrapper)
-        api_task = asyncio.create_task(serve(wrapped_app, api_config))
+        # Serve the app directly
+        api_task = asyncio.create_task(serve(app, api_config))
         
         # Removed redundant ports 9001 and 10001 - API runs on single port 9000
         

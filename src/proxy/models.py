@@ -39,7 +39,7 @@ class ProxyTarget(BaseModel):
     disabled_routes: List[str] = []
     
     # Protected Resource Metadata fields (set by proxy-resource-set)
-    resource_endpoint: Optional[str] = None  # Resource endpoint path (e.g., "/mcp")
+    resource_endpoint: Optional[str] = None  # Resource endpoint path (e.g., "/api")
     resource_scopes: Optional[List[str]] = None  # Supported scopes
     resource_stateful: bool = False  # Whether the resource maintains state
     resource_versions: Optional[List[str]] = None  # Supported protocol versions
@@ -67,7 +67,6 @@ class ProxyTarget(BaseModel):
     # OAuth scope-based user lists (for scope assignment)
     oauth_admin_users: Optional[List[str]] = None  # GitHub users who get admin scope
     oauth_user_users: Optional[List[str]] = None   # GitHub users who get user scope (* = all)
-    oauth_mcp_users: Optional[List[str]] = None    # GitHub users who get mcp scope
     
     # WWW-Authenticate configuration (per-proxy)
     auth_realm: Optional[str] = None  # Custom realm (defaults to auth_proxy)
@@ -271,8 +270,8 @@ class ProxyAuthConfig(BaseModel):
 
 class ProxyResourceConfig(BaseModel):
     """Request model for configuring proxy protected resource metadata."""
-    endpoint: str = "/mcp"
-    scopes: List[str] = ["mcp:read", "mcp:write"]
+    endpoint: str = "/api"
+    scopes: List[str] = ["read", "write"]
     stateful: bool = False
     versions: List[str] = ["2025-06-18"]
     server_info: Optional[Dict[str, Any]] = None
@@ -403,9 +402,9 @@ DEFAULT_PROXIES = [
         "route_mode": "all",
         "enabled_routes": [],
         "disabled_routes": [],
-        # MCP Protected Resource Metadata
+        # Protected Resource Metadata
         "resource_endpoint": "/",
-        "resource_scopes": ["admin", "user", "mcp"],
+        "resource_scopes": ["admin", "user"],
         "resource_stateful": False,
         "resource_versions": ["2025-06-18", "2024-11-05"],
         "resource_server_info": {
@@ -416,7 +415,6 @@ DEFAULT_PROXIES = [
         "resource_bearer_methods": ["header"],
         "resource_documentation_suffix": "/docs",
         "resource_custom_metadata": {
-            "supports_mcp": True,
             "supports_oauth": True,
             "supports_device_flow": True
         }

@@ -137,7 +137,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             "response_types_supported": ["code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["HS256", "RS256"],
-            "scopes_supported": ["openid", "profile", "email", "mcp:read", "mcp:write", "mcp:session"],
+            "scopes_supported": ["openid", "profile", "email"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
             "claims_supported": ["sub", "name", "email", "preferred_username", "aud", "azp"],
             "code_challenge_methods_supported": ["S256"],
@@ -334,7 +334,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         scope: str = Form(default="read:user user:email"),
         resource: Optional[str] = Form(default=None)
     ):
-        """GitHub Device Flow - Step 1: Get device code (RFC 8628 + MCP compliant)
+        """GitHub Device Flow - Step 1: Get device code (RFC 8628)
         
         Accepts client_id, scope, and resource as form parameters per RFC 8628 and RFC 8707
         The resource parameter identifies the proxy/MCP server the token will be used with
@@ -342,7 +342,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         """
         client_ip = get_real_client_ip(request)
         
-        # Default resource to localhost proxy if not specified (MCP compliance)
+        # Default resource to localhost proxy if not specified
         if not resource:
             # Get the proxy hostname from request to use as default resource
             host = request.headers.get("host", "localhost")
@@ -485,10 +485,6 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
                         assigned_scopes.append("user")
                 
-                # Check MCP users
-                if proxy.oauth_mcp_users:
-                    if "*" in proxy.oauth_mcp_users or github_user in proxy.oauth_mcp_users:
-                        assigned_scopes.append("mcp")
             
             # Default to user scope if no scopes assigned
             if not assigned_scopes:
@@ -518,7 +514,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Get the issuer URL (auth server)
             issuer_url = get_external_url(request, settings)
             
-            # Audience is the resource (proxy/MCP server) where token will be used (MCP compliant)
+            # Audience is the resource (proxy) where token will be used
             audience_url = resource
             
             log_info(
@@ -533,7 +529,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             token_payload = {
                 "iss": issuer_url,
                 "sub": str(user_info.get("id")),
-                "aud": audience_url,  # Resource URI where token will be used (MCP compliant)
+                "aud": audience_url,  # Resource URI where token will be used
                 "exp": now + timedelta(seconds=settings.access_token_lifetime),
                 "iat": now,
                 "jti": jti,
@@ -573,7 +569,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "username": github_user,
                     "client_id": "device_flow_client",
                     "scope": " ".join(assigned_scopes),
-                    "resource": resource  # Store the resource for refresh (MCP compliant)
+                    "resource": resource  # Store the resource for refresh
                 },
                 redis_client
             )
@@ -1250,10 +1246,6 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
                         assigned_scopes.append("user")
                 
-                # Check MCP users
-                if proxy.oauth_mcp_users:
-                    if "*" in proxy.oauth_mcp_users or github_user in proxy.oauth_mcp_users:
-                        assigned_scopes.append("mcp")
         
         # If no scopes assigned through proxy config, default to user scope
         if not assigned_scopes:
@@ -1766,7 +1758,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Generate new access token with the correct issuer URL and audience
             issuer_url = get_external_url(request, settings)
             
-            # Use the resource from the refresh token as audience (MCP compliant)
+            # Use the resource from the refresh token as audience
             # This preserves the original resource the token was issued for
             resource = refresh_data.get("resource")
             if not resource:
@@ -1795,7 +1787,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "username": refresh_data["username"],
                     "scope": refresh_data["scope"],
                     "client_id": client_id,
-                    "audience": resource,  # Use the original resource as audience (MCP compliant)
+                    "audience": resource,  # Use the original resource as audience
                 },
                 redis_client,
                 issuer=issuer_url
@@ -1854,7 +1846,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             forwarded_method = request.headers.get("x-original-method", "GET")
             
             # Construct the resource URI if we have the host
-            # For MCP compliance, resource should include the full path to match protected resource metadata
+            # Resource should include the full path to match protected resource metadata
             resource = None
             if forwarded_host:
                 # Include the path in the resource URI to match what's in the protected resource metadata

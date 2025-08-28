@@ -73,7 +73,7 @@ class OAuthMetadataHandler:
             "response_types_supported": ["code"],
             "subject_types_supported": ["public"],
             "id_token_signing_alg_values_supported": ["HS256", "RS256"],
-            "scopes_supported": ["openid", "profile", "email", "mcp:read", "mcp:write", "mcp:session"],
+            "scopes_supported": ["openid", "profile", "email"],
             "token_endpoint_auth_methods_supported": ["client_secret_post", "client_secret_basic"],
             "claims_supported": ["sub", "name", "email", "preferred_username", "aud", "azp"],
             "code_challenge_methods_supported": ["S256"],
@@ -189,7 +189,7 @@ class OAuthMetadataHandler:
                 auth_servers.append(f"https://{target.auth_proxy}")
         
         # Build metadata response per RFC 9728
-        resource_scopes = target.resource_scopes or ["mcp:read", "mcp:write"]
+        resource_scopes = target.resource_scopes or ["read", "write"]
         bearer_methods = target.resource_bearer_methods or ["header"]
         doc_suffix = target.resource_documentation_suffix or "/docs"
         

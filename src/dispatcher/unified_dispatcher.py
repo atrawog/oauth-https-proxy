@@ -1264,9 +1264,23 @@ class UnifiedMultiInstanceServer:
         # Check for certificate if HTTPS is enabled
         cert = None
         https_ready = False
-        if proxy_target.enable_https and proxy_target.cert_name:
+        if proxy_target.enable_https:
             if self.async_components and self.async_components.cert_manager:
-                cert = await self.async_components.cert_manager.get_certificate(proxy_target.cert_name)
+                # First try cert_name if specified
+                if proxy_target.cert_name:
+                    cert = await self.async_components.cert_manager.get_certificate(proxy_target.cert_name)
+                
+                # If no cert found, try DNS name directly (auto-discovery)
+                if not cert:
+                    dual_logger.info(f"[UNIFIED] Attempting auto-discovery using DNS name: {proxy_hostname}")
+                    cert = await self.async_components.cert_manager.get_certificate(proxy_hostname)
+                    if cert:
+                        dual_logger.info(f"[UNIFIED] Auto-discovered certificate for {proxy_hostname}")
+                        # Update proxy to reference the discovered certificate
+                        proxy_target.cert_name = proxy_hostname
+                        if self.async_components and self.async_components.storage:
+                            await self.async_components.storage.store_proxy_target(proxy_hostname, proxy_target)
+                
                 if cert:
                     https_ready = True
                     dual_logger.info(f"[UNIFIED] Certificate ready for {proxy_hostname}")

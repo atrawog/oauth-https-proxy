@@ -67,7 +67,8 @@ def create_core_router(storage, cert_manager):
             raise HTTPException(409, f"Proxy target for {request.proxy_hostname} already exists")
         
         # Create proxy target - don't set cert_name yet
-        cert_name = f"proxy-{request.proxy_hostname.replace('.', '-')}"  # Pattern for checking
+        # Use DNS name directly as cert_name for automatic discovery
+        cert_name = request.proxy_hostname  # Use DNS name directly
         target = ProxyTarget(
             proxy_hostname = request.proxy_hostname,
             target_url=request.target_url,

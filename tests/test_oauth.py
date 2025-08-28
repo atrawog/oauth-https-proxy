@@ -322,7 +322,7 @@ class TestOAuthStatus:
 class TestProtectedResourceManagement:
     """Test protected resource management for OAuth."""
 
-    def test_list_mcp_resources(self, http_client: httpx.Client, auth_token: str):
+    def test_list_protected_resources(self, http_client: httpx.Client, auth_token: str):
         """Test listing protected resources."""
         response = http_client.get(
             "/resources/",
@@ -337,13 +337,13 @@ class TestProtectedResourceManagement:
         data = response.json()
         assert isinstance(data, list)
     
-    def test_register_mcp_resource(self, http_client: httpx.Client, auth_token: str):
+    def test_register_protected_resource(self, http_client: httpx.Client, auth_token: str):
         """Test registering a protected resource."""
         resource_data = {
-            "uri": f"https://test-mcp-{secrets.token_hex(4)}.example.com",
+            "uri": f"https://test-api-{secrets.token_hex(4)}.example.com",
             "name": "Test Protected Resource",
-            "proxy_target": "test-mcp.example.com",
-            "scopes": ["mcp:read", "mcp:write"]
+            "proxy_target": "test-api.example.com",
+            "scopes": ["read", "write"]
         }
         
         response = http_client.post(

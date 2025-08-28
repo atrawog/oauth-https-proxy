@@ -1,4 +1,4 @@
-"""Configuration module for MCP OAuth Dynamic Client"""
+"""Configuration module for OAuth Dynamic Client"""
 
 from typing import Optional
 

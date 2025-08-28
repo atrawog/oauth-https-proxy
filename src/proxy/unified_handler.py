@@ -294,7 +294,8 @@ class UnifiedProxyHandler:
                 return route.auth_config
         
         # Fall back to proxy-level auth config
-        return proxy_config.get('auth_config', {'auth_type': 'oauth'})
+        # proxy_config itself IS the auth config, not nested under 'auth_config'
+        return proxy_config or {'auth_type': 'oauth'}
     
     def validate_user_access(self, token_info: Dict[str, Any], auth_config: Dict[str, Any], log_ctx: Dict[str, Any] = None) -> bool:
         """Validate user access based on allowed users/orgs/emails."""
@@ -403,7 +404,6 @@ class UnifiedProxyHandler:
                 'auth_excluded_paths': proxy_target.auth_excluded_paths,
                 'admin_users': proxy_target.oauth_admin_users or [],
                 'user_users': proxy_target.oauth_user_users or ['*'],
-                'mcp_users': proxy_target.oauth_mcp_users or [],
             }
         except Exception as e:
             log_error(f"Error getting proxy config: {e}", component="proxy_handler", **log_ctx)
@@ -423,7 +423,7 @@ class UnifiedProxyHandler:
         excluded_paths = auth_config.get('auth_excluded_paths', []) or proxy_config.get('auth_excluded_paths', [])
         for excluded_path in excluded_paths:
             if request_path.startswith(excluded_path):
-                log_info(f"Path {request_path} excluded from auth", component="proxy_handler", **log_ctx)
+                log_info(f"Path {request_path} excluded from auth (matched {excluded_path})", component="proxy_handler", **log_ctx)
                 return None
         
         # Extract bearer token
