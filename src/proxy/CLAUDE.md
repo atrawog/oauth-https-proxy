@@ -154,9 +154,8 @@ Proxies now use OAuth-only authentication:
 
 ### Per-Proxy User Allowlists
 The `auth_required_users` field controls which GitHub users can authenticate for each proxy:
-- `null` - Use global default from `OAUTH_ALLOWED_GITHUB_USERS` environment variable
-- `["*"]` - Allow all GitHub users to authenticate
-- `["user1", "user2"]` - Allow only specific GitHub users
+- `null` or `[]` - Use global default from `OAUTH_ADMIN_USERS` environment variable
+- `["user1", "user2"]` - Allow only specific GitHub users (no wildcards allowed)
 
 This provides granular control over authentication at the proxy level. The field is checked at two points:
 1. **During OAuth callback** - GitHub users not in the list are rejected during authentication
@@ -232,9 +231,7 @@ just proxy auth-show <hostname> [token]
 # Examples of per-proxy user configuration:
 # Allow specific GitHub users:
 just proxy auth-config api.example.com "alice,bob,charlie" "" "" "" "" $TOKEN
-# Allow all GitHub users:
-just proxy auth-config api.example.com "*" "" "" "" "" $TOKEN
-# Use global default (OAUTH_ALLOWED_GITHUB_USERS):
+# Use global default (OAUTH_ADMIN_USERS):
 just proxy auth-config api.example.com "" "" "" "" "" $TOKEN
 
 # Protected resource metadata configuration (OAuth 2.0 RFC 9728)

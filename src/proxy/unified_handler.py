@@ -422,7 +422,15 @@ class UnifiedProxyHandler:
         # Check route-level auth override first
         if route and hasattr(route, 'override_proxy_auth') and route.override_proxy_auth:
             if hasattr(route, 'auth_config') and route.auth_config:
-                return route.auth_config
+                # Merge proxy's admin_users and user_users into route config
+                # These fields are needed by validate_user_access for fallback logic
+                route_config = dict(route.auth_config)
+                route_config['admin_users'] = proxy_config.get('admin_users', [])
+                route_config['user_users'] = proxy_config.get('user_users', [])
+                # Also preserve allowed_users if not in route config
+                if 'allowed_users' not in route_config:
+                    route_config['allowed_users'] = proxy_config.get('allowed_users', [])
+                return route_config
         
         # Fall back to proxy-level auth config
         # proxy_config itself IS the auth config, not nested under 'auth_config'
@@ -433,22 +441,30 @@ class UnifiedProxyHandler:
         if log_ctx is None:
             log_ctx = {}
             
-        username = token_info.get('sub', '')
+        username = token_info.get('username') or token_info.get('sub', '')
         user_email = token_info.get('email', '')
         user_orgs = token_info.get('orgs', [])
         
         # Check allowed users - defensive coding to handle None
         allowed_users = auth_config.get('allowed_users')
-        # Handle None, convert to list if needed
-        if allowed_users is None:
-            allowed_users = ['*']  # Default to allow all if not configured
+        
+        # If allowed_users is None or empty, try to use admin + user lists as fallback
+        if allowed_users is None or (isinstance(allowed_users, list) and len(allowed_users) == 0):
+            admin_users = auth_config.get('admin_users', [])
+            user_users = auth_config.get('user_users', [])
+            # Combine admin and user lists as the allowed users
+            allowed_users = list(set(admin_users + user_users))  # Deduplicate
+            
+        # Handle non-list types
         elif not isinstance(allowed_users, list):
             # If it's a string or other type, convert to list
-            allowed_users = [allowed_users] if allowed_users else ['*']
+            allowed_users = [allowed_users] if allowed_users else []
         
-        # Now safe to iterate
-        if allowed_users and allowed_users != ['*']:
-            if username not in allowed_users:
+        # Security: Remove any wildcard entries
+        allowed_users = [u for u in allowed_users if u != "*"]
+        
+        # Now safe to iterate - if no users configured or user not in list, deny
+        if not allowed_users or username not in allowed_users:
                 log_info(f"User {username} not in allowed users", component="proxy_handler", **log_ctx)
                 
                 # Log user check event
@@ -531,7 +547,7 @@ class UnifiedProxyHandler:
                 "user": username,
                 "email": user_email,
                 "orgs": user_orgs,
-                "allowed_users": allowed_users if allowed_users else ['*'],
+                "allowed_users": allowed_users if allowed_users else [],
                 "allowed_orgs": auth_config.get('allowed_orgs', []),
                 "allowed_emails": allowed_emails,
                 "checks_passed": "all"
@@ -595,15 +611,26 @@ class UnifiedProxyHandler:
                 log_warning(f"No proxy target found for {proxy_hostname}", component="proxy_handler", **log_ctx)
                 return None
             
+            # Build allowed users list - if auth_required_users is None, use admin + user lists
+            admin_users = proxy_target.oauth_admin_users or []
+            user_users = proxy_target.oauth_user_users or []
+            
+            if proxy_target.auth_required_users is not None:
+                # Use explicitly configured list
+                allowed_users = proxy_target.auth_required_users
+            else:
+                # Default to admin + user lists when not explicitly configured
+                allowed_users = list(set(admin_users + user_users))  # Combine and deduplicate
+            
             proxy_config = {
                 'auth_enabled': proxy_target.auth_enabled,
                 'auth_type': 'oauth' if proxy_target.auth_proxy else 'none',
                 'auth_proxy': proxy_target.auth_proxy,
                 'auth_mode': proxy_target.auth_mode,
                 'auth_excluded_paths': proxy_target.auth_excluded_paths,
-                'allowed_users': proxy_target.auth_required_users if proxy_target.auth_required_users is not None else ['*'],
-                'admin_users': proxy_target.oauth_admin_users or [],
-                'user_users': proxy_target.oauth_user_users or ['*'],
+                'allowed_users': allowed_users,
+                'admin_users': admin_users,
+                'user_users': user_users,
             }
         except Exception as e:
             log_error(f"Error getting proxy config: {e}", component="proxy_handler", **log_ctx)

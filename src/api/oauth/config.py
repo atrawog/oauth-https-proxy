@@ -31,8 +31,9 @@ class Settings(BaseSettings):
     session_timeout: int = Field(alias="OAUTH_SESSION_TIMEOUT")
     client_lifetime: int = Field(alias="OAUTH_CLIENT_LIFETIME")  # 0 = never expires
 
-    # Access Control
-    allowed_github_users: str = Field(alias="OAUTH_ALLOWED_GITHUB_USERS")  # NO DEFAULTS! Comma-separated list
+    # Access Control - Explicit user lists only (no wildcards)
+    admin_users: str = Field(default="", alias="OAUTH_ADMIN_USERS")  # Users with admin scope
+    user_users: str = Field(default="", alias="OAUTH_USER_USERS")    # Users with user scope
 
     model_config = ConfigDict(
         env_file=".env",

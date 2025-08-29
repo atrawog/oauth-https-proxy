@@ -376,16 +376,22 @@ class AsyncRedisStorage:
         
         # Get OAuth defaults from environment
         oauth_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
-        oauth_user_users = os.getenv("OAUTH_USER_USERS", "*").split(",") if os.getenv("OAUTH_USER_USERS") else ["*"]
+        oauth_user_users = os.getenv("OAUTH_USER_USERS", "").split(",") if os.getenv("OAUTH_USER_USERS") else []
         
         # Clean up lists (remove empty strings and whitespace)
         oauth_admin_users = [u.strip() for u in oauth_admin_users if u.strip()]
         oauth_user_users = [u.strip() for u in oauth_user_users if u.strip()]
         
+        # Security: Remove any wildcard entries - explicit users only
+        oauth_admin_users = [u for u in oauth_admin_users if u != "*"]
+        oauth_user_users = [u for u in oauth_user_users if u != "*"]
+        
         # Apply defaults only if values are None
         if proxy_target.auth_required_users is None:
-            # If no admin users specified, allow all by default
-            proxy_target.auth_required_users = oauth_admin_users if oauth_admin_users else ["*"]
+            # When not explicitly set, auth_required_users stays None
+            # The proxy handler will use oauth_admin_users + oauth_user_users as the allowed list
+            # We don't set it here to preserve the "use defaults" behavior
+            pass  # Keep auth_required_users as None to indicate "use OAuth user lists"
             log_trace(f"Applied auth_required_users default: {proxy_target.auth_required_users}", component="redis_storage")
             
         if proxy_target.oauth_admin_users is None:

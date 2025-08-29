@@ -118,10 +118,11 @@ Configure OAuth authentication and user access:
 
 ```bash
 # In your .env file:
-OAUTH_ALLOWED_GITHUB_USERS=*              # Global default (* = all users)
+OAUTH_ADMIN_USERS=alice,bob               # Users with admin scope (no wildcards)
+OAUTH_USER_USERS=charlie,dave             # Users with read-only scope
 OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope for localhost proxy
-OAUTH_LOCALHOST_USER_USERS=*              # User scope for localhost proxy  
-OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope for localhost proxy
+OAUTH_LOCALHOST_USER_USERS=charlie,dave   # User scope for localhost proxy  
+OAUTH_LOCALHOST_MCP_USERS=emily           # MCP scope for localhost proxy
 
 # Per-proxy user allowlists (controls who can access the proxy):
 just proxy auth config api.example.com --users alice,bob
@@ -129,7 +130,7 @@ just proxy auth config api.example.com --users alice,bob
 # Per-proxy scope assignment (which users get which scopes) - via direct API:
 curl -X PUT http://localhost/proxy/targets/api.example.com \
   -H "Authorization: Bearer $OAUTH_ACCESS_TOKEN" \
-  -d '{"oauth_admin_users": ["alice"], "oauth_user_users": ["*"], "oauth_mcp_users": ["bob"]}'
+  -d '{"oauth_admin_users": ["alice"], "oauth_user_users": ["charlie", "dave"], "oauth_mcp_users": ["bob"]}'
 ```
 
 ## System Bootstrapping
@@ -324,12 +325,15 @@ OAUTH_ACCESS_TOKEN_LIFETIME=1800
 OAUTH_REFRESH_TOKEN_LIFETIME=31536000
 OAUTH_SESSION_TIMEOUT=300
 OAUTH_CLIENT_LIFETIME=7776000
-OAUTH_ALLOWED_GITHUB_USERS=*
+
+# OAuth User Configuration (no wildcards allowed)
+OAUTH_ADMIN_USERS=alice,bob               # Users with admin scope
+OAUTH_USER_USERS=charlie,dave             # Users with read-only scope
 
 # OAuth Scope Configuration for localhost proxy
 OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope
-OAUTH_LOCALHOST_USER_USERS=*              # User scope for all
-OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope
+OAUTH_LOCALHOST_USER_USERS=charlie,dave   # User scope
+OAUTH_LOCALHOST_MCP_USERS=emily           # MCP scope
 
 # Admin configuration
 ADMIN_EMAIL=admin@example.com

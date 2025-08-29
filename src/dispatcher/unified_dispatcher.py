@@ -129,9 +129,11 @@ class HypercornInstance:
             config.alpn_protocols = ["http/1.1"]
             
             dual_logger.info(f"Starting internal HTTP instance on port {internal_port} for domains: {self.domains}")
+            dual_logger.info(f"App type: {type(self.app)}, App: {self.app}")
             
             # Start internal server
             self.http_process = asyncio.create_task(serve(self.app, config))
+            dual_logger.info(f"HTTP process task created: {self.http_process}")
             
             # Start PROXY protocol handler that receives from dispatcher
             dual_logger.info(f"Starting PROXY protocol receiver on port {self.http_port} -> {internal_port}")

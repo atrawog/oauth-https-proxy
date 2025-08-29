@@ -70,11 +70,15 @@ def create_core_router(storage, cert_manager):
         # Get OAuth defaults from environment
         import os
         oauth_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
-        oauth_user_users = os.getenv("OAUTH_USER_USERS", "*").split(",") if os.getenv("OAUTH_USER_USERS") else ["*"]
+        oauth_user_users = os.getenv("OAUTH_USER_USERS", "").split(",") if os.getenv("OAUTH_USER_USERS") else []
         
         # Clean up lists (remove empty strings and whitespace)
         oauth_admin_users = [u.strip() for u in oauth_admin_users if u.strip()]
         oauth_user_users = [u.strip() for u in oauth_user_users if u.strip()]
+        
+        # Security: Remove any wildcard entries - explicit users only
+        oauth_admin_users = [u for u in oauth_admin_users if u != "*"]
+        oauth_user_users = [u for u in oauth_user_users if u != "*"]
         
         # Create proxy target - don't set cert_name yet
         # Use DNS name directly as cert_name for automatic discovery
@@ -90,8 +94,9 @@ def create_core_router(storage, cert_manager):
             enable_https=request.enable_https,
             preserve_host_header=request.preserve_host_header,
             custom_headers=request.custom_headers,
-            # Apply OAuth defaults to prevent NoneType errors
-            auth_required_users=oauth_admin_users if oauth_admin_users else None,
+            # Leave auth_required_users as None to use OAuth user lists as default
+            # The proxy handler will use oauth_admin_users + oauth_user_users when None
+            auth_required_users=None,  # None means "use OAuth user lists"
             oauth_admin_users=oauth_admin_users,
             oauth_user_users=oauth_user_users,
             # Default resource scopes (MCP handled here, not via user lists)

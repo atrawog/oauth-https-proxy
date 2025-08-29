@@ -43,10 +43,9 @@ services:
       - OAUTH_REFRESH_TOKEN_LIFETIME=${OAUTH_REFRESH_TOKEN_LIFETIME}
       - OAUTH_SESSION_TIMEOUT=${OAUTH_SESSION_TIMEOUT}
       - OAUTH_CLIENT_LIFETIME=${OAUTH_CLIENT_LIFETIME}
-      - OAUTH_ALLOWED_GITHUB_USERS=${OAUTH_ALLOWED_GITHUB_USERS}
-      # Global OAuth user configuration defaults
+      # Global OAuth user configuration (no wildcards allowed)
       - OAUTH_ADMIN_USERS=${OAUTH_ADMIN_USERS:-}
-      - OAUTH_USER_USERS=${OAUTH_USER_USERS:-*}
+      - OAUTH_USER_USERS=${OAUTH_USER_USERS:-}
       # Docker management environment variables
       - DOCKER_API_VERSION=${DOCKER_API_VERSION:-1.41}
       - DOCKER_BUILDKIT=1

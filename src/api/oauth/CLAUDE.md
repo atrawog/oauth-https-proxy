@@ -21,7 +21,8 @@ OAuth is integrated directly into the proxy service:
 - `OAUTH_REFRESH_TOKEN_LIFETIME` - Refresh token lifetime in seconds (default: 31536000 = 1 year)
 - `OAUTH_SESSION_TIMEOUT` - OAuth session timeout in seconds (default: 300 = 5 minutes)
 - `OAUTH_CLIENT_LIFETIME` - OAuth client registration lifetime in seconds (default: 7776000 = 90 days)
-- `OAUTH_ALLOWED_GITHUB_USERS` - Global default for allowed GitHub users (* = all users, comma-separated list for specific users)
+- `OAUTH_ADMIN_USERS` - Users with admin scope (comma-separated list, no wildcards)
+- `OAUTH_USER_USERS` - Users with read-only scope (comma-separated list, no wildcards)
 - `OAUTH_MCP_PROTOCOL_VERSION` - MCP protocol version (default: 2025-06-18)
 
 ### JWT Configuration

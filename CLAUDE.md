@@ -774,11 +774,12 @@ For localhost proxy, OAuth scopes are configured via environment variables:
 ```bash
 # Who gets which scopes on localhost proxy
 OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope
-OAUTH_LOCALHOST_USER_USERS=*              # User scope for all
-OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope
+OAUTH_LOCALHOST_USER_USERS=charlie,dave   # User scope (no wildcards)
+OAUTH_LOCALHOST_MCP_USERS=emily           # MCP scope
 
-# Global default for new proxies
-OAUTH_ALLOWED_GITHUB_USERS=*              # Who can authenticate
+# Global defaults for new proxies (explicit users only)
+OAUTH_ADMIN_USERS=alice,bob               # Users with admin scope
+OAUTH_USER_USERS=charlie,dave             # Users with read-only scope
 ```
 
 This configuration is read during OAuth callback to determine scope assignment.
@@ -804,10 +805,11 @@ LOG_LEVEL=INFO                     # Logging level (TRACE, DEBUG, INFO, WARNING,
 GITHUB_CLIENT_ID=<github-app-id>          # Global default, can be overridden per-proxy
 GITHUB_CLIENT_SECRET=<github-secret>      # Global default, can be overridden per-proxy
 OAUTH_JWT_PRIVATE_KEY_B64=<base64-key>    # RSA private key for JWT signing
-OAUTH_ALLOWED_GITHUB_USERS=*              # Global default (* = all users)
+OAUTH_ADMIN_USERS=alice,bob               # Users with admin scope (no wildcards)
+OAUTH_USER_USERS=charlie,dave             # Users with read-only scope
 OAUTH_LOCALHOST_ADMIN_USERS=alice,bob     # Admin scope for localhost proxy
-OAUTH_LOCALHOST_USER_USERS=*              # User scope for localhost proxy
-OAUTH_LOCALHOST_MCP_USERS=charlie         # MCP scope for localhost proxy
+OAUTH_LOCALHOST_USER_USERS=charlie,dave   # User scope for localhost proxy
+OAUTH_LOCALHOST_MCP_USERS=emily           # MCP scope for localhost proxy
 
 # Testing
 TEST_DOMAIN=test.example.com

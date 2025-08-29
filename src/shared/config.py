@@ -64,7 +64,9 @@ class Config:
     OAUTH_REFRESH_TOKEN_LIFETIME: int = int(os.getenv('OAUTH_REFRESH_TOKEN_LIFETIME', '31536000'))  # 1 year
     OAUTH_SESSION_TIMEOUT: int = int(os.getenv('OAUTH_SESSION_TIMEOUT', '300'))  # 5 minutes
     OAUTH_CLIENT_LIFETIME: int = int(os.getenv('OAUTH_CLIENT_LIFETIME', '7776000'))  # 90 days
-    OAUTH_ALLOWED_GITHUB_USERS: str = os.getenv('OAUTH_ALLOWED_GITHUB_USERS', '*')
+    # Security: Only explicitly listed users are allowed (no wildcards)
+    OAUTH_ADMIN_USERS: str = os.getenv('OAUTH_ADMIN_USERS', '')  # Users with admin scope
+    OAUTH_USER_USERS: str = os.getenv('OAUTH_USER_USERS', '')   # Users with user scope
     
     # JWT Configuration
     OAUTH_JWT_ALGORITHM: str = os.getenv('OAUTH_JWT_ALGORITHM', 'RS256')

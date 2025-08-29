@@ -98,6 +98,7 @@ class ProxyOnlyApp:
         # Create minimal Starlette app
         self.app = Starlette(
             routes=[
+                Route("/proxy-health", self.handle_health, methods=["GET"]),  # Health check endpoint
                 Route("/.well-known/oauth-authorization-server", self.handle_oauth_metadata, methods=["GET"]),
                 Route("/{path:path}", self.handle_proxy, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]),
             ],
@@ -133,13 +134,14 @@ class ProxyOnlyApp:
         self.unified_logger = UnifiedAsyncLogger(self.redis_clients, component="proxy_app")
         set_global_logger(self.unified_logger)
         
-        log_info("Proxy-only instance starting", component="proxy_app")
+        log_info(f"Proxy-only instance starting for domains: {self.domains}", component="proxy_app")
+        log_info(f"ProxyOnlyApp routes configured: {[str(r) for r in self.app.routes]}", component="proxy_app")
         
         # Initialize components eagerly if called
         await self._ensure_initialized()
         
         # No longer need to manage Redis log handler - unified logger handles it
-        log_info("Proxy instance startup complete", component="proxy_app")
+        log_info(f"Proxy instance startup complete for {self.domains}", component="proxy_app")
     
     async def shutdown(self):
         """Clean shutdown of instance resources only."""
@@ -202,6 +204,16 @@ class ProxyOnlyApp:
                 import traceback
                 traceback.print_exc()
                 self.proxy_handler = None
+    
+    async def handle_health(self, request: Request) -> Response:
+        """Health check endpoint for proxy instance."""
+        log_info(f"Health check requested for proxy instance: {self.domains}", component="proxy_app")
+        return JSONResponse({
+            "status": "healthy",
+            "instance": "proxy",
+            "domains": self.domains,
+            "handler_initialized": self.proxy_handler is not None
+        })
     
     async def handle_oauth_metadata(self, request: Request) -> Response:
         """Handle OAuth authorization server metadata requests."""

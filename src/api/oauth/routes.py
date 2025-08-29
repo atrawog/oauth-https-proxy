@@ -97,12 +97,25 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                 detail={"error": "access_denied", "error_description": "No username in token"},
             )
 
-        # Check if user is in allowed list
-        allowed_users = (
-            settings.allowed_github_users.split(",") if settings.allowed_github_users else []
-        )
-        # If ALLOWED_GITHUB_USERS is set to '*', allow any authenticated GitHub user
-        if allowed_users and "*" not in allowed_users and username not in allowed_users:
+        # Check if user is in admin users list (no wildcards allowed)
+        admin_users = settings.admin_users.split(",") if settings.admin_users else []
+        admin_users = [u.strip() for u in admin_users if u.strip()]
+        
+        # Security: Remove any wildcard entries - explicit users only
+        admin_users = [u for u in admin_users if u != "*"]
+        
+        # If no users configured, deny access (secure by default)
+        if not admin_users:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": "access_denied",
+                    "error_description": "No authorized users configured - access denied for security",
+                },
+            )
+        
+        # Check if user is authorized
+        if username not in admin_users:
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -1276,30 +1289,33 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     allowed_users=allowed_users
                 )
             else:
-                # Fall back to global list
-                allowed_users = (
-                    settings.allowed_github_users.split(",") if settings.allowed_github_users else []
-                )
+                # Fall back to global admin users list
+                allowed_users = settings.admin_users.split(",") if settings.admin_users else []
+                allowed_users = [u.strip() for u in allowed_users if u.strip()]
                 log_info(
-                    "Using global GitHub allowed users (no proxy-specific required users)",
+                    "Using global admin users (no proxy-specific required users)",
                     client_ip=client_ip,
                     proxy_hostname=proxy_hostname,
                     allowed_users=allowed_users
                 )
         else:
-            # No proxy specified, use global list
-            allowed_users = (
-                settings.allowed_github_users.split(",") if settings.allowed_github_users else []
-            )
+            # No proxy specified, use global admin users list
+            allowed_users = settings.admin_users.split(",") if settings.admin_users else []
+            allowed_users = [u.strip() for u in allowed_users if u.strip()]
             log_info(
-                "Using global GitHub allowed users (no proxy specified)",
+                "Using global admin users (no proxy specified)",
                 client_ip=client_ip,
                 allowed_users=allowed_users
             )
         
-        # If allowed_users is set and doesn't contain '*', check if user is allowed
+        # Security: Check if user is in allowed list - no wildcards allowed
         # Handle None case explicitly to avoid "NoneType object is not iterable" error
-        if allowed_users is not None and "*" not in allowed_users and user_info["login"] not in allowed_users:
+        if allowed_users is not None:
+            # Filter out any wildcards for security
+            allowed_users = [u for u in allowed_users if u != "*"]
+            
+        # If no users configured or user not in list, deny access
+        if not allowed_users or user_info["login"] not in allowed_users:
             log_warning(
                 "GitHub user not in allowed list",
                     client_ip=client_ip,
