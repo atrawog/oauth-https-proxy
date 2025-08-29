@@ -85,8 +85,6 @@ logs/
 # Reports
 reports/
 
-# Docker
-.dockerignore
 
 # Temporary files
 *.tmp
@@ -100,9 +98,3 @@ analysis/
 # Backup files
 backup/*
 !backup/.gitkeep
-
-# Docker service management
-dockerfiles/*
-!dockerfiles/.gitkeep
-contexts/*
-!contexts/.gitkeep

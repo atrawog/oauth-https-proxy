@@ -1,99 +1,203 @@
 [build-system]
-requires = ["setuptools>=68.0", "wheel"]
+requires = ["setuptools>=61.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "oauth-https-proxy"
-version = "0.1.0"
-description = "OAuth-protected HTTPS proxy with automatic ACME certificate management"
+name = "mcp-verification-tools"
+version = "1.0.0"
+description = "Comprehensive MCP (Model Context Protocol) endpoint compliance testing and validation"
 readme = "README.md"
-requires-python = ">=3.10"
-license = {text = "MIT"}
 authors = [
-    {name = "OAuth HTTPS Proxy Team", email = "admin@example.com"},
+    {name = "MCP Verification Tools Contributors"}
 ]
-keywords = ["acme", "letsencrypt", "https", "tls", "certificate", "ssl"]
+license = {text = "MIT"}
+requires-python = ">=3.11"
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "validation",
+    "testing",
+    "compliance",
+    "llm",
+    "ai"
+]
 classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
-    "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
-    "Topic :: Security :: Cryptography",
-    "Topic :: System :: Networking",
+    "Topic :: Software Development :: Testing",
+    "Topic :: Software Development :: Quality Assurance",
+    "Topic :: Internet :: WWW/HTTP",
+    "Operating System :: OS Independent",
 ]
 
 dependencies = [
-    "fastapi>=0.104.1",
-    "hypercorn>=0.14.0",
-    "acme>=2.8.0",
-    "josepy>=1.14.0",
-    "cryptography>=41.0.7",
-    "redis[hiredis]>=5.0.1",
-    "apscheduler>=3.10.4",
-    "pydantic>=2.5.0",
-    "pydantic-settings>=2.1.0",
-    "python-multipart>=0.0.6",
-    "httpx>=0.25.2",
-    "websockets>=11.0",
-    "authlib>=1.3.0",
+    # Core dependencies
+    "httpx>=0.27.0",           # Async HTTP client
+    "httpx-sse>=0.4.0",        # SSE support for httpx
+    "pydantic>=2.0",           # Data validation
+    "pyyaml>=6.0",             # YAML report generation
+    "click>=8.0",              # CLI framework
+    
+    # Schema generation
+    "datamodel-code-generator[http]>=0.25",  # Generate Pydantic from JSON schema
+    "requests>=2.31",          # For downloading schemas
+    
+    # Optional but recommended
+    "rich>=13.0",              # Beautiful terminal output
 ]
 
 [project.optional-dependencies]
 dev = [
-    "pytest>=7.4.3",
-    "pytest-asyncio>=0.21.1",
-    "pytest-timeout>=2.2.0",
-    "ruff>=0.1.6",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "black>=24.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+    "pre-commit>=3.0",
 ]
+
+test = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "pytest-cov>=4.0",
+    "pytest-mock>=3.0",
+]
+
 docs = [
-    "jupyter-book>=0.15.1",
+    "sphinx>=7.0",
+    "sphinx-rtd-theme>=2.0",
+    "sphinx-click>=5.0",
+    "myst-parser>=2.0",
+]
+
+all = [
+    "mcp-verification-tools[dev,test,docs]",
 ]
 
 [project.urls]
-Homepage = "https://github.com/atrawog/oauth-https-proxy"
-Documentation = "https://oauth-https-proxy.readthedocs.io"
-Repository = "https://github.com/atrawog/oauth-https-proxy"
-Issues = "https://github.com/atrawog/oauth-https-proxy/issues"
+Homepage = "https://github.com/your-org/mcp-verification-tools"
+Documentation = "https://mcp-verification-tools.readthedocs.io"
+Repository = "https://github.com/your-org/mcp-verification-tools"
+Issues = "https://github.com/your-org/mcp-verification-tools/issues"
+Specification = "https://modelcontextprotocol.io/specification"
 
 [project.scripts]
-oauth-https-proxy = "src.main:main"
+mcp-verify = "mcp_verification_tools.cli:main"
+mcp-generate-schema = "mcp_verification_tools.schemas.generate:main"
 
 [tool.setuptools]
-packages = ["src"]
+packages = ["mcp_verification_tools"]
+include-package-data = true
 
 [tool.setuptools.package-data]
-src = ["py.typed"]
-
-[tool.ruff]
-select = ["E", "F", "I", "N", "W"]
-ignore = ["E501"]
-line-length = 120
-target-version = "py310"
-
-[tool.ruff.per-file-ignores]
-"tests/*" = ["F401", "F811"]
+mcp_verification_tools = [
+    "schemas/*.json",
+    "py.typed",
+]
 
 [tool.pytest.ini_options]
+minversion = "8.0"
 testpaths = ["tests"]
-python_files = ["test_*.py"]
-python_classes = ["Test*"]
-python_functions = ["test_*"]
+pythonpath = ["."]
 asyncio_mode = "auto"
-markers = [
-    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
-    "docker: marks tests that require Docker services",
-    "slow: marks tests as slow running",
-    "basic: marks basic functionality tests",
-    "certificates: marks certificate management tests",
-    "proxy: marks proxy management tests", 
-    "tokens: marks token management tests",
-    "oauth: marks OAuth authentication tests",
-    "routes: marks route management tests",
-    "instances: marks instance management tests",
-    "requires_auth: marks tests that require authentication token"
+addopts = [
+    "--verbose",
+    "--cov=mcp_verification_tools",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+]
+
+[tool.black]
+line-length = 100
+target-version = ["py311", "py312"]
+include = '\.pyi?$'
+extend-exclude = '''
+/(
+    \.git
+  | \.venv
+  | build
+  | dist
+  | mcp_verification_tools/models/generated
+)/
+'''
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501",  # line too long (handled by black)
+    "B008",  # do not perform function calls in argument defaults
+    "B905",  # `zip()` without an explicit `strict=` parameter
+]
+exclude = [
+    ".git",
+    ".venv",
+    "build",
+    "dist",
+    "mcp_verification_tools/models/generated",
+]
+
+[tool.ruff.per-file-ignores]
+"__init__.py" = ["F401"]  # imported but unused
+"tests/*" = ["B", "C4"]   # Allow test-specific patterns
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_unimported = false
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_no_return = true
+check_untyped_defs = true
+strict_equality = true
+
+[[tool.mypy.overrides]]
+module = [
+    "httpx_sse.*",
+    "datamodel_code_generator.*",
+]
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+module = "mcp_verification_tools.models.generated.*"
+ignore_errors = true  # Generated code may not be fully typed
+
+[tool.coverage.run]
+branch = true
+source = ["mcp_verification_tools"]
+omit = [
+    "*/tests/*",
+    "*/test_*.py",
+    "*/__init__.py",
+    "*/models/generated/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "if self.debug:",
+    "if __name__ == .__main__.:",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if TYPE_CHECKING:",
+    "class .*\\bProtocol\\):",
+    "@(abc\\.)?abstractmethod",
 ]

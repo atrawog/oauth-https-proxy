@@ -10,7 +10,7 @@ import time
 import traceback
 import httpx
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, List, Union
 from urllib.parse import urlencode
 
 import redis.asyncio as redis
@@ -54,12 +54,12 @@ def get_external_url(request: Request, settings: Settings) -> str:
     return f"{proto}://{host}"
 
 
-def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthManager) -> APIRouter:
+def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_manager: AuthManager) -> APIRouter:
     """Create OAuth router with all endpoints using Authlib ResourceProtector
     
     Args:
         settings: OAuth settings
-        redis_manager: Redis manager for state management
+        redis_client: Redis client for state management
         auth_manager: Authentication manager
     """
     router = APIRouter()
@@ -69,7 +69,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
     async def get_redis() -> redis.Redis:
         """Dependency to get Redis client"""
-        return redis_manager.client
+        return redis_client
 
     # Custom dependency that uses AsyncResourceProtector
     async def verify_bearer_token(request: Request):
@@ -79,7 +79,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
         if require_oauth is None:
             require_oauth = create_async_resource_protector(
                 settings,
-                redis_manager.client,
+                redis_client,
                 auth_manager.key_manager,
             )
         # AsyncResourceProtector handles all validation and error raising
@@ -332,78 +332,108 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
 
         return response
 
+
     # Device Flow endpoints
     @router.post("/device/code")
     async def device_code(
         request: Request,
         client_id: str = Form(default="device_flow_client"),
         scope: str = Form(default="read:user user:email"),
-        resource: Optional[str] = Form(default=None)
+        resource: Optional[Union[str, List[str]]] = Form(default=None)
     ):
-        """GitHub Device Flow - Step 1: Get device code (RFC 8628)
+        """OAuth 2.0 Device Authorization Endpoint (RFC 8628 + RFC 8707).
         
-        Accepts client_id, scope, and resource as form parameters per RFC 8628 and RFC 8707
-        The resource parameter identifies the proxy/MCP server the token will be used with
-        Forwards request to GitHub's device endpoint to get a device code
+        PURE OAUTH 2.0:
+        - Accepts client-specified resources
+        - Validates resource URIs
+        - Stores request context
+        - Returns standard device response
+        
+        NO: Discovery, magic, fallbacks, or server-side decisions.
         """
         client_ip = get_real_client_ip(request)
         
-        # Default resource to localhost proxy if not specified
-        if not resource:
-            # Get the proxy hostname from request to use as default resource
-            host = request.headers.get("host", "localhost")
-            resource = f"http://{host}" if host == "localhost" else f"https://{host}"
-            log_info(f"Device Flow: No resource specified, defaulting to {resource}", client_ip=client_ip)
+        # Process resource parameter(s) per RFC 8707
+        resources = []
+        if resource is not None:
+            if isinstance(resource, str):
+                resources = [resource]
+            elif isinstance(resource, list):
+                resources = resource
+            else:
+                return JSONResponse(
+                    {"error": "invalid_request",
+                     "error_description": "Invalid resource parameter type"},
+                    status_code=400
+                )
+        
+        # Validate resource URIs (OPTIONAL but recommended)
+        for res in resources:
+            if not isinstance(res, str) or not res.startswith(("http://", "https://")):
+                return JSONResponse(
+                    {"error": "invalid_resource",
+                     "error_description": f"Invalid resource URI format: {res}"},
+                    status_code=400
+                )
         
         log_info(
-            "Device Flow: Code request",
+            "OAuth device authorization request",
             client_ip=client_ip,
             client_id=client_id,
             scope=scope,
-            resource=resource
+            resource_count=len(resources),
+            resources=resources
         )
         
-        # Forward to GitHub's device code endpoint
-        # Note: We use GitHub's OAuth app credentials, not the client_id from request
+        # Forward to GitHub for device code
         async with httpx.AsyncClient() as client:
             github_response = await client.post(
                 "https://github.com/login/device/code",
                 headers={"Accept": "application/json"},
                 data={
                     "client_id": settings.github_client_id,
-                    "scope": scope  # Use the requested scope
+                    "scope": scope
                 }
             )
         
-        result = github_response.json()
-        
-        # Store the requested resource with the device code for later use
-        if result.get("device_code"):
-            device_code_data = {
-                "resource": resource,
-                "scope": scope,
-                "client_id": client_id
-            }
-            # Store in Redis with same expiry as GitHub's device code
-            expires_in = result.get("expires_in", 900)  # Default 15 minutes
-            redis_client = await get_redis()
-            await redis_client.setex(
-                f"device_code:{result['device_code']}",
-                expires_in,
-                json.dumps(device_code_data)
+        if github_response.status_code != 200:
+            log_error(
+                "GitHub device code request failed",
+                client_ip=client_ip,
+                status=github_response.status_code
+            )
+            return JSONResponse(
+                {"error": "server_error",
+                 "error_description": "Failed to obtain device code"},
+                status_code=502
             )
         
-        log_info(
-            "Device Flow: Code generated",
-            client_ip=client_ip,
-            device_code=result.get("device_code", "")[:8] + "..." if result.get("device_code") else None,
-            user_code=result.get("user_code"),
-            resource=resource
+        result = github_response.json()
+        device_code = result.get("device_code")
+        
+        if not device_code:
+            return JSONResponse(
+                {"error": "server_error",
+                 "error_description": "No device code in response"},
+                status_code=502
+            )
+        
+        # Store OAuth context with CONSISTENT key naming
+        redis_client = await get_redis()
+        await redis_client.set(
+            f"oauth:device:{device_code}",  # Consistent oauth: prefix
+            json.dumps({
+                "client_id": client_id,
+                "scope": scope,
+                "resources": resources,  # Exactly what client requested
+                "created_at": time.time(),
+                "client_ip": client_ip
+            }),
+            ex=result.get("expires_in", 900)
         )
         
-        # Include resource in response for client awareness
-        result["resource"] = resource
-        return result
+        # Return standard OAuth device response
+        return JSONResponse(result)
 
     @router.post("/device/token") 
     async def device_token(
@@ -433,7 +463,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             )
         
         log_debug(
-            "Device Flow: Token exchange attempt",
+            "OAuth token exchange attempt",
             client_ip=client_ip,
             client_id=client_id,
             has_device_code=bool(device_code)
@@ -468,7 +498,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             
             github_user = user_info.get("login")
             log_info(
-                "Device Flow: GitHub user authenticated",
+                "GitHub user authenticated",
                 client_ip=client_ip,
                 github_user=github_user,
                 github_email=user_info.get("email")
@@ -501,17 +531,20 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 )
                 assigned_scopes = ["user"]
             
-            # Retrieve the resource from stored device code data
-            device_code_data_str = await redis_client.get(f"device_code:{device_code}")
-            if device_code_data_str:
-                device_code_data = json.loads(device_code_data_str)
-                resource = device_code_data.get("resource", "http://localhost")
-                # Clean up the stored data
-                await redis_client.delete(f"device_code:{device_code}")
+            # Retrieve the resources from stored OAuth context
+            context_str = await redis_client.get(f"oauth:device:{device_code}")
+            if context_str:
+                context = json.loads(context_str)
+                resources = context.get("resources", [])
+                # Clean up the stored context
+                await redis_client.delete(f"oauth:device:{device_code}")
             else:
-                # Fallback if no stored data (shouldn't happen)
-                resource = "http://localhost"
-                log_warning(f"Device Flow: No stored resource for device code, using default", client_ip=client_ip)
+                # Context expired or not found
+                return JSONResponse(
+                    {"error": "invalid_grant",
+                     "error_description": "Device code not found or expired"},
+                    status_code=400
+                )
             
             # Generate our JWT with assigned scopes
             jti = f"device_{secrets.token_urlsafe(16)}"
@@ -520,22 +553,23 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Get the issuer URL (auth server)
             issuer_url = get_external_url(request, settings)
             
-            # Audience is the resource (proxy) where token will be used
-            audience_url = resource
+            # Audience is an array of all requested resources
+            # If only one resource, still use array for consistency
+            audience_list = resources
             
             log_info(
-                f"Device Flow: Generating token",
+                "OAuth token generation",
                 client_ip=client_ip,
-                github_user=github_user,
-                resource=resource,
-                audience=audience_url,
+                username=github_user,
+                resource_count=len(resources),
+                resources=resources,
                 scopes=assigned_scopes
             )
             
             token_payload = {
                 "iss": issuer_url,
                 "sub": str(user_info.get("id")),
-                "aud": audience_url,  # Resource URI where token will be used
+                "aud": audience_list,  # Array of resource URIs where token can be used
                 "exp": now + timedelta(seconds=settings.access_token_lifetime),
                 "iat": now,
                 "jti": jti,
@@ -568,24 +602,26 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                 json.dumps(token_data)
             )
             
-            # Generate refresh token for device flow with the same resource
+            # Generate refresh token for device flow with the same resources
             refresh_token_value = await auth_manager.create_refresh_token(
                 {
                     "user_id": str(user_info.get("id")),
                     "username": github_user,
                     "client_id": "device_flow_client",
                     "scope": " ".join(assigned_scopes),
-                    "resource": resource  # Store the resource for refresh
+                    "resources": resources,  # Store multiple resources for refresh
+                    "resource": resources[0] if resources else "http://localhost"  # Keep for backward compat
                 },
                 redis_client
             )
             
             log_info(
-                "Device Flow: Token generated with refresh token",
+                "OAuth token issued",
                 client_ip=client_ip,
-                github_user=github_user,
+                username=github_user,
                 scopes=assigned_scopes,
-                jti=jti
+                jti=jti,
+                resource_count=len(resources)
             )
             
             return {
@@ -1656,7 +1692,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "name": code_data["name"],
                     "scope": code_data["scope"],
                     "client_id": client_id,
-                    "resources": token_resources,  # RFC 8707 Resource Indicators
+                    "audience": token_resources,  # RFC 8707 Resource Indicators - sets 'aud' claim
                 },
                 redis_client,
                 issuer=issuer_url
@@ -1832,26 +1868,31 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             # Generate new access token with the correct issuer URL and audience
             issuer_url = get_external_url(request, settings)
             
-            # Use the resource from the refresh token as audience
-            # This preserves the original resource the token was issued for
-            resource = refresh_data.get("resource")
-            if not resource:
-                # For backward compatibility with old refresh tokens
-                resources = refresh_data.get("resources", [])
-                if resources:
-                    resource = resources[0] if isinstance(resources, list) else resources
+            # Use the resources from the refresh token as audience
+            # This preserves the original resources the token was issued for
+            resources = refresh_data.get("resources")
+            if not resources:
+                # For backward compatibility with old refresh tokens that have single resource
+                single_resource = refresh_data.get("resource")
+                if single_resource:
+                    resources = [single_resource]
                 else:
-                    resource = "http://localhost"  # Last resort fallback
+                    resources = ["http://localhost"]  # Last resort fallback
                     log_warning(
-                        f"Refresh token missing resource, using default",
+                        f"Refresh token missing resources, using default",
                         client_ip=client_ip,
                         refresh_token_preview=refresh_token[:10] if refresh_token else "N/A"
                     )
             
+            # Ensure resources is a list
+            if not isinstance(resources, list):
+                resources = [resources]
+            
             log_info(
-                f"Refreshing token with resource",
+                f"Refreshing token with multiple resources",
                 client_ip=client_ip,
-                resource=resource,
+                resources=resources,
+                resource_count=len(resources),
                 username=refresh_data.get("username")
             )
             
@@ -1861,7 +1902,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
                     "username": refresh_data["username"],
                     "scope": refresh_data["scope"],
                     "client_id": client_id,
-                    "audience": resource,  # Use the original resource as audience
+                    "audience": resources,  # Use the original resources as audience array
                 },
                 redis_client,
                 issuer=issuer_url
@@ -1948,7 +1989,7 @@ def create_oauth_router(settings: Settings, redis_manager, auth_manager: AuthMan
             if require_oauth is None:
                 require_oauth = create_async_resource_protector(
                     settings,
-                    redis_manager.client,
+                    redis_client,
                     auth_manager.key_manager,
                 )
             

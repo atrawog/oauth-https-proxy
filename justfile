@@ -425,3 +425,103 @@ config-save filename="":
 config-load filename force="":
     @pixi run proxy-client system config import {{filename}} \
         {{ if force == "true" { "--force" } else { "" } }}
+
+# ============================================================================
+# MCP VERIFICATION TOOLS
+# ============================================================================
+
+# Install MCP verification tools
+mcp-install:
+    @echo "Installing MCP Verification Tools..."
+    @pixi run pip install -e .
+    @echo "✅ MCP Verification Tools installed"
+
+# Generate/update Pydantic models from MCP schema  
+mcp-generate-schema:
+    @echo "Generating Pydantic models from MCP schema..."
+    @pixi run python mcp_verification_tools/schemas/generate.py
+    @echo "✅ Schema models generated"
+
+# Run MCP compliance tests on endpoint
+mcp-verify endpoint="https://everything.atratest.org/mcp":
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --output reports/mcp-$(date +%Y%m%d-%H%M%S).yaml
+
+# Run MCP compliance tests with verbose output
+mcp-verify-verbose endpoint="https://everything.atratest.org/mcp":
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --output reports/mcp-verbose-$(date +%Y%m%d-%H%M%S).yaml \
+        --verbose
+
+# Test both reference endpoints
+mcp-test-both:
+    @echo "Testing both MCP endpoints..."
+    @pixi run python -m mcp_verification_tools.cli validate \
+        https://everything.atratest.org/mcp \
+        https://simple.atratest.org/mcp \
+        --output reports/mcp-comparison-$(date +%Y%m%d-%H%M%S).yaml \
+        --verbose
+
+# Run specific test category
+mcp-test-category endpoint category:
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --category {{category}} \
+        --output reports/mcp-{{category}}-$(date +%Y%m%d-%H%M%S).yaml
+
+# Run tests with specific tags
+mcp-test-tags endpoint tags:
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --tags {{tags}} \
+        --output reports/mcp-tagged-$(date +%Y%m%d-%H%M%S).yaml
+
+# List all available tests
+mcp-list-tests:
+    @pixi run python -m mcp_verification_tools.cli list-tests
+
+# List tests by category
+mcp-list-category category:
+    @pixi run python -m mcp_verification_tools.cli list-tests --category {{category}}
+
+# Run security tests only with fail-fast
+mcp-security endpoint:
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --category security_compliance \
+        --fail-fast \
+        --output reports/mcp-security-$(date +%Y%m%d-%H%M%S).yaml
+
+# Run performance tests only
+mcp-performance endpoint:
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --category performance_metrics \
+        --output reports/mcp-performance-$(date +%Y%m%d-%H%M%S).yaml
+
+# Run stress test
+mcp-stress endpoint sessions="100" duration="60":
+    @pixi run python -m mcp_verification_tools.cli stress {{endpoint}} \
+        --sessions {{sessions}} \
+        --duration {{duration}} \
+        --output reports/mcp-stress-$(date +%Y%m%d-%H%M%S).json
+
+# Quick compliance check (fail-fast mode)
+mcp-check endpoint:
+    @pixi run python -m mcp_verification_tools.cli validate {{endpoint}} \
+        --fail-fast \
+        --output reports/mcp-quick-$(date +%Y%m%d-%H%M%S).yaml
+
+# Add a custom test
+mcp-add-test file:
+    @pixi run python -m mcp_verification_tools.cli add-test {{file}}
+
+# Create reports directory if needed
+mcp-setup:
+    @mkdir -p reports
+    @echo "✅ Reports directory created"
+
+# View latest report
+mcp-view-latest:
+    @cat reports/mcp-*.yaml | tail -1000
+
+# Clean old reports (keep last 10)
+mcp-clean-reports:
+    @ls -t reports/mcp-*.yaml 2>/dev/null | tail -n +11 | xargs rm -f 2>/dev/null || true
+    @echo "✅ Old reports cleaned"

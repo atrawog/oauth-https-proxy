@@ -18,7 +18,6 @@ from ..shared.client_ip import get_real_client_ip
 
 # OAuth imports
 from .oauth.config import Settings as OAuthSettings
-from .oauth.redis_client import RedisManager as OAuthRedisManager
 from .oauth.auth_authlib import AuthManager
 from .oauth.routes import create_oauth_router
 
@@ -113,28 +112,26 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     
     # Initialize OAuth components
     oauth_settings = OAuthSettings()
-    oauth_redis_manager = OAuthRedisManager(oauth_settings)
     auth_manager = AuthManager(oauth_settings)
     
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage application lifecycle."""
         logger.info("API app starting...")
-        # Initialize OAuth Redis connection
-        await oauth_redis_manager.initialize()
+        # OAuth components use the main Redis client from storage
+        # No separate OAuth Redis connection needed
         
         # Initialize OAuth resource protector (not stored in app.state)
         from .oauth.async_resource_protector import create_async_resource_protector
         resource_protector = create_async_resource_protector(
             oauth_settings,
-            oauth_redis_manager.client,
+            storage.redis_client,  # Use storage's Redis client
             auth_manager.key_manager
         )
         
         yield
         logger.info("API app shutting down...")
-        # Close OAuth Redis connection
-        await oauth_redis_manager.close()
+        # Redis cleanup handled by main storage
     
     app = FastAPI(
         title="MCP HTTP Proxy API",
@@ -383,7 +380,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             raise HTTPException(500, "Internal Server Error")
     
     # Include OAuth protocol router (remains at root level for compliance)
-    oauth_router = create_oauth_router(oauth_settings, oauth_redis_manager, auth_manager)
+    oauth_router = create_oauth_router(oauth_settings, storage.redis_client, auth_manager)
     app.include_router(oauth_router)
     logger.info("OAuth router included successfully")
     
