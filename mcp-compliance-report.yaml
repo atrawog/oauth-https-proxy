@@ -2,67 +2,160 @@ metadata:
   report_version: 1.0.0
   mcp_specification_version: '2025-06-18'
   verification_tool_version: 1.0.0
-  report_id: c44b661e-289c-4266-9336-d0a7b94bdd8f
-  generated_at: '2025-08-28T21:56:27.211995Z'
-  endpoint_tested: https://everything.atratest.org/mcp
-  test_started_at: '2025-08-28T21:56:21.986328Z'
-  test_completed_at: '2025-08-28T21:56:27.207408Z'
-  test_duration_seconds: 5.22
-  total_tests_run: 12
+  report_id: b596e6fb-cfd6-4969-9264-a8472148708d
+  generated_at: '2025-08-29T22:11:51.149784Z'
+  endpoint_tested: https://simple-oauth.atratest.org/mcp
+  test_started_at: '2025-08-29T22:11:42.504065Z'
+  test_completed_at: '2025-08-29T22:11:51.144930Z'
+  test_duration_seconds: 8.64
+  total_tests_run: 27
   environment:
     platform: MCP Verification Tools
     protocol_version: '2025-06-18'
 summary:
-  compliance_score: 66.7
-  status: PARTIALLY_COMPLIANT
-  passed_tests: 8
-  failed_tests: 2
-  warning_tests: 2
-  skipped_tests: 0
-  error_tests: 0
+  compliance_score: 3.7
+  status: NON_COMPLIANT
+  passed_tests: 1
+  failed_tests: 0
+  warning_tests: 0
+  skipped_tests: 1
+  error_tests: 25
   categories:
     protocol_compliance:
-      passed: 3
-      failed: 0
+      passed: 1
+      failed: 3
       total: 4
-      score: 75.0
+      score: 25.0
+    prompts_validation:
+      passed: 0
+      failed: 2
+      total: 2
+      score: 0.0
+    resources_validation:
+      passed: 0
+      failed: 6
+      total: 6
+      score: 0.0
     security_compliance:
       passed: 0
       failed: 1
       total: 1
       score: 0.0
     session_management:
-      passed: 2
-      failed: 1
+      passed: 0
+      failed: 2
       total: 3
-      score: 66.7
+      score: 0.0
+    tools_validation:
+      passed: 0
+      failed: 7
+      total: 7
+      score: 0.0
     transport_compliance:
-      passed: 3
-      failed: 0
+      passed: 0
+      failed: 4
       total: 4
-      score: 75.0
+      score: 0.0
 compliance_assessment:
-  overall_verdict: ⚠️ FAIR - Endpoint has significant compliance gaps
-  compliance_percentage: 66.7
-  critical_issues: 1
-  high_priority_issues: 1
+  overall_verdict: ❌ POOR - Endpoint has critical compliance failures
+  compliance_percentage: 3.7
+  critical_issues: 0
+  high_priority_issues: 0
   production_ready: false
-  security_posture: CRITICAL_VULNERABILITIES
+  security_posture: SECURE
   performance_rating: NOT_TESTED
   spec_coverage:
     session_management: 30.0
     transport_compliance: 50.0
     protocol_compliance: 33.3
-    tools_validation: 0.0
+    tools_validation: 87.5
     security_compliance: 16.7
     performance_metrics: 0.0
-    resources_validation: 0.0
-    prompts_validation: 0.0
+    resources_validation: 100.0
+    prompts_validation: 50.0
 test_results:
   protocol_compliance:
+  - test_id: LC-001
+    test_name: Initialize Must Be First
+    status: PASSED
+    severity: CRITICAL
+    description: |-
+      Validates that initialize MUST be the first interaction between client and server.
+          Server should reject other requests before initialization.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
+      section: Lifecycle
+      requirement: Initialize MUST be the first interaction between client and server
+    test_methodology: |-
+      1. Create new client without initializing
+          2. Send a non-initialize request (e.g., tools/list)
+          3. Verify server rejects the request
+          4. Send initialize request
+          5. Verify server accepts the request
+    expected_behavior: |-
+      - Server rejects non-initialize requests before initialization
+          - Server accepts initialize as first request
+          - After initialize, server accepts other requests
+          - Clear error messages for premature requests
+    actual_behavior: |-
+      Server correctly enforces initialization order:
+                  - Premature request: Rejected ✓
+                  - Initialize request: Rejected ✗
+    execution_time_seconds: 6.386
+  - test_id: LC-002
+    test_name: Initialize Request Format
+    status: ERROR
+    severity: HIGH
+    description: |-
+      Validates that initialize request contains required fields:
+          protocol version, capabilities, and client information.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
+      section: Initialization
+      requirement: Client MUST send initialize with protocol version, capabilities, and client info
+    test_methodology: |-
+      1. Send properly formatted initialize request
+          2. Send initialize missing protocol version
+          3. Send initialize missing capabilities
+          4. Send initialize missing client info
+          5. Verify server handles each case appropriately
+    expected_behavior: |-
+      - Server accepts properly formatted initialize
+          - Server rejects or handles missing required fields
+          - Server returns proper initialization response
+          - Response includes server capabilities and info
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.322
+  - test_id: LC-003
+    test_name: Protocol Version Negotiation
+    status: ERROR
+    severity: HIGH
+    description: |-
+      Validates protocol version negotiation.
+          If server doesn't support requested version, it MUST respond with another version it supports.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/lifecycle
+      section: Version Negotiation
+      requirement: Server MUST respond with supported version if requested version unsupported
+    test_methodology: |-
+      1. Send initialize with current version (2025-06-18)
+          2. Send initialize with old version (2024-01-01)
+          3. Send initialize with future version (2026-01-01)
+          4. Verify server responds with supported version when needed
+    expected_behavior: |-
+      - Server accepts supported versions
+          - Server responds with alternative version if unsupported
+          - Server doesn't crash on unknown versions
+          - Version in response matches what server supports
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.313
   - test_id: LC-004
     test_name: Protocol Version Header Persistence
-    status: WARNING
+    status: ERROR
     severity: MEDIUM
     description: |-
       Validates that client MUST include protocol version header on subsequent HTTP requests
@@ -80,17 +173,213 @@ test_results:
       - Server accepts requests with protocol version header
           - Server may reject or warn about missing version header
           - Consistent behavior across all post-initialization requests
-    actual_behavior: |-
-      Server accepts requests regardless of version header:
-                  - With version header: Accepted ✓
-                  - Without version header: Accepted (should consider rejecting)
-
-                  Note: Clients MUST include the header, but server enforcement is optional.
-    execution_time_seconds: 2.611
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.313
+  prompts_validation:
+  - test_id: PROMPT-001
+    test_name: Prompts Capability Declaration
+    status: ERROR
+    severity: HIGH
+    description: Validates that servers MUST declare the prompts capability if they support prompts.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/prompts
+      section: Prompts
+      requirement: Servers that support prompts MUST declare the prompts capability
+    test_methodology: |-
+      1. Initialize session with the server
+          2. Check if server declares prompts capability
+          3. If prompts capability declared, verify prompts/list works
+          4. If not declared, verify prompts/list fails appropriately
+          5. Check consistency between declaration and implementation
+    expected_behavior: |-
+      - Server declares prompts capability if it supports prompts
+          - If capability declared, prompts/list method works
+          - If capability not declared, prompts methods should fail/not exist
+          - Capability declaration matches actual implementation
+          - Optional listChanged flag indicates change notification support
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.3
+  - test_id: PROMPT-002
+    test_name: Prompts List Method
+    status: ERROR
+    severity: MEDIUM
+    description: Validates that prompts/list method returns proper structure with required fields.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/prompts
+      section: Listing Prompts
+      requirement: prompts/list must return prompts array with required fields
+    test_methodology: |-
+      1. Initialize session and check for prompts capability
+          2. Call prompts/list method
+          3. Verify response structure and required fields
+          4. Check each prompt has name (required) and optional fields
+          5. Check pagination if applicable
+    expected_behavior: |-
+      - prompts/list returns result with prompts array
+          - Each prompt has required field: name (unique identifier)
+          - Optional fields properly structured: title, description, arguments
+          - Pagination works if nextCursor provided
+          - No duplicate prompt names
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.322
+  resources_validation:
+  - test_id: RES-001
+    test_name: Resources Capability Declaration
+    status: ERROR
+    severity: HIGH
+    description: Validates that servers MUST declare the resources capability if they support resources.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+      section: Resources
+      requirement: Servers MUST declare the resources capability
+    test_methodology: |-
+      1. Initialize session with the server
+          2. Check if server declares resources capability
+          3. If resources capability declared, verify resources/list works
+          4. If not declared, verify resources/list fails appropriately
+    expected_behavior: |-
+      - Server declares resources capability if it supports resources
+          - If capability declared, resources/list method works
+          - If capability not declared, resources methods should fail/not exist
+          - Capability declaration matches actual implementation
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.286
+  - test_id: RES-002
+    test_name: Resources List Method
+    status: ERROR
+    severity: MEDIUM
+    description: Validates that resources/list method works correctly when resources capability is declared.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+      section: Listing Resources
+      requirement: Resources list should return available resources
+    test_methodology: |-
+      1. Initialize session and check for resources capability
+          2. Call resources/list method
+          3. Verify response format and structure
+          4. Check pagination if applicable
+    expected_behavior: |-
+      - resources/list returns result with resources array
+          - Each resource has required fields (uri, name, etc.)
+          - Pagination works if next_cursor provided
+          - Error returned if resources not supported
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.299
+  - test_id: RES-003
+    test_name: Resource URI Validation
+    status: ERROR
+    severity: HIGH
+    description: |-
+      Validates that resource URIs MUST be in accordance with RFC3986 and
+          servers MUST validate all resource URIs.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+      section: Resource URIs
+      requirement: URIs MUST be in accordance with RFC3986, servers MUST validate all resource URIs
+    test_methodology: |-
+      1. Initialize session and check for resources capability
+          2. Try to read resources with valid RFC3986 URIs
+          3. Try to read resources with invalid URIs
+          4. Verify server properly validates and rejects invalid URIs
+    expected_behavior: |-
+      - Server accepts valid RFC3986 URIs
+          - Server rejects invalid URIs with appropriate error
+          - Clear error messages for invalid URIs
+          - No security vulnerabilities from URI parsing
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.31
+  - test_id: RES-004
+    test_name: Binary Data Encoding
+    status: ERROR
+    severity: MEDIUM
+    description: Validates that binary data MUST be properly encoded when returned from resources.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+      section: Resources
+      requirement: Binary data MUST be properly encoded
+    test_methodology: |-
+      1. Initialize session and check for resources capability
+          2. List available resources
+          3. Read any binary resources (e.g., images, files)
+          4. Verify binary data is properly base64 encoded
+    expected_behavior: |-
+      - Binary resources have mimeType indicating binary content
+          - Binary data is base64 encoded in contents
+          - Base64 data is valid and decodable
+          - No raw binary in JSON responses
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.298
+  - test_id: RES-005
+    test_name: Resource List Change Notifications
+    status: ERROR
+    severity: MEDIUM
+    description: |-
+      Validates that servers declaring listChanged capability properly send
+          notifications when resource list changes.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+      section: Resource Notifications
+      requirement: Servers declaring listChanged SHOULD send notifications when list changes
+    test_methodology: |-
+      1. Initialize session and check resources capability
+          2. Check if server declares listChanged capability
+          3. If listChanged declared, verify notification format is correct
+          4. Test if server accepts notification subscriptions appropriately
+          5. Verify capability declaration matches implementation
+    expected_behavior: |-
+      - If listChanged: true, server SHOULD send notifications
+          - Notification method: notifications/resources/list_changed
+          - If listChanged: false or absent, no notifications expected
+          - Capability declaration should match behavior
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.284
+  - test_id: RES-006
+    test_name: Resource Subscription Support
+    status: ERROR
+    severity: MEDIUM
+    description: |-
+      Validates that servers declaring subscribe capability properly support
+          resource subscriptions and send update notifications.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/resources
+      section: Resource Subscriptions
+      requirement: Servers declaring subscribe capability should support subscriptions
+    test_methodology: |-
+      1. Initialize session and check resources capability
+          2. Check if server declares subscribe capability
+          3. If subscribe declared, attempt to subscribe to a resource
+          4. Verify subscription handling is correct
+          5. Check for update notification support
+    expected_behavior: |-
+      - If subscribe: true, server supports resource subscriptions
+          - Subscribe method: resources/subscribe
+          - Unsubscribe method: resources/unsubscribe
+          - Update notification: notifications/resources/updated
+          - If subscribe: false or absent, subscriptions not supported
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.269
   security_compliance:
   - test_id: SEC-001
     test_name: Origin Header Validation
-    status: FAILED
+    status: ERROR
     severity: CRITICAL
     description: |-
       Validates that server MUST validate the Origin header on all incoming connections
@@ -110,48 +399,72 @@ test_results:
           - Server rejects requests from external/malicious origins
           - Server handles missing Origin header appropriately
           - Clear security error for rejected origins
-    actual_behavior: |-
-      CRITICAL SECURITY FAILURE: Server accepts requests from malicious origins!
-                  - Valid origin (https://everything.atratest.org): Accepted ✓
-                  - Malicious origin (evil.example.com): Accepted ✗ (MUST reject)
-                  - No Origin header: Status 200
-                  - Localhost origin: Accepted
-
-                  Server is vulnerable to DNS rebinding attacks!
-    failure_reason: |-
-      Server MUST validate Origin header to prevent DNS rebinding attacks.
-                  Accepting requests from arbitrary origins is a critical security vulnerability.
-    impact_assessment:
-      compatibility: LOW
-      security: CRITICAL
-      functionality: LOW
-      description: "\n                DNS rebinding vulnerability allows attackers to:\n             \
-        \   - Bypass same-origin policy\n                - Access internal services\n                -\
-        \ Steal sensitive data\n                - Execute unauthorized commands\n                "
-    remediation:
-      priority: IMMEDIATE
-      steps:
-      - Implement Origin header validation
-      - Whitelist allowed origins
-      - Reject requests from unknown origins
-      - Return 403 Forbidden for invalid origins
-      - Log security violations
-      code_example: "\n# Example: Origin header validation\nALLOWED_ORIGINS = [\n    \"http://localhost\"\
-        ,\n    \"http://127.0.0.1\",\n    \"https://yourdomain.com\"\n]\n\nasync def validate_origin(request):\n\
-        \    origin = request.headers.get('Origin')\n    \n    # No origin might be okay for non-browser\
-        \ clients\n    if not origin:\n        # Decide based on your security requirements\n        return\
-        \ True  # or False for strict security\n    \n    # Check against whitelist\n    if origin not\
-        \ in ALLOWED_ORIGINS:\n        return False\n    \n    return True\n\nasync def handle_request(request):\n\
-        \    if not validate_origin(request):\n        return JSONResponse(\n            status_code=403,\n\
-        \            content={\"error\": \"Forbidden: Invalid Origin\"}\n        )\n    \n    # Process\
-        \ request...\n"
-      estimated_effort: null
-      references: null
-    execution_time_seconds: 2.678
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.253
   session_management:
+  - test_id: SM-001
+    test_name: Session ID Character Set Validation
+    status: ERROR
+    severity: CRITICAL
+    description: |-
+      Validates that session IDs contain only visible ASCII characters (0x21-0x7E)
+          as required by the MCP specification. This is critical for cross-platform
+          compatibility, security, and proper HTTP header handling.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#session-management
+      section: Session Management
+      requirement: Session IDs MUST only contain visible ASCII characters (0x21-0x7E)
+    test_methodology: |-
+      1. Initialize a new MCP session with the server
+          2. Extract the session ID from the initialization response
+          3. Validate each character is within ASCII range 0x21-0x7E (! to ~)
+          4. Test multiple sessions to ensure consistency
+          5. Check for common problematic characters (spaces, tabs, newlines)
+          6. Verify no control characters or extended ASCII
+    expected_behavior: |-
+      - All characters in session ID must be visible ASCII (printable)
+          - Character range: 0x21 (!) through 0x7E (~)
+          - No spaces (0x20), tabs (0x09), or newlines (0x0A, 0x0D)
+          - No control characters (0x00-0x1F)
+          - No extended ASCII (0x7F and above)
+          - Recommended safe subset: [A-Za-z0-9-_]
+          - Minimum recommended length: 32 characters
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: |-
+      The test could not be completed due to an unexpected error.
+              This may indicate a problem with the server's basic functionality.
+
+              Error: HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}
+    execution_time_seconds: 6.23
+  - test_id: SM-002
+    test_name: Session ID Uniqueness
+    status: SKIPPED
+    severity: HIGH
+    description: |-
+      Verifies that session IDs are globally unique and cryptographically secure.
+          The specification requires that session IDs MUST be globally unique.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+      section: Session Management
+      requirement: Session IDs MUST be globally unique and cryptographically secure
+    test_methodology: |-
+      1. Request 100 session IDs from the server
+          2. Check for any duplicate session IDs
+          3. Verify IDs appear to be randomly generated (not sequential)
+          4. Confirm reasonable length for security (16+ characters recommended)
+    expected_behavior: |-
+      - No duplicate session IDs in sample of 100
+          - Session IDs should be non-sequential
+          - Reasonable length for security (16+ characters)
+          - IDs should appear random, not predictable
+    actual_behavior: Server is stateless (no session IDs provided)
+    execution_time_seconds: 8.495
   - test_id: SM-003
     test_name: Session Persistence Across Requests
-    status: FAILED
+    status: ERROR
     severity: HIGH
     description: |-
       Validates that session state persists correctly across multiple requests
@@ -174,73 +487,251 @@ test_results:
           - Invalid session ID returns 404 Not Found
           - Session state persists for reasonable duration
           - Case-sensitive session ID matching
-    actual_behavior: |-
-      Session persistence test results:
-                  - Valid session ID: Accepted
-                  - Invalid session ID: Incorrectly accepted
-                  - No session ID: Request failed
-
-                  Issues found:
-                  • Server accepted invalid session ID (should return 404)
-    failure_reason: |-
-      Session persistence is not properly implemented.
-
-                  The server must:
-                  1. Accept valid session IDs in Mcp-Session-Id header
-                  2. Reject invalid session IDs with 404 Not Found
-                  3. Maintain session state across requests
-                  4. Handle missing session IDs appropriately
-
-                  Without proper session persistence:
-                  - Stateful operations become impossible
-                  - Each request is treated independently
-                  - Complex multi-step workflows cannot function
-                  - User context is lost between requests
-    impact_assessment:
-      compatibility: HIGH
-      security: MEDIUM
-      functionality: HIGH
-      description: "\n                Broken session persistence severely limits functionality:\n    \
-        \            - No stateful conversations or workflows\n                - Cannot maintain user\
-        \ context\n                - Breaks MCP protocol compliance\n                - Incompatible with\
-        \ standard MCP clients\n                "
-    remediation:
-      priority: HIGH
-      steps:
-      - Implement session storage (in-memory or Redis)
-      - Read Mcp-Session-Id header from requests
-      - Validate session ID exists in storage
-      - Return 404 for invalid/expired sessions
-      - Maintain session state between requests
-      - Implement session timeout mechanism
-      - Add session cleanup for expired sessions
-      code_example: "\n# Python example of session management\nfrom typing import Dict, Optional\nimport\
-        \ time\n\nclass SessionManager:\n    def __init__(self, timeout_seconds: int = 3600):\n      \
-        \  self.sessions: Dict[str, dict] = {}\n        self.timeout = timeout_seconds\n    \n    def\
-        \ create_session(self) -> str:\n        \"\"\"Create new session with unique ID.\"\"\"\n     \
-        \   import secrets\n        session_id = secrets.token_urlsafe(32)\n        self.sessions[session_id]\
-        \ = {\n            'created_at': time.time(),\n            'last_accessed': time.time(),\n   \
-        \         'state': {}\n        }\n        return session_id\n    \n    def get_session(self, session_id:\
-        \ str) -> Optional[dict]:\n        \"\"\"Get session if valid and not expired.\"\"\"\n       \
-        \ if session_id not in self.sessions:\n            return None\n        \n        session = self.sessions[session_id]\n\
-        \        if time.time() - session['last_accessed'] > self.timeout:\n            del self.sessions[session_id]\n\
-        \            return None\n        \n        session['last_accessed'] = time.time()\n        return\
-        \ session\n    \n    def cleanup_expired(self):\n        \"\"\"Remove expired sessions.\"\"\"\n\
-        \        now = time.time()\n        expired = [\n            sid for sid, sess in self.sessions.items()\n\
-        \            if now - sess['last_accessed'] > self.timeout\n        ]\n        for sid in expired:\n\
-        \            del self.sessions[sid]\n"
-      estimated_effort: 3-4 hours
-      references: null
-    evidence:
-      validation_details:
-        session_id: 91166c9f-9e29-48...
-        valid_session_accepted: true
-        invalid_session_rejected: false
-    execution_time_seconds: 2.515
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'Could not complete persistence test: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    execution_time_seconds: 6.248
+  tools_validation:
+  - test_id: TOOL-004
+    test_name: Tools Call Method
+    status: ERROR
+    severity: CRITICAL
+    description: Validates that tools/call method executes tools correctly with proper error handling.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Calling Tools
+      requirement: tools/call must execute tools and return proper results or errors
+    test_methodology: |-
+      1. Initialize session and check for tools capability
+          2. List available tools
+          3. Call a tool with valid parameters
+          4. Call a tool with invalid parameters
+          5. Call a non-existent tool
+          6. Verify proper error handling for each case
+    expected_behavior: |-
+      - tools/call executes with valid parameters
+          - Returns result with content field
+          - Invalid parameters return proper error
+          - Non-existent tool returns error
+          - Tool execution errors use isError flag
+          - Protocol errors use JSON-RPC error format
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.256
+  - test_id: TOOL-001
+    test_name: Tools Capability Declaration
+    status: ERROR
+    severity: HIGH
+    description: Validates that servers MUST declare the tools capability if they support tools.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Tools
+      requirement: Servers that support tools MUST declare the tools capability
+    test_methodology: |-
+      1. Initialize session with the server
+          2. Check if server declares tools capability
+          3. If tools capability declared, verify tools/list works
+          4. If not declared, verify tools/list fails appropriately
+          5. Check consistency between declaration and implementation
+    expected_behavior: |-
+      - Server declares tools capability if it supports tools
+          - If capability declared, tools/list method works
+          - If capability not declared, tools methods should fail/not exist
+          - Capability declaration matches actual implementation
+          - Optional listChanged flag indicates change notification support
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.225
+  - test_id: TOOL-002
+    test_name: Tools List Method
+    status: ERROR
+    severity: HIGH
+    description: Validates that tools/list method returns proper structure with required fields.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Listing Tools
+      requirement: tools/list must return tools array with required fields
+    test_methodology: |-
+      1. Initialize session and check for tools capability
+          2. Call tools/list method
+          3. Verify response structure and required fields
+          4. Check each tool has name, description, and inputSchema
+          5. Validate input schemas are proper JSON Schema
+          6. Check pagination if applicable
+    expected_behavior: |-
+      - tools/list returns result with tools array
+          - Each tool has required fields:
+            - name (unique identifier)
+            - description (human-readable explanation)
+            - inputSchema (JSON Schema format)
+          - Optional fields properly structured (title, outputSchema)
+          - Pagination works if nextCursor provided
+          - No duplicate tool names
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.206
+  - test_id: TOOL-003
+    test_name: Tool Names Unique
+    status: ERROR
+    severity: HIGH
+    description: Validates that tool names are unique identifiers within the server.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Tool Names
+      requirement: Tool names must be unique identifiers
+    test_methodology: |-
+      1. Initialize session and check for tools capability
+          2. Call tools/list method
+          3. Collect all tool names
+          4. Check for duplicates
+          5. Verify names are valid identifiers (no spaces, special chars)
+    expected_behavior: |-
+      - All tool names are unique
+          - Names are valid identifiers (alphanumeric, underscores, hyphens)
+          - Names are descriptive and meaningful
+          - No empty or null names
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.233
+  - test_id: TOOL-006
+    test_name: Tool List Change Notifications
+    status: ERROR
+    severity: MEDIUM
+    description: |-
+      Validates that servers declaring listChanged capability for tools properly
+          send notifications when the tool list changes.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Tool Notifications
+      requirement: Servers declaring listChanged SHOULD send notifications when tool list changes
+    test_methodology: |-
+      1. Initialize session and check tools capability
+          2. Check if server declares listChanged capability for tools
+          3. If listChanged declared, verify notification would use correct format
+          4. Check consistency between capability and implementation
+          5. Document expected notification behavior
+    expected_behavior: |-
+      - If listChanged: true, server SHOULD send notifications
+          - Notification method: notifications/tools/list_changed
+          - If listChanged: false or absent, no notifications expected
+          - Notifications sent when tools are added, removed, or modified
+          - JSON-RPC notification format (no id field)
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.233
+  - test_id: TOOL-007
+    test_name: Tool Notification Capability Consistency
+    status: ERROR
+    severity: LOW
+    description: Validates that tool notification capabilities are consistent with implementation.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Capabilities
+      requirement: Capability declarations should match implementation
+    test_methodology: |-
+      1. Check tools capability declaration
+          2. Verify listChanged flag presence and value
+          3. Check if tools can actually change (dynamic vs static)
+          4. Verify consistency between capability and nature of tools
+          5. Provide recommendations based on findings
+    expected_behavior: |-
+      - Static tool sets: listChanged should be false or absent
+          - Dynamic tool sets: listChanged may be true
+          - If listChanged: true, tools should be able to change
+          - Capability should reflect actual behavior
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.186
+  - test_id: TOOL-005
+    test_name: Tool Parameter Validation
+    status: ERROR
+    severity: HIGH
+    description: Validates that tool parameters are properly validated against their input schemas.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/server/tools
+      section: Tool Parameters
+      requirement: Servers MUST validate tool inputs against inputSchema
+    test_methodology: |-
+      1. Initialize session and list available tools
+          2. For each tool with inputSchema:
+             - Test with valid parameters matching schema
+             - Test with wrong types
+             - Test with missing required fields
+             - Test with extra fields (if additionalProperties: false)
+          3. Verify proper validation errors are returned
+    expected_behavior: |-
+      - Valid parameters are accepted
+          - Invalid types are rejected with error
+          - Missing required fields are rejected
+          - Extra fields handled per schema rules
+          - Clear validation error messages
+          - Consistent error codes (-32602 for invalid params)
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.205
   transport_compliance:
+  - test_id: TR-001
+    test_name: Accept Header Requirements
+    status: ERROR
+    severity: HIGH
+    description: |-
+      Validates that the server properly handles the Accept header requirements.
+          Client MUST include both 'application/json' and 'text/event-stream' in Accept header.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+      section: Streamable HTTP
+      requirement: Client MUST include Accept header with application/json and text/event-stream
+    test_methodology: |-
+      1. Send request with correct Accept header (both types)
+          2. Send request with only application/json
+          3. Send request with only text/event-stream
+          4. Send request without Accept header
+          5. Verify server accepts correct header and handles others appropriately
+    expected_behavior: |-
+      - Server accepts requests with both media types in Accept header
+          - Server may accept partial Accept headers (implementation choice)
+          - Server responds with either application/json or text/event-stream
+          - Response Content-Type matches one of the accepted types
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.194
+  - test_id: TR-002
+    test_name: Protocol Version Header
+    status: ERROR
+    severity: MEDIUM
+    description: |-
+      Validates that the MCP-Protocol-Version header is properly handled.
+          Client MUST include MCP-Protocol-Version header with the protocol version.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+      section: Streamable HTTP
+      requirement: Client MUST include MCP-Protocol-Version header with protocol version
+    test_methodology: |-
+      1. Send request with correct protocol version header
+          2. Send request without protocol version header
+          3. Send request with unsupported protocol version
+          4. Verify server handles each case appropriately
+    expected_behavior: |-
+      - Server accepts requests with valid protocol version
+          - Server assumes version 2025-03-26 if header missing (SHOULD behavior)
+          - Server may reject unsupported protocol versions
+          - Server indicates supported versions in response or error
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.206
   - test_id: TR-003
     test_name: Session Response Codes
-    status: WARNING
+    status: ERROR
     severity: CRITICAL
     description: |-
       Validates that server returns correct HTTP status codes for session management.
@@ -261,77 +752,88 @@ test_results:
           - Missing session ID: 400 Bad Request (SHOULD)
           - Invalid/expired session ID: Any error status (404 recommended)
           - Clear error messages indicating the issue
-    actual_behavior: |-
-      Response status codes partially comply with MCP specification:
-                  - Valid session: 200 ✓
-                  - Missing session: 400 ✓
-                  - Invalid session: 400 ⚠️
-
-                  Warnings:
-                  • Invalid session returned 400 (404 recommended)
-    evidence:
-      validation_details:
-        valid_session_status: 200
-        missing_session_status: 400
-        invalid_session_status: 400
-    execution_time_seconds: 2.588
-critical_failures:
-- test_id: SEC-001
-  test_name: Origin Header Validation
-  category: security_compliance
-  failure_summary: Server MUST validate Origin header to prevent DNS rebinding attacks.
-  immediate_action_required: Implement Origin header validation
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.176
+  - test_id: TR-004
+    test_name: Response Content Types
+    status: ERROR
+    severity: HIGH
+    description: |-
+      Validates that server returns correct content types for different message types.
+          Server MUST return 202 Accepted for responses/notifications.
+          Server MUST return either text/event-stream or application/json for requests.
+    specification_reference:
+      url: https://modelcontextprotocol.io/specification/2025-06-18/basic/transports#streamable-http
+      section: Streamable HTTP
+      requirement: Server MUST return 202 for responses/notifications, appropriate content-type for requests
+    test_methodology: |-
+      1. Send a request (should get response with content)
+          2. Send a notification (should get 202 Accepted)
+          3. Verify content types match specification
+          4. Verify SSE format if text/event-stream is used
+    expected_behavior: |-
+      - Requests: application/json or text/event-stream response
+          - Notifications: 202 Accepted status
+          - Response content-type matches Accept header
+          - SSE responses use proper data: format
+    actual_behavior: 'Test execution failed: HTTP 401: {"error": "unauthorized", "error_description":
+      "OAuth authentication required"}'
+    failure_reason: 'HTTP 401: {"error": "unauthorized", "error_description": "OAuth authentication required"}'
+    execution_time_seconds: 6.186
+critical_failures: []
 recommendations:
-  critical_fixes:
-  - Implement Origin header validation
-  - Whitelist allowed origins
-  high_priority:
-  - Implement session storage (in-memory or Redis)
-  - Read Mcp-Session-Id header from requests
+  critical_fixes: []
+  high_priority: []
   medium_priority: []
   improvements:
   - Focus on achieving at least 80% compliance before production deployment
-  best_practices:
-  - Implement comprehensive security testing in your CI/CD pipeline
-  - Consider security audit before production deployment
+  best_practices: []
 compliance_matrix:
   session_management:
     total_tests: 3
-    passed: 2
-    failed: 1
-    compliance_percentage: 66.7
-    status: NON_COMPLIANT
+    passed: 0
+    failed: 0
+    compliance_percentage: 0.0
+    status: COMPLIANT
   transport_compliance:
     total_tests: 4
-    passed: 3
+    passed: 0
     failed: 0
-    compliance_percentage: 75.0
+    compliance_percentage: 0.0
     status: COMPLIANT
   protocol_compliance:
     total_tests: 4
-    passed: 3
+    passed: 1
     failed: 0
-    compliance_percentage: 75.0
+    compliance_percentage: 25.0
+    status: COMPLIANT
+  tools_validation:
+    total_tests: 7
+    passed: 0
+    failed: 0
+    compliance_percentage: 0.0
     status: COMPLIANT
   security_compliance:
     total_tests: 1
     passed: 0
-    failed: 1
+    failed: 0
     compliance_percentage: 0.0
-    status: NON_COMPLIANT
+    status: COMPLIANT
+  resources_validation:
+    total_tests: 6
+    passed: 0
+    failed: 0
+    compliance_percentage: 0.0
+    status: COMPLIANT
+  prompts_validation:
+    total_tests: 2
+    passed: 0
+    failed: 0
+    compliance_percentage: 0.0
+    status: COMPLIANT
 implementation_roadmap:
-- phase: 1
-  name: Critical Compliance Fixes
-  priority: IMMEDIATE
-  duration_estimate: 1-2 days
-  tasks:
-  - 'Fix SEC-001: Origin Header Validation'
-- phase: 2
-  name: High Priority Improvements
-  priority: HIGH
-  duration_estimate: 3-5 days
-  tasks:
-  - 'Fix SM-003: Session Persistence Across Requests'
 - phase: 3
   name: Full Compliance Achievement
   priority: MEDIUM

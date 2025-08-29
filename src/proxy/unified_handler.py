@@ -48,7 +48,12 @@ class UnifiedProxyHandler:
     
     # OAuth scope requirements mapping
     # Format: (method_pattern, path_pattern): [required_scopes]
+    # IMPORTANT: Order matters! More specific patterns must come FIRST
     SCOPE_REQUIREMENTS = [
+        # Public endpoints - no auth required (MUST BE FIRST to override catch-all patterns)
+        (r".*", r"/health", None),
+        (r".*", r"/.well-known/.*", None),
+        
         # Admin scope - all create/update/delete operations
         (r"POST|PUT|DELETE|PATCH", r"/tokens/.*", ["admin"]),
         (r"POST|PUT|DELETE|PATCH", r"/certificates/.*", ["admin"]),
@@ -61,12 +66,8 @@ class UnifiedProxyHandler:
         # MCP scope - protocol endpoints
         (r".*", r"/mcp.*", ["mcp"]),
         
-        # User scope - all read operations (default for GET)
+        # User scope - all read operations (default for GET) - MUST BE LAST (catch-all)
         (r"GET|HEAD|OPTIONS", r"/.*", ["user"]),
-        
-        # Public endpoints - no auth required
-        (r".*", r"/health", None),
-        (r".*", r"/.well-known/.*", None),
     ]
     
     def __init__(self, storage: UnifiedStorage, redis_clients: RedisClients, proxy_hostname=None):
@@ -645,6 +646,25 @@ class UnifiedProxyHandler:
             log_info(f"Auth disabled for this request", component="proxy_handler", **log_ctx)
             return None
         
+        # NEW: Check SCOPE_REQUIREMENTS to see if this is a public endpoint
+        method = request.method
+        path = request.url.path
+        
+        # First check if route has specific scope requirements
+        if route and hasattr(route, 'auth_config') and route.auth_config:
+            required_scopes = route.auth_config.get('required_scopes', [])
+            if not required_scopes:
+                # Fall back to method/path based scope detection
+                required_scopes = self.get_required_scopes(method, path)
+        else:
+            required_scopes = self.get_required_scopes(method, path)
+        
+        # If required_scopes is None, this is a public endpoint
+        if required_scopes is None:
+            log_info(f"Public endpoint {path} based on SCOPE_REQUIREMENTS - no auth required", 
+                    component="proxy_handler", **log_ctx)
+            return None
+        
         # Check excluded paths
         request_path = request.url.path
         # Fix: Ensure excluded_paths is never None
@@ -657,7 +677,7 @@ class UnifiedProxyHandler:
                 log_info(f"Path {request_path} excluded from auth (matched {excluded_path})", component="proxy_handler", **log_ctx)
                 return None
         
-        # Extract bearer token
+        # NOW we know auth is required - check for token
         token = self.extract_bearer_token(request)
         if not token:
             log_info("No bearer token found in request", component="proxy_handler", **log_ctx)
@@ -670,20 +690,7 @@ class UnifiedProxyHandler:
             log_warning("Invalid or expired OAuth token", component="proxy_handler", **log_ctx)
             return await self._return_auth_error(request, proxy_target, log_ctx, error={'error': 'invalid_token', 'error_description': 'Token is invalid or expired'})
         
-        # Get required scopes for this request
-        method = request.method
-        path = request.url.path
-        
-        # Check if route has specific scope requirements
-        if route and hasattr(route, 'auth_config') and route.auth_config:
-            required_scopes = route.auth_config.get('required_scopes', [])
-            if not required_scopes:
-                # Fall back to method/path based scope detection
-                required_scopes = self.get_required_scopes(method, path)
-        else:
-            required_scopes = self.get_required_scopes(method, path)
-        
-        # Validate scopes
+        # Validate scopes (required_scopes already determined above)
         token_scopes = token_info.get('scope', '').split() if token_info.get('scope') else []
         
         # Add user info to log context for scope validation
