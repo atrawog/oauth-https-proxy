@@ -19,6 +19,10 @@ class ProxyTarget(BaseModel):
     custom_headers: Optional[Dict[str, str]] = None
     custom_response_headers: Optional[Dict[str, str]] = None
     
+    # Configuration versioning for drift detection
+    config_version: int = 1  # Incremented on each update
+    updated_at: Optional[datetime] = None  # Last update timestamp
+    
     # Unified Auth Configuration
     auth_enabled: bool = False
     auth_proxy: Optional[str] = None

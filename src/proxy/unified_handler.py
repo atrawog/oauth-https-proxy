@@ -109,10 +109,29 @@ class UnifiedProxyHandler:
     
     def extract_bearer_token(self, request: Request) -> Optional[str]:
         """Extract bearer token from Authorization header."""
-        auth_header = request.headers.get('authorization', '')
-        if auth_header.startswith('Bearer '):
-            token = auth_header[7:]
+        # Log all headers to see what we're receiving
+        all_headers = dict(request.headers)
+        log_info(f"BEARER EXTRACTION: Headers received: {list(all_headers.keys())}", component="proxy_handler")
+        
+        # Check for Authorization header with different cases
+        auth_header = None
+        for key, value in all_headers.items():
+            if key.lower() == 'authorization':
+                auth_header = value
+                log_info(f"BEARER EXTRACTION: Found Authorization header with key '{key}': '{value[:50]}...'", component="proxy_handler")
+                break
+        
+        if not auth_header:
+            log_info(f"BEARER EXTRACTION: No Authorization header found in {list(all_headers.keys())}", component="proxy_handler")
+            return None
+            
+        # Check for Bearer prefix (case-insensitive)
+        if auth_header.lower().startswith('bearer '):
+            token = auth_header[7:]  # Skip 'Bearer ' prefix
+            log_info(f"BEARER EXTRACTION: Successfully extracted token: {token[:20]}...", component="proxy_handler")
             return token
+        
+        log_info(f"BEARER EXTRACTION: Authorization header does not start with 'Bearer ': '{auth_header[:50]}...'", component="proxy_handler")
         return None
     
     async def _get_proxy_resource_uri(self, proxy_hostname: str) -> str:
@@ -418,8 +437,16 @@ class UnifiedProxyHandler:
         user_email = token_info.get('email', '')
         user_orgs = token_info.get('orgs', [])
         
-        # Check allowed users
-        allowed_users = auth_config.get('allowed_users', [])
+        # Check allowed users - defensive coding to handle None
+        allowed_users = auth_config.get('allowed_users')
+        # Handle None, convert to list if needed
+        if allowed_users is None:
+            allowed_users = ['*']  # Default to allow all if not configured
+        elif not isinstance(allowed_users, list):
+            # If it's a string or other type, convert to list
+            allowed_users = [allowed_users] if allowed_users else ['*']
+        
+        # Now safe to iterate
         if allowed_users and allowed_users != ['*']:
             if username not in allowed_users:
                 log_info(f"User {username} not in allowed users", component="proxy_handler", **log_ctx)
@@ -441,17 +468,25 @@ class UnifiedProxyHandler:
                 )
                 return False
         
-        # Check allowed organizations
+        # Check allowed organizations - defensive coding
         user_orgs = token_info.get('orgs', [])
-        allowed_orgs = auth_config.get('allowed_orgs', [])
+        allowed_orgs = auth_config.get('allowed_orgs')
+        # Handle None or non-list types
+        if allowed_orgs is not None and not isinstance(allowed_orgs, list):
+            allowed_orgs = [allowed_orgs] if allowed_orgs else []
+        
         if allowed_orgs:
             if not any(org in allowed_orgs for org in user_orgs):
                 log_info(f"User not in allowed organizations", component="proxy_handler", **log_ctx)
                 return False
         
-        # Check allowed emails
+        # Check allowed emails - defensive coding
         user_email = token_info.get('email', '')
-        allowed_emails = auth_config.get('allowed_emails', [])
+        allowed_emails = auth_config.get('allowed_emails')
+        # Handle None or non-list types
+        if allowed_emails is not None and not isinstance(allowed_emails, list):
+            allowed_emails = [allowed_emails] if allowed_emails else []
+        
         if allowed_emails:
             email_allowed = False
             for pattern in allowed_emails:
@@ -566,6 +601,7 @@ class UnifiedProxyHandler:
                 'auth_proxy': proxy_target.auth_proxy,
                 'auth_mode': proxy_target.auth_mode,
                 'auth_excluded_paths': proxy_target.auth_excluded_paths,
+                'allowed_users': proxy_target.auth_required_users if proxy_target.auth_required_users is not None else ['*'],
                 'admin_users': proxy_target.oauth_admin_users or [],
                 'user_users': proxy_target.oauth_user_users or ['*'],
             }
@@ -584,7 +620,11 @@ class UnifiedProxyHandler:
         
         # Check excluded paths
         request_path = request.url.path
+        # Fix: Ensure excluded_paths is never None
         excluded_paths = auth_config.get('auth_excluded_paths', []) or proxy_config.get('auth_excluded_paths', [])
+        # Handle None case explicitly
+        if excluded_paths is None:
+            excluded_paths = []
         for excluded_path in excluded_paths:
             if request_path.startswith(excluded_path):
                 log_info(f"Path {request_path} excluded from auth (matched {excluded_path})", component="proxy_handler", **log_ctx)

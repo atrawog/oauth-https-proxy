@@ -221,7 +221,14 @@ class ProxyOnlyApp:
     async def handle_proxy(self, request: Request) -> Response:
         """Handle all proxy requests."""
         import asyncio
-        log_debug(f"PROXY APP: Received request to {request.url.path}", component="proxy_app")
+        log_info(f"PROXY APP: Received request to {request.url.path}", component="proxy_app")
+        log_info(f"PROXY APP: Request headers: {list(request.headers.keys())}", component="proxy_app")
+        # Check for Authorization header specifically
+        auth_header = request.headers.get('authorization') or request.headers.get('Authorization')
+        if auth_header:
+            log_info(f"PROXY APP: Found Authorization header: {auth_header[:50]}...", component="proxy_app")
+        else:
+            log_info(f"PROXY APP: No Authorization header found", component="proxy_app")
         try:
             # Initialize proxy handler on first request if needed
             if not self.proxy_handler:

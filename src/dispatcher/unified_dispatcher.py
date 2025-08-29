@@ -124,6 +124,9 @@ class HypercornInstance:
             config.keep_alive_timeout = 60  # Keep-alive timeout in seconds
             config.shutdown_timeout = 2  # Max time to wait for graceful shutdown
             config.ssl_handshake_timeout = 5  # SSL handshake timeout
+            # Temporarily disable HTTP/2 to avoid PROXY protocol framing issues
+            # HTTP/2 multiplexing conflicts with PROXY protocol header injection
+            config.alpn_protocols = ["http/1.1"]
             
             dual_logger.info(f"Starting internal HTTP instance on port {internal_port} for domains: {self.domains}")
             
@@ -132,14 +135,14 @@ class HypercornInstance:
             
             # Start PROXY protocol handler that receives from dispatcher
             dual_logger.info(f"Starting PROXY protocol receiver on port {self.http_port} -> {internal_port}")
-            proxy_server = await create_proxy_protocol_server(
+            self.proxy_server_http = await create_proxy_protocol_server(
                 backend_host="127.0.0.1",
                 backend_port=internal_port,
                 listen_host="127.0.0.1",
                 listen_port=self.http_port,
                 redis_client=self.async_redis if self.async_redis else (self.storage.redis_client if self.storage else None)
             )
-            self.proxy_handler = asyncio.create_task(proxy_server.serve_forever())
+            self.proxy_handler = asyncio.create_task(self.proxy_server_http.serve_forever())
             
         except Exception as e:
             dual_logger.error(f"Failed to start HTTP server: {e}", error=e)
@@ -173,6 +176,9 @@ class HypercornInstance:
             config.keep_alive_timeout = 60  # Keep-alive timeout in seconds
             config.shutdown_timeout = 2  # Max time to wait for graceful shutdown
             config.ssl_handshake_timeout = 5  # SSL handshake timeout
+            # Temporarily disable HTTP/2 for HTTPS as well
+            # HTTP/2 multiplexing conflicts with PROXY protocol header injection
+            config.alpn_protocols = ["http/1.1"]
             
             dual_logger.info(f"Starting internal HTTPS instance on port {internal_port} for domains: {self.domains}")
             
@@ -182,14 +188,14 @@ class HypercornInstance:
             # Start PROXY protocol handler that receives from dispatcher
             # Note: PROXY handler is just a TCP forwarder, no SSL needed here
             dual_logger.info(f"Starting PROXY protocol receiver on port {self.https_port} -> {internal_port}")
-            proxy_server = await create_proxy_protocol_server(
+            self.proxy_server_https = await create_proxy_protocol_server(
                 backend_host="127.0.0.1",
                 backend_port=internal_port,
                 listen_host="127.0.0.1",
                 listen_port=self.https_port,
                 redis_client=self.async_redis if self.async_redis else (self.storage.redis_client if self.storage else None)
             )
-            self.proxy_handler_https = asyncio.create_task(proxy_server.serve_forever())
+            self.proxy_handler_https = asyncio.create_task(self.proxy_server_https.serve_forever())
             
         except Exception as e:
             dual_logger.error(f"Failed to start HTTPS server: {e}", error=e)
@@ -197,25 +203,61 @@ class HypercornInstance:
             raise
     
     async def stop(self):
-        """Stop all HTTP and HTTPS instances."""
-        # Stop instances
+        """Gracefully stop with verified resource cleanup."""
+        dual_logger.info(f"Stopping instance for domains: {self.domains}")
+        
+        # Step 1: Stop accepting new connections
+        # Note: proxy_server is the PROXY protocol handler
+        if hasattr(self, 'proxy_server_http'):
+            self.proxy_server_http.close()
+            await self.proxy_server_http.wait_closed()
+        if hasattr(self, 'proxy_server_https'):
+            self.proxy_server_https.close()
+            await self.proxy_server_https.wait_closed()
+        
+        # Step 2: Cancel Hypercorn tasks gracefully
         if self.http_process:
             self.http_process.cancel()
             try:
-                await self.http_process
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self.http_process, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
-                
+        
         if self.https_process:
             self.https_process.cancel()
             try:
-                await self.https_process
-            except asyncio.CancelledError:
+                await asyncio.wait_for(self.https_process, timeout=5.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
                 pass
-                
-        self.cleanup()
         
-        dual_logger.info(f"Stopped instance for domains: {self.domains}")
+        # Step 3: Wait for ports to be actually released by OS
+        await self._wait_for_port_release(self.http_port)
+        if self.https_port and self.https_port != 0:
+            await self._wait_for_port_release(self.https_port)
+        
+        # Step 4: Clean up temp certificate files
+        self.cleanup()
+        dual_logger.info(f"Instance stopped cleanly for domains: {self.domains}")
+    
+    async def _wait_for_port_release(self, port: int, max_wait: float = 5.0):
+        """Verify port is actually released by OS before continuing."""
+        import socket
+        start_time = asyncio.get_event_loop().time()
+        
+        while asyncio.get_event_loop().time() - start_time < max_wait:
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            try:
+                sock.bind(('127.0.0.1', port))
+                sock.close()
+                dual_logger.debug(f"Port {port} is now free")
+                return  # Port is free
+            except OSError:
+                await asyncio.sleep(0.1)
+            finally:
+                sock.close()
+        
+        dual_logger.warning(f"Port {port} still in use after {max_wait}s wait")
     
     def cleanup(self):
         """Clean up temporary files."""
@@ -1200,7 +1242,12 @@ class UnifiedMultiInstanceServer:
                 self.stream_consumer.claim_pending_messages()
             )
             
-            dual_logger.info("[UNIFIED] Consumer started with group 'unified-dispatcher'")
+            # Start periodic reconciliation for self-healing
+            self.reconciliation_task = asyncio.create_task(
+                self._start_periodic_reconciliation()
+            )
+            
+            dual_logger.info("[UNIFIED] Consumer started with group 'unified-dispatcher' and reconciliation loop started")
             
         except Exception as e:
             dual_logger.error(f"[UNIFIED] Failed to start consumer: {e}", error=e)
@@ -1225,6 +1272,12 @@ class UnifiedMultiInstanceServer:
                 await self._enable_https(domain, cert_name)
             return
         
+        # Special handling for instances_reload_required - applies to all instances
+        if event_type == 'instances_reload_required':
+            dual_logger.info("[UNIFIED] Processing instances_reload_required - reloading all proxy instances")
+            await self._reload_all_instances()
+            return
+        
         if not proxy_hostname:
             dual_logger.debug(f"[UNIFIED] Event missing proxy_hostname: {event}")
             return
@@ -1232,7 +1285,7 @@ class UnifiedMultiInstanceServer:
         dual_logger.info(f"[UNIFIED] Processing {event_type} for {proxy_hostname}")
         
         try:
-            # Just 3 event types - that's it!
+            # Handle the core event types
             if event_type in ['proxy_created', 'proxy_creation_requested']:
                 # Both events do the same thing - ensure instance exists
                 await self._ensure_instance_exists(proxy_hostname)
@@ -1240,14 +1293,37 @@ class UnifiedMultiInstanceServer:
             elif event_type == 'proxy_deleted':
                 await self._remove_instance(proxy_hostname)
                 
+            elif event_type == 'proxy_updated':
+                # Smart handling based on what changed
+                changes = event.get('changes', {})
+                
+                # Parse changes if it's a JSON string
+                if isinstance(changes, str):
+                    try:
+                        changes = json.loads(changes)
+                    except json.JSONDecodeError:
+                        changes = {}
+                
+                dual_logger.info(f"[UNIFIED] Processing proxy_updated with changes: {changes}")
+                
+                # Only recreate instance if SSL or port configuration changed
+                if changes.get('ssl') or changes.get('ports'):
+                    dual_logger.info(f"[UNIFIED] SSL/Port changes detected - recreating instance for {proxy_hostname}")
+                    await self._remove_instance(proxy_hostname)
+                    await self._ensure_instance_exists(proxy_hostname)
+                    dual_logger.info(f"[UNIFIED] Instance recreated for {proxy_hostname}")
+                else:
+                    # For OAuth/config changes, just log - configuration reloads automatically
+                    dual_logger.info(f"[UNIFIED] Config/OAuth changes for {proxy_hostname} - will reload on next request (no instance recreation needed)")
+                
             else:
                 dual_logger.debug(f"[UNIFIED] Ignoring event type: {event_type}")
                 
         except Exception as e:
             dual_logger.error(f"[UNIFIED] Failed to handle {event_type} for {proxy_hostname}: {e}", error=e)
     
-    async def _ensure_instance_exists(self, proxy_hostname: str):
-        """Create instance if it doesn't exist - FAIL LOUDLY if anything goes wrong."""
+    async def _ensure_instance_exists(self, proxy_hostname: str, max_retries: int = 3):
+        """Create instance with intelligent retry for port conflicts."""
         # Skip if already exists
         if proxy_hostname in self.instances:
             dual_logger.debug(f"[UNIFIED] Instance already exists for {proxy_hostname}")
@@ -1335,43 +1411,148 @@ class UnifiedMultiInstanceServer:
             await self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
             dual_logger.debug(f"[UNIFIED] Stored port mapping for {proxy_hostname} in Redis")
         
-        # Create Hypercorn instance - MUST succeed
-        try:
-            # HypercornInstance is in this same file
-            # Create the instance with the allocated ports
-            instance = HypercornInstance(
-                app=None,  # Will be created by HypercornInstance
-                domains=[proxy_hostname],
-                http_port=http_port,
-                https_port=https_port,
-                cert=cert if https_ready else None,
-                proxy_configs={proxy_hostname: proxy_target},
-                storage=self.storage,
-                async_components=self.async_components
-            )
-            
-            # Start it - MUST succeed
-            await instance.start()
-            
-            # Track it
-            self.instances[proxy_hostname] = instance
-            self.instance_states[proxy_hostname] = "running"
-            
-            # Register routes - MUST succeed
-            self.dispatcher.register_domain(
-                [proxy_hostname],
-                http_port,
-                https_port,
-                enable_http=proxy_target.enable_http,
-                enable_https=https_ready
-            )
-            
-            dual_logger.info(f"✅ [UNIFIED] Instance created for {proxy_hostname} - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}")
+        # Create Hypercorn instance with retry logic
+        last_error = None
+        
+        for attempt in range(max_retries):
+            try:
+                if attempt > 0:
+                    dual_logger.info(f"[UNIFIED] Retry {attempt}/{max_retries} for {proxy_hostname}")
+                    # On retry, force cleanup and get new ports
+                    if http_port:
+                        await self.port_manager.release_port(http_port, force=True)
+                    if https_port and https_port != 13000:
+                        await self.port_manager.release_port(https_port, force=True)
+                    # Wait with exponential backoff
+                    await asyncio.sleep(2 ** attempt)  # 1s, 2s, 4s
                     
-        except Exception as e:
-            dual_logger.error(f"CRITICAL: Instance creation failed for {proxy_hostname}: {e}")
-            dual_logger.error(f"Traceback: {traceback.format_exc()}")
-            raise RuntimeError(f"Cannot create instance for {proxy_hostname}: {e}")
+                    # Re-allocate ports
+                    preferred_http = 12000 + (hash(proxy_hostname) % 1000)
+                    http_port = await self.port_manager.allocate_port(
+                        purpose="proxy_http",
+                        preferred=preferred_http,
+                        bind_address="127.0.0.1"
+                    )
+                    if proxy_target.enable_https:
+                        preferred_https = 13000 + (hash(proxy_hostname) % 1000)
+                        https_port = await self.port_manager.allocate_port(
+                            purpose="proxy_https",
+                            preferred=preferred_https,
+                            bind_address="127.0.0.1"
+                        )
+                    
+                    # Update Redis mapping with new ports
+                    if self.redis:
+                        mapping = {
+                            "http": http_port,
+                            "https": https_port,
+                            "created_at": datetime.now(timezone.utc).isoformat()
+                        }
+                        await self.redis.hset("proxy:ports:mappings", proxy_hostname, json.dumps(mapping))
+                
+                # HypercornInstance is in this same file
+                # Create the instance with the allocated ports
+                instance = HypercornInstance(
+                    app=None,  # Will be created by HypercornInstance
+                    domains=[proxy_hostname],
+                    http_port=http_port,
+                    https_port=https_port,
+                    cert=cert if https_ready else None,
+                    proxy_configs={proxy_hostname: proxy_target},
+                    storage=self.storage,
+                    async_components=self.async_components
+                )
+                
+                # Start it
+                await instance.start()
+                
+                # Track it
+                self.instances[proxy_hostname] = instance
+                self.instance_states[proxy_hostname] = "running"
+                
+                # Register routes
+                self.dispatcher.register_domain(
+                    [proxy_hostname],
+                    http_port,
+                    https_port,
+                    enable_http=proxy_target.enable_http,
+                    enable_https=https_ready
+                )
+                
+                dual_logger.info(f"✅ [UNIFIED] Instance created for {proxy_hostname} on attempt {attempt + 1} - HTTP:{proxy_target.enable_http}, HTTPS:{https_ready}")
+                return  # Success!
+                        
+            except OSError as e:
+                last_error = e
+                if "address already in use" in str(e).lower() and attempt < max_retries - 1:
+                    dual_logger.warning(f"[UNIFIED] Port conflict for {proxy_hostname}: {e}")
+                    continue
+                else:
+                    dual_logger.error(f"[UNIFIED] Failed to create instance for {proxy_hostname}: {e}")
+                    dual_logger.error(f"Traceback: {traceback.format_exc()}")
+                    raise
+            except Exception as e:
+                dual_logger.error(f"CRITICAL: Instance creation failed for {proxy_hostname}: {e}")
+                dual_logger.error(f"Traceback: {traceback.format_exc()}")
+                raise RuntimeError(f"Cannot create instance for {proxy_hostname}: {e}")
+        
+        # All retries failed
+        if last_error:
+            raise RuntimeError(f"Failed to create instance for {proxy_hostname} after {max_retries} attempts: {last_error}")
+    
+    async def _reload_all_instances(self):
+        """Force reload of all proxy instances - used when API restarts."""
+        dual_logger.info("[UNIFIED] Starting reload of all proxy instances")
+        
+        # Get list of all current instances
+        instance_hostnames = list(self.instances.keys())
+        
+        if not instance_hostnames:
+            dual_logger.info("[UNIFIED] No instances to reload")
+            return
+        
+        dual_logger.info(f"[UNIFIED] Reloading {len(instance_hostnames)} instances: {instance_hostnames}")
+        
+        # Clear Python module cache for proxy-related modules to force reload
+        import sys
+        import importlib
+        modules_to_reload = [
+            'src.proxy.unified_handler',
+            'src.proxy.app',
+            'src.proxy.handler',
+            'src.proxy.models',
+            'src.middleware.proxy_client_middleware',
+        ]
+        
+        for module_name in modules_to_reload:
+            if module_name in sys.modules:
+                try:
+                    # Force module reload
+                    importlib.reload(sys.modules[module_name])
+                    dual_logger.info(f"[UNIFIED] Reloaded module: {module_name}")
+                except Exception as e:
+                    dual_logger.warning(f"[UNIFIED] Could not reload module {module_name}: {e}")
+        
+        # Remove all instances first (this will shut down old processes)
+        for hostname in instance_hostnames:
+            try:
+                await self._remove_instance(hostname)
+                dual_logger.info(f"[UNIFIED] Removed old instance for {hostname}")
+            except Exception as e:
+                dual_logger.error(f"[UNIFIED] Failed to remove instance for {hostname}: {e}")
+        
+        # Small delay to ensure processes are fully terminated
+        await asyncio.sleep(1)
+        
+        # Recreate all instances with fresh code
+        for hostname in instance_hostnames:
+            try:
+                await self._ensure_instance_exists(hostname)
+                dual_logger.info(f"[UNIFIED] Created new instance for {hostname} with reloaded modules")
+            except Exception as e:
+                dual_logger.error(f"[UNIFIED] Failed to recreate instance for {hostname}: {e}")
+        
+        dual_logger.info(f"[UNIFIED] ✅ Completed reload of {len(instance_hostnames)} instances with fresh code")
     
     async def _remove_instance(self, proxy_hostname: str):
         """Remove instance for a proxy."""
@@ -1445,6 +1626,118 @@ class UnifiedMultiInstanceServer:
                     )
                     dual_logger.info(f"✅ [UNIFIED] HTTPS enabled for {proxy_hostname}")
     
+    async def _check_instance_health(self, instance) -> bool:
+        """Check if an instance is healthy.
+        
+        Args:
+            instance: HypercornInstance to check
+            
+        Returns:
+            True if healthy, False otherwise
+        """
+        try:
+            # Check if HTTP process is still running
+            if hasattr(instance, 'http_process') and instance.http_process:
+                if instance.http_process.done():
+                    # Check if it exited with an error
+                    exception = instance.http_process.exception()
+                    if exception:
+                        dual_logger.warning(f"[HEALTH] HTTP process died with exception: {exception}")
+                        return False
+            
+            # Check if HTTPS process is still running
+            if hasattr(instance, 'https_process') and instance.https_process:
+                if instance.https_process.done():
+                    # Check if it exited with an error
+                    exception = instance.https_process.exception()
+                    if exception:
+                        dual_logger.warning(f"[HEALTH] HTTPS process died with exception: {exception}")
+                        return False
+            
+            # Check if PROXY protocol handlers are still running
+            if hasattr(instance, 'proxy_handler') and instance.proxy_handler:
+                if instance.proxy_handler.done():
+                    exception = instance.proxy_handler.exception()
+                    if exception:
+                        dual_logger.warning(f"[HEALTH] PROXY handler died with exception: {exception}")
+                        return False
+            
+            if hasattr(instance, 'proxy_handler_https') and instance.proxy_handler_https:
+                if instance.proxy_handler_https.done():
+                    exception = instance.proxy_handler_https.exception()
+                    if exception:
+                        dual_logger.warning(f"[HEALTH] PROXY HTTPS handler died with exception: {exception}")
+                        return False
+            
+            # All checks passed
+            return True
+            
+        except Exception as e:
+            dual_logger.error(f"[HEALTH] Error checking instance health: {e}")
+            # Assume unhealthy if we can't check
+            return False
+    
+    async def _start_periodic_reconciliation(self):
+        """Start periodic reconciliation loop for self-healing."""
+        dual_logger.info("[UNIFIED] Starting periodic reconciliation loop (60s interval)")
+        
+        while True:
+            try:
+                # Wait 60 seconds between reconciliations
+                await asyncio.sleep(60)
+                
+                dual_logger.debug("[UNIFIED] Running periodic reconciliation check")
+                
+                # Get all proxy targets from storage
+                all_proxies = []
+                if self.dispatcher.async_storage:
+                    all_proxies = await self.dispatcher.async_storage.list_proxy_targets()
+                elif self.storage:
+                    all_proxies = self.storage.list_proxy_targets()
+                else:
+                    dual_logger.warning("[UNIFIED] No storage available for reconciliation")
+                    continue
+                
+                # Check each proxy for missing or unhealthy instances
+                fixed_count = 0
+                for proxy in all_proxies:
+                    proxy_hostname = proxy.proxy_hostname if hasattr(proxy, 'proxy_hostname') else proxy.get('proxy_hostname')
+                    
+                    # Check if instance exists
+                    if proxy_hostname not in self.instances:
+                        dual_logger.warning(f"[RECONCILIATION] Missing instance for {proxy_hostname} - creating")
+                        try:
+                            await self._ensure_instance_exists(proxy_hostname)
+                            fixed_count += 1
+                            dual_logger.info(f"[RECONCILIATION] ✅ Created missing instance for {proxy_hostname}")
+                        except Exception as e:
+                            dual_logger.error(f"[RECONCILIATION] Failed to create instance for {proxy_hostname}: {e}")
+                    else:
+                        # Instance exists - check if it's healthy
+                        instance = self.instances[proxy_hostname]
+                        is_healthy = await self._check_instance_health(instance)
+                        
+                        if not is_healthy:
+                            dual_logger.warning(f"[RECONCILIATION] Unhealthy instance for {proxy_hostname} - recreating")
+                            try:
+                                # Remove unhealthy instance
+                                await self._remove_instance(proxy_hostname)
+                                # Create new instance
+                                await self._ensure_instance_exists(proxy_hostname)
+                                fixed_count += 1
+                                dual_logger.info(f"[RECONCILIATION] ✅ Recreated unhealthy instance for {proxy_hostname}")
+                            except Exception as e:
+                                dual_logger.error(f"[RECONCILIATION] Failed to recreate unhealthy instance for {proxy_hostname}: {e}")
+                
+                if fixed_count > 0:
+                    dual_logger.info(f"[RECONCILIATION] Fixed {fixed_count} missing instances")
+                else:
+                    dual_logger.debug("[RECONCILIATION] All instances healthy")
+                    
+            except Exception as e:
+                dual_logger.error(f"[RECONCILIATION] Error in periodic reconciliation: {e}", error=e)
+                # Continue loop even if reconciliation fails
+                
     async def _reconcile_all_proxies(self):
         """Reconcile ALL proxies - FAIL if any proxy can't be created."""
         dual_logger.info("Python logging: _reconcile_all_proxies() started")
@@ -1624,12 +1917,28 @@ class UnifiedMultiInstanceServer:
                         break
                 
             elif event_type == 'proxy_updated':
-                # Handle proxy updates
-                dual_logger.info(f"[STREAM_EVENT] Processing proxy_updated event for {proxy_hostname}")
-                # Recreate the instance with new configuration
-                await self.remove_instance_for_proxy(proxy_hostname)
-                await self.create_instance_for_proxy(proxy_hostname)
-                dual_logger.info(f"[STREAM_EVENT] Instance recreated for {proxy_hostname}")
+                # Handle proxy updates INTELLIGENTLY
+                changes = event.get('changes', {})
+                
+                # Parse changes if it's a JSON string
+                if isinstance(changes, str):
+                    import json
+                    try:
+                        changes = json.loads(changes)
+                    except json.JSONDecodeError:
+                        changes = {}
+                
+                dual_logger.info(f"[STREAM_EVENT] Processing proxy_updated event for {proxy_hostname} with changes: {changes}")
+                
+                # Only recreate instance if SSL or port configuration changed
+                if changes.get('ssl') or changes.get('ports'):
+                    dual_logger.info(f"[STREAM_EVENT] SSL/Port changes detected - recreating instance for {proxy_hostname}")
+                    await self.remove_instance_for_proxy(proxy_hostname)
+                    await self.create_instance_for_proxy(proxy_hostname)
+                    dual_logger.info(f"[STREAM_EVENT] Instance recreated for {proxy_hostname}")
+                else:
+                    # For OAuth/config changes, just log - configuration reloads automatically
+                    dual_logger.info(f"[STREAM_EVENT] Config/OAuth changes for {proxy_hostname} - will reload on next request (no instance recreation needed)")
                 
             elif event_type in ['http_instance_started', 'https_instance_started', 'http_route_registered', 'https_route_registered']:
                 # These are confirmation events from the workflow orchestrator - no action needed

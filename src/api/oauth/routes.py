@@ -511,13 +511,13 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             assigned_scopes = []
             
             if proxy:
-                # Check admin users
-                if proxy.oauth_admin_users:
+                # Check admin users (handle None to avoid NoneType errors)
+                if proxy.oauth_admin_users is not None:
                     if "*" in proxy.oauth_admin_users or github_user in proxy.oauth_admin_users:
                         assigned_scopes.append("admin")
                 
-                # Check user users (standard access)
-                if proxy.oauth_user_users:
+                # Check user users (standard access) - handle None
+                if proxy.oauth_user_users is not None:
                     if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
                         assigned_scopes.append("user")
                 
@@ -1298,7 +1298,8 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             )
         
         # If allowed_users is set and doesn't contain '*', check if user is allowed
-        if allowed_users and "*" not in allowed_users and user_info["login"] not in allowed_users:
+        # Handle None case explicitly to avoid "NoneType object is not iterable" error
+        if allowed_users is not None and "*" not in allowed_users and user_info["login"] not in allowed_users:
             log_warning(
                 "GitHub user not in allowed list",
                     client_ip=client_ip,
@@ -1319,21 +1320,41 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         
         # Get proxy configuration for scope assignment
         proxy_hostname = auth_data.get("proxy_hostname", "localhost")
+        
+        # Get global OAuth defaults from environment
+        import os
+        global_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
+        global_user_users = os.getenv("OAUTH_USER_USERS", "*").split(",") if os.getenv("OAUTH_USER_USERS") else []
+        
+        # Clean up the lists (remove empty strings)
+        global_admin_users = [u.strip() for u in global_admin_users if u.strip()]
+        global_user_users = [u.strip() for u in global_user_users if u.strip()]
+        
+        # Check proxy-specific configuration first
         if async_storage:
             proxy = await async_storage.get_proxy_target(proxy_hostname)
             if proxy:
-                # Check admin users
-                if proxy.oauth_admin_users:
-                    if "*" in proxy.oauth_admin_users or github_user in proxy.oauth_admin_users:
+                # Check admin users (use global defaults if not configured)
+                admin_users = proxy.oauth_admin_users if proxy.oauth_admin_users is not None else global_admin_users
+                if admin_users:
+                    if "*" in admin_users or github_user in admin_users:
                         assigned_scopes.append("admin")
                 
-                # Check user users (standard access)
-                if proxy.oauth_user_users:
-                    if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
+                # Check user users (use global defaults if not configured)
+                user_users = proxy.oauth_user_users if proxy.oauth_user_users is not None else global_user_users
+                if user_users:
+                    if "*" in user_users or github_user in user_users:
                         assigned_scopes.append("user")
                 
+                # MCP scope is determined by resource_scopes, not user lists
+            else:
+                # No proxy config, use global defaults
+                if global_admin_users and ("*" in global_admin_users or github_user in global_admin_users):
+                    assigned_scopes.append("admin")
+                if global_user_users and ("*" in global_user_users or github_user in global_user_users):
+                    assigned_scopes.append("user")
         
-        # If no scopes assigned through proxy config, default to user scope
+        # If no scopes assigned through proxy config or globals, default to user scope
         if not assigned_scopes:
             log_info(
                 f"No scopes configured for user {github_user} on {proxy_hostname}, defaulting to 'user' scope",

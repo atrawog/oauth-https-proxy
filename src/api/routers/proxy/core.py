@@ -18,6 +18,7 @@ from tabulate import tabulate
 from src.proxy.models import ProxyTarget, ProxyTargetRequest, ProxyTargetUpdate
 from src.certmanager.models import CertificateRequest, Certificate
 from src.api.auth_utils import check_auth_and_scopes, require_admin, require_user
+from src.shared.logger import log_info, log_warning, log_error
 
 logger = logging.getLogger(__name__)
 
@@ -66,6 +67,15 @@ def create_core_router(storage, cert_manager):
         if existing:
             raise HTTPException(409, f"Proxy target for {request.proxy_hostname} already exists")
         
+        # Get OAuth defaults from environment
+        import os
+        oauth_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
+        oauth_user_users = os.getenv("OAUTH_USER_USERS", "*").split(",") if os.getenv("OAUTH_USER_USERS") else ["*"]
+        
+        # Clean up lists (remove empty strings and whitespace)
+        oauth_admin_users = [u.strip() for u in oauth_admin_users if u.strip()]
+        oauth_user_users = [u.strip() for u in oauth_user_users if u.strip()]
+        
         # Create proxy target - don't set cert_name yet
         # Use DNS name directly as cert_name for automatic discovery
         cert_name = request.proxy_hostname  # Use DNS name directly
@@ -79,7 +89,13 @@ def create_core_router(storage, cert_manager):
             enable_http=request.enable_http,
             enable_https=request.enable_https,
             preserve_host_header=request.preserve_host_header,
-            custom_headers=request.custom_headers
+            custom_headers=request.custom_headers,
+            # Apply OAuth defaults to prevent NoneType errors
+            auth_required_users=oauth_admin_users if oauth_admin_users else None,
+            oauth_admin_users=oauth_admin_users,
+            oauth_user_users=oauth_user_users,
+            # Default resource scopes (MCP handled here, not via user lists)
+            resource_scopes=["admin", "user", "mcp"]
         )
         
         # Store proxy target
@@ -322,25 +338,85 @@ def create_core_router(storage, cert_manager):
         if not target:
             raise HTTPException(404, f"Proxy target {proxy_hostname} not found")
         
-        # Apply updates
-        if updates.target_url is not None:
+        # Track what changed for event publishing
+        changes = {
+            "oauth": False,
+            "ssl": False,
+            "ports": False,
+            "config": False
+        }
+        
+        # Apply updates and track changes
+        if updates.target_url is not None and target.target_url != updates.target_url:
             target.target_url = updates.target_url
-        if updates.cert_name is not None:
+            changes["config"] = True
+            
+        if updates.cert_name is not None and target.cert_name != updates.cert_name:
             target.cert_name = updates.cert_name
-        if updates.enabled is not None:
+            changes["ssl"] = True
+            
+        if updates.enabled is not None and target.enabled != updates.enabled:
             target.enabled = updates.enabled
-        if updates.enable_http is not None:
+            changes["config"] = True
+            
+        if updates.enable_http is not None and target.enable_http != updates.enable_http:
             target.enable_http = updates.enable_http
-        if updates.enable_https is not None:
+            changes["ports"] = True
+            
+        if updates.enable_https is not None and target.enable_https != updates.enable_https:
             target.enable_https = updates.enable_https
-        if updates.preserve_host_header is not None:
+            changes["ports"] = True
+            
+        if updates.preserve_host_header is not None and target.preserve_host_header != updates.preserve_host_header:
             target.preserve_host_header = updates.preserve_host_header
-        if updates.custom_headers is not None:
+            changes["config"] = True
+            
+        if updates.custom_headers is not None and target.custom_headers != updates.custom_headers:
             target.custom_headers = updates.custom_headers
+            changes["config"] = True
         
         # Store updated target
         if not await async_storage.store_proxy_target(proxy_hostname, target):
             raise HTTPException(500, "Failed to update proxy target")
+        
+        # Publish event if anything changed
+        if any(changes.values()):
+            from src.shared.logger import log_info
+            log_info(f"Publishing proxy_updated event for {proxy_hostname}", 
+                    component="proxy_api", 
+                    proxy_hostname=proxy_hostname,
+                    changes=changes)
+            try:
+                from src.storage.redis_stream_publisher import RedisStreamPublisher
+                
+                redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+                publisher = RedisStreamPublisher(redis_url=redis_url)
+                
+                # Include version in the event
+                event_data = {
+                    "changes": changes,
+                    "config_version": getattr(target, 'config_version', 1)
+                }
+                event_id = await publisher.publish_event("proxy_updated", {
+                    "proxy_hostname": proxy_hostname,
+                    **event_data
+                })
+                
+                if event_id:
+                    log_info(f"✅ Published proxy_updated event {event_id}", 
+                            component="proxy_api", 
+                            proxy_hostname=proxy_hostname)
+                else:
+                    log_warning(f"Failed to publish proxy_updated event", 
+                               component="proxy_api", 
+                               proxy_hostname=proxy_hostname)
+                    
+                await publisher.close()
+            except Exception as e:
+                log_error(f"Failed to publish proxy_updated event: {e}", 
+                         component="proxy_api", 
+                         proxy_hostname=proxy_hostname, 
+                         error=str(e))
         
         return target
     

@@ -3,6 +3,7 @@
 import asyncio
 import os
 import sys
+from datetime import datetime
 from typing import Optional
 
 from .shared.config import Config, get_config
@@ -246,6 +247,7 @@ async def run_server(config: Config) -> None:
         # Serve the app directly
         api_task = asyncio.create_task(serve(app, api_config))
         
+        # Note: Event emission moved to after dispatcher starts (see below)
         # Removed redundant ports 9001 and 10001 - API runs on single port 9000
         
         # Step 5: Start dispatcher with proxy instances
@@ -269,6 +271,26 @@ async def run_server(config: Config) -> None:
         # Run everything
         dual_logger.info("All components initialized, starting services...")
         unified_task = asyncio.create_task(unified_server.run())
+        
+        # Give the dispatcher time to start its consumer
+        await asyncio.sleep(2)
+        
+        # Now emit event to reload proxy instances (dispatcher consumer is ready)
+        # This ensures proxy instances get fresh code after API restart
+        if async_components and async_components.redis_clients:
+            try:
+                from .storage.redis_stream_publisher import RedisStreamPublisher
+                publisher = RedisStreamPublisher(
+                    redis_client=async_components.redis_clients.async_redis
+                )
+                await publisher.publish_event(
+                    "instances_reload_required",
+                    {"reason": "api_restart", "timestamp": datetime.now().isoformat()}
+                )
+                dual_logger.info("✓ Emitted instances_reload_required event for proxy reload")
+            except Exception as e:
+                dual_logger.warning(f"Could not emit reload event: {e}")
+        
         await asyncio.gather(
             api_task,
             unified_task

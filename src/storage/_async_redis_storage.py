@@ -310,16 +310,35 @@ class AsyncRedisStorage:
     # Token method removed - OAuth only authentication
     # Token method removed - OAuth only authentication
     async def store_proxy_target(self, proxy_hostname: str, target: ProxyTarget) -> bool:
-        """Store proxy target configuration."""
+        """Store proxy target configuration with version tracking."""
         try:
+            from datetime import datetime, timezone
+            
+            # Check if this is an update (existing proxy) - directly from Redis to avoid ensure_oauth_defaults loop
             key = f"proxy:{proxy_hostname}"
+            existing_data = await self.redis_client.get(key)
+            
+            if existing_data:
+                # Parse existing to get current version
+                if isinstance(existing_data, bytes):
+                    existing_data = existing_data.decode('utf-8')
+                existing = ProxyTarget.parse_raw(existing_data)
+                # Increment version for updates
+                target.config_version = getattr(existing, 'config_version', 0) + 1
+                target.updated_at = datetime.now(timezone.utc)
+                log_trace(f"Incremented config_version to {target.config_version} for {proxy_hostname}", component="redis_storage")
+            else:
+                # New proxy starts at version 1
+                target.config_version = 1
+                target.updated_at = datetime.now(timezone.utc)
+            
             return await self.redis_client.set(key, target.json())
         except RedisError as e:
             log_error(f"Failed to store proxy target: {e}", component="redis_storage", error=e)
             return False
     
     async def get_proxy_target(self, proxy_hostname: str) -> Optional[ProxyTarget]:
-        """Get proxy target configuration."""
+        """Get proxy target configuration with OAuth defaults ensured."""
         try:
             key = f"proxy:{proxy_hostname}"
             value = await self.redis_client.get(key)
@@ -330,6 +349,10 @@ class AsyncRedisStorage:
                 log_trace(f"Parsing proxy data for {proxy_hostname}: {value[:100]}", component="redis_storage")
                 parsed = ProxyTarget.parse_raw(value)
                 log_trace(f"Successfully parsed proxy target for {proxy_hostname}", component="redis_storage")
+                
+                # Ensure OAuth defaults are present
+                parsed = await self.ensure_oauth_defaults(parsed)
+                
                 return parsed
             else:
                 log_warning(f"No data found for key {key}", component="redis_storage")
@@ -337,6 +360,48 @@ class AsyncRedisStorage:
         except (RedisError, json.JSONDecodeError) as e:
             log_error(f"Failed to get proxy target for {proxy_hostname}: {e}", exc_info=True)
             return None
+    
+    async def ensure_oauth_defaults(self, proxy_target: ProxyTarget) -> ProxyTarget:
+        """Ensure proxy has OAuth defaults from environment.
+        
+        This prevents NoneType errors by ensuring OAuth lists are never null.
+        
+        Args:
+            proxy_target: The proxy target to ensure defaults for
+            
+        Returns:
+            The proxy target with OAuth defaults applied
+        """
+        import os
+        
+        # Get OAuth defaults from environment
+        oauth_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
+        oauth_user_users = os.getenv("OAUTH_USER_USERS", "*").split(",") if os.getenv("OAUTH_USER_USERS") else ["*"]
+        
+        # Clean up lists (remove empty strings and whitespace)
+        oauth_admin_users = [u.strip() for u in oauth_admin_users if u.strip()]
+        oauth_user_users = [u.strip() for u in oauth_user_users if u.strip()]
+        
+        # Apply defaults only if values are None
+        if proxy_target.auth_required_users is None:
+            # If no admin users specified, allow all by default
+            proxy_target.auth_required_users = oauth_admin_users if oauth_admin_users else ["*"]
+            log_trace(f"Applied auth_required_users default: {proxy_target.auth_required_users}", component="redis_storage")
+            
+        if proxy_target.oauth_admin_users is None:
+            proxy_target.oauth_admin_users = oauth_admin_users
+            log_trace(f"Applied oauth_admin_users default: {proxy_target.oauth_admin_users}", component="redis_storage")
+            
+        if proxy_target.oauth_user_users is None:
+            proxy_target.oauth_user_users = oauth_user_users
+            log_trace(f"Applied oauth_user_users default: {proxy_target.oauth_user_users}", component="redis_storage")
+            
+        # Ensure resource_scopes is set
+        if proxy_target.resource_scopes is None or len(proxy_target.resource_scopes) == 0:
+            proxy_target.resource_scopes = ["admin", "user", "mcp"]
+            log_trace(f"Applied resource_scopes default: {proxy_target.resource_scopes}", component="redis_storage")
+            
+        return proxy_target
     
     async def list_proxy_targets(self) -> List[ProxyTarget]:
         """List all proxy targets."""

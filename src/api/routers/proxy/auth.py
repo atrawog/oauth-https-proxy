@@ -73,6 +73,32 @@ def create_auth_router(async_storage):
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
         
+        # Publish proxy_updated event for OAuth configuration change
+        try:
+            from src.storage.redis_stream_publisher import RedisStreamPublisher
+            from src.shared.logger import log_info, log_warning, log_error
+            import os
+            
+            redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+            publisher = RedisStreamPublisher(redis_url=redis_url)
+            
+            # OAuth changes don't require instance recreation - config reloads automatically
+            changes = {"oauth": True, "ssl": False, "ports": False, "config": True}
+            event_id = await publisher.publish_proxy_updated(proxy_hostname, changes)
+            
+            if event_id:
+                log_info(f"✅ Published proxy_updated event {event_id} for OAuth config change", 
+                        component="proxy_api", 
+                        proxy_hostname=proxy_hostname)
+            else:
+                log_warning(f"Failed to publish proxy_updated event for OAuth config", 
+                           component="proxy_api", 
+                           proxy_hostname=proxy_hostname)
+                
+            await publisher.close()
+        except Exception as e:
+            logger.error(f"Failed to publish proxy_updated event: {e}", exc_info=True)
+        
         # When enabling auth, create a route for OAuth metadata endpoint
         if config.enabled and config.auth_proxy:
             # Create a route to forward OAuth metadata requests to the auth instance
@@ -141,6 +167,32 @@ def create_auth_router(async_storage):
         success = await async_storage.store_proxy_target(proxy_hostname, target)
         if not success:
             raise HTTPException(500, "Failed to update proxy target")
+        
+        # Publish proxy_updated event for OAuth removal
+        try:
+            from src.storage.redis_stream_publisher import RedisStreamPublisher
+            from src.shared.logger import log_info, log_warning
+            import os
+            
+            redis_url = os.getenv('REDIS_URL', 'redis://:test@redis:6379/0')
+            publisher = RedisStreamPublisher(redis_url=redis_url)
+            
+            # OAuth changes don't require instance recreation - config reloads automatically
+            changes = {"oauth": True, "ssl": False, "ports": False, "config": True}
+            event_id = await publisher.publish_proxy_updated(proxy_hostname, changes)
+            
+            if event_id:
+                log_info(f"✅ Published proxy_updated event {event_id} for OAuth removal", 
+                        component="proxy_api", 
+                        proxy_hostname=proxy_hostname)
+            else:
+                log_warning(f"Failed to publish proxy_updated event for OAuth removal", 
+                           component="proxy_api", 
+                           proxy_hostname=proxy_hostname)
+                
+            await publisher.close()
+        except Exception as e:
+            logger.error(f"Failed to publish proxy_updated event: {e}", exc_info=True)
         
         # Remove OAuth metadata route when disabling auth
         route_id = f"oauth-metadata-{proxy_hostname.replace('.', '-')}"
