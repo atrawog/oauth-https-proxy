@@ -71,14 +71,17 @@ def create_core_router(storage, cert_manager):
         import os
         oauth_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
         oauth_user_users = os.getenv("OAUTH_USER_USERS", "").split(",") if os.getenv("OAUTH_USER_USERS") else []
+        oauth_mcp_users = os.getenv("OAUTH_MCP_USERS", "").split(",") if os.getenv("OAUTH_MCP_USERS") else []
         
         # Clean up lists (remove empty strings and whitespace)
         oauth_admin_users = [u.strip() for u in oauth_admin_users if u.strip()]
         oauth_user_users = [u.strip() for u in oauth_user_users if u.strip()]
+        oauth_mcp_users = [u.strip() for u in oauth_mcp_users if u.strip()]
         
         # Security: Remove any wildcard entries - explicit users only
         oauth_admin_users = [u for u in oauth_admin_users if u != "*"]
         oauth_user_users = [u for u in oauth_user_users if u != "*"]
+        oauth_mcp_users = [u for u in oauth_mcp_users if u != "*"]
         
         # Create proxy target - don't set cert_name yet
         # Use DNS name directly as cert_name for automatic discovery
@@ -99,6 +102,7 @@ def create_core_router(storage, cert_manager):
             auth_required_users=None,  # None means "use OAuth user lists"
             oauth_admin_users=oauth_admin_users,
             oauth_user_users=oauth_user_users,
+            oauth_mcp_users=oauth_mcp_users,
             # Default resource scopes (MCP handled here, not via user lists)
             resource_scopes=["admin", "user", "mcp"]
         )

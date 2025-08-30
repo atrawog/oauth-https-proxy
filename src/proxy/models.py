@@ -71,6 +71,7 @@ class ProxyTarget(BaseModel):
     # OAuth scope-based user lists (for scope assignment)
     oauth_admin_users: Optional[List[str]] = None  # GitHub users who get admin scope
     oauth_user_users: Optional[List[str]] = None   # GitHub users who get user scope (* = all)
+    oauth_mcp_users: Optional[List[str]] = None    # GitHub users who get mcp scope
     
     # WWW-Authenticate configuration (per-proxy)
     auth_realm: Optional[str] = None  # Custom realm (defaults to auth_proxy)
@@ -189,6 +190,10 @@ class ProxyTargetUpdate(BaseModel):
     # GitHub OAuth Configuration fields
     github_client_id: Optional[str] = None
     github_client_secret: Optional[str] = None
+    # OAuth scope-based user lists
+    oauth_admin_users: Optional[List[str]] = None
+    oauth_user_users: Optional[List[str]] = None
+    oauth_mcp_users: Optional[List[str]] = None
     
     @field_validator('target_url')
     @classmethod

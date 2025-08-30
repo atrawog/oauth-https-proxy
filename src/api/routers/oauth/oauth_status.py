@@ -163,7 +163,7 @@ def format_timestamp(dt: datetime) -> str:
 class OAuthStatusRouter:
     """OAuth status API router."""
     
-    def __init__(self, storage: RedisStorage):
+    def __init__(self, storage: UnifiedStorage):
         self.storage = storage
         self.router = APIRouter(tags=["oauth"])
         self._setup_routes()
@@ -962,7 +962,7 @@ class OAuthStatusRouter:
         }
 
 
-def create_oauth_status_router(storage: RedisStorage) -> APIRouter:
+def create_oauth_status_router(storage: UnifiedStorage) -> APIRouter:
     """Create and return the OAuth status router."""
     oauth_router = OAuthStatusRouter(storage)
     return oauth_router.router

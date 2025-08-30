@@ -534,6 +534,10 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     if "*" in proxy.oauth_user_users or github_user in proxy.oauth_user_users:
                         assigned_scopes.append("user")
                 
+                # Check MCP users - handle None
+                if proxy.oauth_mcp_users is not None:
+                    if "*" in proxy.oauth_mcp_users or github_user in proxy.oauth_mcp_users:
+                        assigned_scopes.append("mcp")
             
             # Default to user scope if no scopes assigned
             if not assigned_scopes:
@@ -1341,10 +1345,12 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         import os
         global_admin_users = os.getenv("OAUTH_ADMIN_USERS", "").split(",") if os.getenv("OAUTH_ADMIN_USERS") else []
         global_user_users = os.getenv("OAUTH_USER_USERS", "*").split(",") if os.getenv("OAUTH_USER_USERS") else []
+        global_mcp_users = os.getenv("OAUTH_MCP_USERS", "").split(",") if os.getenv("OAUTH_MCP_USERS") else []
         
         # Clean up the lists (remove empty strings)
         global_admin_users = [u.strip() for u in global_admin_users if u.strip()]
         global_user_users = [u.strip() for u in global_user_users if u.strip()]
+        global_mcp_users = [u.strip() for u in global_mcp_users if u.strip()]
         
         # Check proxy-specific configuration first
         if async_storage:
@@ -1362,13 +1368,19 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     if "*" in user_users or github_user in user_users:
                         assigned_scopes.append("user")
                 
-                # MCP scope is determined by resource_scopes, not user lists
+                # Check MCP users (use global defaults if not configured)
+                mcp_users = proxy.oauth_mcp_users if proxy.oauth_mcp_users is not None else global_mcp_users
+                if mcp_users:
+                    if "*" in mcp_users or github_user in mcp_users:
+                        assigned_scopes.append("mcp")
             else:
                 # No proxy config, use global defaults
                 if global_admin_users and ("*" in global_admin_users or github_user in global_admin_users):
                     assigned_scopes.append("admin")
                 if global_user_users and ("*" in global_user_users or github_user in global_user_users):
                     assigned_scopes.append("user")
+                if global_mcp_users and ("*" in global_mcp_users or github_user in global_mcp_users):
+                    assigned_scopes.append("mcp")
         
         # If no scopes assigned through proxy config or globals, default to user scope
         if not assigned_scopes:
