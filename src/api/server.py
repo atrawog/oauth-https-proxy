@@ -271,11 +271,32 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     @app.get("/.well-known/oauth-protected-resource")
     async def oauth_protected_resource(request: Request):
         """Generate MCP protected resource metadata based on hostname with comprehensive logging."""
+        import time
+        from src.shared.logger import log_request, log_response, log_info, log_debug, log_error, log_warning
+        
+        start_time = time.time()
+        
         try:
             # Extract client IP using centralized function
             client_ip = get_real_client_ip(request)
             
-            logger.info(f"MCP metadata endpoint requested - IP: {client_ip}, Path: {request.url.path}")
+            # Try to get client hostname from reverse DNS
+            client_hostname = None
+            try:
+                import socket
+                client_hostname = socket.gethostbyaddr(client_ip)[0]
+            except:
+                client_hostname = client_ip
+            
+            log_info(
+                "MCP metadata endpoint requested",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                path=request.url.path,
+                method=request.method,
+                headers=dict(request.headers)
+            )
             
             # Get hostname from request - check x-forwarded-host first (set by proxy)
             proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
@@ -283,16 +304,43 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 # Fallback to host header
                 proxy_hostname = request.headers.get("host", "").split(":")[0]
             if not proxy_hostname:
-                logger.error(f"MCP metadata request failed - no host header, IP: {client_ip}")
+                log_error(
+                    "MCP metadata request failed - no host header",
+                    component="api",
+                    client_ip=client_ip,
+                    client_hostname=client_hostname,
+                    path=request.url.path
+                )
                 raise HTTPException(404, "No host header")
             
-            logger.debug(f"MCP metadata hostname resolved: {proxy_hostname}")
+            log_debug(
+                "MCP metadata hostname resolved",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path
+            )
             
             # Get proxy target
-            logger.info(f"Looking up proxy target for hostname: {proxy_hostname}")
+            log_info(
+                "Looking up proxy target",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path
+            )
             # UnifiedStorage handles sync/async automatically - no fallback needed
             target = await request.app.state.storage.get_proxy_target(proxy_hostname)
-            logger.info(f"Got proxy target: {target}")
+            log_debug(
+                f"Got proxy target: {target}",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path
+            )
             if not target:
                 # Get available proxies for debugging
                 available_proxies = []
@@ -302,38 +350,84 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 except Exception:
                     pass
                 
-                logger.error(f"MCP metadata request failed - no proxy target configured for {proxy_hostname}")
+                log_error(
+                    f"MCP metadata request failed - no proxy target configured",
+                    component="api",
+                    client_ip=client_ip,
+                    client_hostname=client_hostname,
+                    proxy_hostname=proxy_hostname,
+                    path=request.url.path,
+                    available_proxies=available_proxies
+                )
                 raise HTTPException(404, f"No proxy target configured for {proxy_hostname}")
             
-            logger.debug(f"MCP metadata proxy target found for {proxy_hostname}")
+            log_debug(
+                "MCP metadata proxy target found",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path
+            )
             
             # Check if protected resource metadata is configured
-            logger.info(f"Checking resource metadata - endpoint: {target.resource_endpoint}, scopes: {target.resource_scopes}")
+            log_info(
+                "Checking resource metadata",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path,
+                resource_endpoint=target.resource_endpoint,
+                resource_scopes=target.resource_scopes
+            )
             
             if not target.resource_endpoint:
-                logger.warning(f"Protected resource metadata request failed - not configured for proxy {proxy_hostname}")
+                log_warning(
+                    "Protected resource metadata not configured",
+                    component="api",
+                    client_ip=client_ip,
+                    client_hostname=client_hostname,
+                    proxy_hostname=proxy_hostname,
+                    path=request.url.path
+                )
                 raise HTTPException(404, "Protected resource metadata not configured for this proxy")
             
             # Build resource URI
-            logger.info("Building resource URI")
             proto = request.headers.get("x-forwarded-proto", "https")
             resource_endpoint = target.resource_endpoint
-            logger.info(f"Protocol: {proto}, hostname: {proxy_hostname}, endpoint: {resource_endpoint}")
             resource_uri = f"{proto}://{proxy_hostname}{resource_endpoint}"
             
-            logger.debug(f"MCP metadata building resource URI: {resource_uri}")
+            log_debug(
+                "Building resource URI",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path,
+                protocol=proto,
+                resource_endpoint=resource_endpoint,
+                resource_uri=resource_uri
+            )
             
             # Get authorization server URL
-            logger.info(f"Getting auth servers - auth_enabled: {target.auth_enabled}, auth_proxy: {target.auth_proxy}")
             auth_servers = []
             if target.auth_enabled and target.auth_proxy:
                 auth_servers.append(f"https://{target.auth_proxy}")
-                logger.info(f"Added auth server: https://{target.auth_proxy}")
+                log_debug(
+                    "Auth server configured",
+                    component="api",
+                    client_ip=client_ip,
+                    client_hostname=client_hostname,
+                    proxy_hostname=proxy_hostname,
+                    path=request.url.path,
+                    auth_enabled=target.auth_enabled,
+                    auth_proxy=target.auth_proxy,
+                    auth_server=f"https://{target.auth_proxy}" if target.auth_proxy else None
+                )
             
             # Build metadata response per RFC 9728
-            logger.info("Building metadata response")
             resource_scopes = target.resource_scopes or ["mcp:read", "mcp:write"]
-            logger.info(f"Resource scopes: {resource_scopes}")
             
             # Get bearer methods from metadata or use default
             bearer_methods = target.resource_bearer_methods or ["header"]
@@ -348,7 +442,6 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 "bearer_methods_supported": bearer_methods,
                 "resource_documentation": f"{resource_uri}{doc_suffix}"
             }
-            logger.info(f"Created metadata dict: {metadata}")
             
             # Add JWKS URI if auth is enabled
             if auth_servers:
@@ -356,17 +449,25 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
             
             # Add server info if configured
             if target.resource_server_info:
-                logger.info(f"Adding server info: {target.resource_server_info}")
                 metadata.update(target.resource_server_info)
-            else:
-                logger.info("No server info to add")
             
             # Add custom metadata if configured
             if target.resource_custom_metadata:
-                logger.info(f"Adding custom metadata: {target.resource_custom_metadata}")
                 metadata.update(target.resource_custom_metadata)
             
-            logger.info(f"MCP metadata endpoint responding successfully for {proxy_hostname}")
+            # Log response
+            duration = (time.time() - start_time) * 1000
+            log_info(
+                "MCP metadata endpoint success",
+                component="api",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path,
+                status_code=200,
+                duration_ms=duration,
+                metadata=metadata
+            )
             
             return metadata
         
@@ -376,7 +477,16 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         except Exception as e:
             import traceback
             tb = traceback.format_exc()
-            logger.error(f"Unexpected error in oauth-protected-resource endpoint: {str(e)}\n{tb}")
+            log_error(
+                "Unexpected error in oauth-protected-resource endpoint",
+                component="api",
+                client_ip=client_ip if 'client_ip' in locals() else "unknown",
+                client_hostname=client_hostname if 'client_hostname' in locals() else "unknown",
+                proxy_hostname=proxy_hostname if 'proxy_hostname' in locals() else "unknown",
+                path=request.url.path,
+                error=str(e),
+                traceback=tb
+            )
             raise HTTPException(500, "Internal Server Error")
     
     # Include OAuth protocol router (remains at root level for compliance)

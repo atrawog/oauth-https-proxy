@@ -130,6 +130,39 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
     @router.get("/.well-known/oauth-authorization-server")
     async def oauth_metadata(request: Request):
         """Server metadata shrine - reveals our OAuth capabilities"""
+        import time
+        from src.shared.client_ip import get_real_client_ip
+        from src.shared.logger import log_request, log_response, log_info
+        
+        start_time = time.time()
+        
+        # Extract client IP and hostname
+        client_ip = get_real_client_ip(request)
+        client_hostname = None
+        
+        # Try to get client hostname from reverse DNS
+        try:
+            import socket
+            client_hostname = socket.gethostbyaddr(client_ip)[0]
+        except:
+            client_hostname = client_ip
+        
+        # Extract proxy hostname from headers
+        proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+        if not proxy_hostname:
+            proxy_hostname = request.headers.get("host", "").split(":")[0]
+        
+        # Log incoming request
+        log_info(
+            "OAuth metadata request",
+            component="oauth",
+            client_ip=client_ip,
+            client_hostname=client_hostname,
+            proxy_hostname=proxy_hostname,
+            path=request.url.path,
+            method=request.method,
+            headers=dict(request.headers)
+        )
         # Try to get storage from app state for proxy-specific configuration
         storage = getattr(request.app.state, 'storage', None)
         if storage:
@@ -142,12 +175,27 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             if not proxy_hostname:
                 proxy_hostname = request.headers.get("host", "").split(":")[0]
             
-            return await metadata_handler.get_authorization_server_metadata(request, proxy_hostname)
+            result = await metadata_handler.get_authorization_server_metadata(request, proxy_hostname)
+            
+            # Log response
+            duration = (time.time() - start_time) * 1000
+            log_info(
+                "OAuth metadata response (via handler)",
+                component="oauth",
+                client_ip=client_ip,
+                client_hostname=client_hostname,
+                proxy_hostname=proxy_hostname,
+                path=request.url.path,
+                status_code=200,
+                duration_ms=duration
+            )
+            
+            return result
         
         # Fall back to default metadata if no storage
         api_url = get_external_url(request, settings)
         
-        return {
+        metadata = {
             "issuer": api_url,
             "authorization_endpoint": f"{api_url}/authorize",
             "token_endpoint": f"{api_url}/token",
@@ -171,13 +219,78 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             "resource_parameter_supported": True,
             "authorization_response_iss_parameter_supported": True
         }
+        
+        # Log response
+        duration = (time.time() - start_time) * 1000
+        log_info(
+            "OAuth metadata response",
+            component="oauth",
+            client_ip=client_ip,
+            client_hostname=client_hostname,
+            proxy_hostname=proxy_hostname,
+            path=request.url.path,
+            status_code=200,
+            duration_ms=duration,
+            response_size=len(json.dumps(metadata))
+        )
+        
+        return metadata
 
     # JWKS endpoint for RS256 public key distribution
     @router.get("/jwks")
-    async def jwks():
+    async def jwks(request: Request):
         """JSON Web Key Set endpoint - distributes the divine RS256 public key!"""
+        import time
+        from src.shared.client_ip import get_real_client_ip
+        from src.shared.logger import log_request, log_response
+        
+        start_time = time.time()
+        
+        # Extract client IP and hostname
+        client_ip = get_real_client_ip(request)
+        client_hostname = None
+        
+        # Try to get client hostname from reverse DNS
+        try:
+            import socket
+            client_hostname = socket.gethostbyaddr(client_ip)[0]
+        except:
+            client_hostname = client_ip
+        
+        # Extract proxy hostname from headers
+        proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+        if not proxy_hostname:
+            proxy_hostname = request.headers.get("host", "").split(":")[0]
+        
+        # Log incoming request
+        log_info(
+            "JWKS request",
+            component="oauth",
+            client_ip=client_ip,
+            client_hostname=client_hostname,
+            proxy_hostname=proxy_hostname,
+            path=request.url.path,
+            method=request.method
+        )
+        
         jwk = auth_manager.key_manager.get_jwk()
-        return {"keys": [jwk]}
+        response_data = {"keys": [jwk]}
+        
+        # Log response
+        duration = (time.time() - start_time) * 1000
+        log_info(
+            "JWKS response",
+            component="oauth",
+            client_ip=client_ip,
+            client_hostname=client_hostname,
+            proxy_hostname=proxy_hostname,
+            path=request.url.path,
+            status_code=200,
+            duration_ms=duration,
+            response_size=len(json.dumps(response_data))
+        )
+        
+        return response_data
 
     # Dynamic Client Registration endpoint (RFC 7591) - PUBLIC ACCESS
     @router.post("/register", status_code=201)

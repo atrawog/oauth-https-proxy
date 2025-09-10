@@ -89,7 +89,7 @@ class OAuthMetadataHandler:
         # Check for proxy-specific configuration if hostname is provided
         if hostname and self.storage:
             try:
-                proxy_target = self.storage.get_proxy_target(hostname)
+                proxy_target = await self.storage.get_proxy_target(hostname)
                 if proxy_target and proxy_target.oauth_server_override_defaults:
                     log_info(f"Using proxy-specific OAuth server config for {hostname}")
                     
