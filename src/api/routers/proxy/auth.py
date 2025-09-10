@@ -108,12 +108,12 @@ def create_auth_router(async_storage):
             oauth_route = Route(
                 route_id=route_id,
                 path_pattern="/.well-known/oauth-authorization-server",
-                target_type=RouteTargetType.SERVICE,
-                target_value="auth",  # Route to auth service, not hostname
+                target_type=RouteTargetType.URL,
+                target_value="http://api:9000",  # Use URL type with correct target
                 priority=90,  # High priority but below system routes
                 enabled=True,
                 description=f"OAuth metadata for {proxy_hostname}",
-                owner_token_hash=target.owner_token_hash
+                owner_token_hash=None  # ProxyTarget doesn't have owner_token_hash
             )
             
             # Store the route
