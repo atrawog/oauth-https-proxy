@@ -107,3 +107,49 @@ def parse_bool_env(value: Optional[str], default: bool = False) -> bool:
     if value is None:
         return default
     return value.lower() in ('true', 'yes', '1', 'on')
+
+
+def build_resource_uri(base_url: str, resource_endpoint: Optional[str] = None) -> str:
+    """Build a normalized resource URI for OAuth audience validation.
+    
+    This function ensures consistent resource URI formatting across:
+    - Token generation (audience claim)
+    - Protected resource metadata endpoints
+    - Audience validation during authentication
+    
+    Rules:
+    - If resource_endpoint is None, empty, or "/", return base_url without trailing slash
+    - Otherwise, append resource_endpoint to base_url
+    - Always strip trailing slashes from the final result (except for paths like /mcp/)
+    
+    Args:
+        base_url: Base URL like "http://localhost" or "https://example.com"
+        resource_endpoint: Optional resource path like "/mcp" or "/"
+        
+    Returns:
+        Normalized resource URI
+        
+    Examples:
+        >>> build_resource_uri("http://localhost", "/")
+        "http://localhost"
+        >>> build_resource_uri("http://localhost", None)
+        "http://localhost"
+        >>> build_resource_uri("https://example.com", "/mcp")
+        "https://example.com/mcp"
+        >>> build_resource_uri("https://example.com/", "/api/v1")
+        "https://example.com/api/v1"
+    """
+    # Normalize base URL (remove trailing slash)
+    base = base_url.rstrip('/')
+    
+    # If no resource endpoint or it's the root, return base URL
+    if not resource_endpoint or resource_endpoint == '/':
+        return base
+    
+    # Build the full resource URI
+    # Ensure resource_endpoint starts with / for proper joining
+    if not resource_endpoint.startswith('/'):
+        resource_endpoint = '/' + resource_endpoint
+    
+    # Combine and return (don't strip trailing slash from paths like /mcp/)
+    return base + resource_endpoint

@@ -172,9 +172,11 @@ class OAuthMetadataHandler:
             log_warning(f"Protected resource metadata not configured for {proxy_hostname}")
             raise HTTPException(404, "Protected resource metadata not configured for this proxy")
         
-        # Build resource URI
+        # Build resource URI using shared utility for consistency
+        from ...shared.utils import build_resource_uri
         proto = request.headers.get("x-forwarded-proto", "https")
-        resource_uri = f"{proto}://{proxy_hostname}{target.resource_endpoint}"
+        base_uri = f"{proto}://{proxy_hostname}"
+        resource_uri = build_resource_uri(base_uri, target.resource_endpoint)
         
         # Get authorization server URL - can be custom per proxy
         auth_servers = []

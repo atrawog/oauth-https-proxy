@@ -155,6 +155,8 @@ class UnifiedProxyHandler:
         For localhost, it's http://localhost. For production, it's https://{hostname}
         If a resource_endpoint is configured, it's appended to the URI.
         """
+        from ..shared.utils import build_resource_uri
+        
         # Get proxy configuration to check for resource_endpoint
         proxy_target = await self.storage.get_proxy_target(proxy_hostname)
         
@@ -164,11 +166,9 @@ class UnifiedProxyHandler:
         else:
             base_uri = f"https://{proxy_hostname}"
         
-        # Append resource endpoint if configured (e.g., /mcp)
-        if proxy_target and proxy_target.resource_endpoint:
-            return f"{base_uri}{proxy_target.resource_endpoint}"
-        
-        return base_uri
+        # Use the shared utility function for consistent URI building
+        resource_endpoint = proxy_target.resource_endpoint if proxy_target else None
+        return build_resource_uri(base_uri, resource_endpoint)
     
     def _build_www_authenticate_header(self, proxy_target, request, error=None) -> str:
         """Build RFC-compliant WWW-Authenticate header per proxy.

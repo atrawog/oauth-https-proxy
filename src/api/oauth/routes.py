@@ -28,6 +28,7 @@ from ...shared.config import Config
 from ...shared.client_ip import get_real_client_ip
 from ...shared.dns_resolver import get_dns_resolver
 from ...shared.sanitizer import OAuthSanitizer
+from ...shared.utils import build_resource_uri
 from ...logging.oauth_events import (
     OAuthEventLogger,
     init_oauth_logger,
@@ -490,16 +491,27 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         resources = []
         
         # 1. Always include localhost for API access
-        resources.append("http://localhost")
+        # Get localhost proxy to check for resource_endpoint
+        try:
+            localhost_proxy = await storage.get_proxy_target("localhost")
+            localhost_resource = build_resource_uri(
+                "http://localhost",
+                localhost_proxy.resource_endpoint if localhost_proxy else None
+            )
+            resources.append(localhost_resource)
+        except Exception:
+            # If we can't get localhost proxy config, use default
+            resources.append("http://localhost")
         
         # 2. Include the proxy from which auth was initiated (if any)
         if proxy_hostname:
             try:
                 proxy = await storage.get_proxy_target(proxy_hostname)
                 if proxy and proxy.enabled:
-                    # Determine protocol based on proxy configuration
+                    # Build resource URI with proper endpoint
                     protocol = "https" if proxy.enable_https else "http"
-                    resource_uri = f"{protocol}://{proxy_hostname}"
+                    base_uri = f"{protocol}://{proxy_hostname}"
+                    resource_uri = build_resource_uri(base_uri, proxy.resource_endpoint)
                     if resource_uri not in resources:
                         resources.append(resource_uri)
                         log_info(
@@ -534,9 +546,10 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     # If no auth_required_users, proxy is accessible to all authenticated users
                     pass
                 
-                # Build resource URI
+                # Build resource URI with proper endpoint
                 protocol = "https" if proxy.enable_https else "http"
-                resource_uri = f"{protocol}://{proxy.proxy_hostname}"
+                base_uri = f"{protocol}://{proxy.proxy_hostname}"
+                resource_uri = build_resource_uri(base_uri, proxy.resource_endpoint)
                 if resource_uri not in resources:
                     resources.append(resource_uri)
                     log_debug(
@@ -553,31 +566,8 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                 error=str(e)
             )
         
-        # Add commonly used proxies that should be accessible
-        # These are proxies that are commonly used and should be included
-        common_resources = [
-            "https://simple-oauth.atratest.org",
-            "https://claude.atratest.org"
-        ]
-        
-        for resource in common_resources:
-            if resource not in resources:
-                # Extract hostname from URI
-                hostname = resource.replace("https://", "").replace("http://", "")
-                try:
-                    proxy = await storage.get_proxy_target(hostname)
-                    if proxy and proxy.enabled:
-                        # Check user access
-                        if not proxy.auth_required_users or username in proxy.auth_required_users:
-                            resources.append(resource)
-                            log_debug(
-                                f"Added common resource",
-                                username=username,
-                                resource=resource
-                            )
-                except Exception:
-                    # Proxy doesn't exist or error accessing it
-                    pass
+        # Note: All accessible proxies are already discovered above in step 3
+        # No need for any hardcoded common hostnames - that's what discovery is for!
         
         log_info(
             f"Discovered resources for user",

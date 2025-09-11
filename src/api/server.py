@@ -15,6 +15,7 @@ from starlette.datastructures import URL, Headers, MutableHeaders
 
 from .models import HealthStatus
 from ..shared.client_ip import get_real_client_ip
+from ..shared.utils import build_resource_uri
 
 # OAuth imports
 from .oauth.config import Settings as OAuthSettings
@@ -435,10 +436,10 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 )
                 raise HTTPException(404, "Protected resource metadata not configured for this proxy")
             
-            # Build resource URI
+            # Build resource URI using shared utility for consistency
             proto = request.headers.get("x-forwarded-proto", "https")
-            resource_endpoint = target.resource_endpoint
-            resource_uri = f"{proto}://{proxy_hostname}{resource_endpoint}"
+            base_uri = f"{proto}://{proxy_hostname}"
+            resource_uri = build_resource_uri(base_uri, target.resource_endpoint)
             
             log_debug(
                 "Building resource URI",
