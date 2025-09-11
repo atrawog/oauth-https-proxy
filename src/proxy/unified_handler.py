@@ -941,7 +941,7 @@ class UnifiedProxyHandler:
             'request_id': trace_id,
             'request_path': str(request.url.path),  # Standard field name
             'request_method': request.method,  # Standard field name
-            'request_query': str(request.url.query) if request.url.query else None,  # Standard field name
+            'request_query': str(request.url.query) if request.url.query else '',  # Standard field name
             'user_agent': request.headers.get('user-agent', 'unknown'),
             'referer': request.headers.get('referer'),
             'content_type': request.headers.get('content-type'),
