@@ -311,7 +311,11 @@ class AsyncLogStorage:
                 'level': log_entry.get('level', 'INFO'),
                 'component': log_entry.get('component', 'unknown'),  # Component that generated the log
                 'log_type': log_entry.get('log_type', 'http_request'),
-                'response_type': log_entry.get('response_type', '')  # Type of response (route_forward, proxy_forward, error, etc.)
+                'response_type': log_entry.get('response_type', ''),  # Type of response (route_forward, proxy_forward, error, etc.)
+                'headers': log_entry.get('headers', ''),  # Request/response headers as JSON string
+                'body': log_entry.get('body', ''),  # Request/response body
+                'response_headers': log_entry.get('response_headers', ''),  # Response headers specifically
+                'response_body': log_entry.get('response_body', '')  # Response body specifically
             }
             
             # Write to the unified log stream
@@ -511,6 +515,10 @@ class AsyncLogStorage:
                         # Include additional debug fields
                         'headers': data.get('headers', ''),
                         'body': data.get('body', ''),
+                        'request_headers': data.get('request_headers', ''),  # Request headers
+                        'response_headers': data.get('response_headers', ''),  # Response headers  
+                        'request_body': data.get('request_body', ''),  # Request body
+                        'response_body': data.get('response_body', ''),  # Response body
                         'backend_url': data.get('backend_url', ''),
                         'session_id': data.get('session_id', ''),
                         'trace_id': data.get('trace_id') or data.get('request_id', ''),
@@ -779,7 +787,7 @@ class AsyncLogStorage:
         try:
             cleared = 0
             
-            # Use SCAN to iterate through keys safely
+            # Clear old-style keys (for backward compatibility)
             cursor = 0
             while True:
                 cursor, keys = await self.redis.scan(
@@ -795,8 +803,8 @@ class AsyncLogStorage:
                 if cursor == 0:
                     break
             
-            # Clear indexes
-            for pattern in ["idx:req:*", "stats:*"]:
+            # Clear all indexes (both old and new patterns)
+            for pattern in ["idx:req:*", "log:idx:*", "stats:*", "trace:metadata:*"]:
                 cursor = 0
                 while True:
                     cursor, keys = await self.redis.scan(
@@ -812,10 +820,14 @@ class AsyncLogStorage:
                     if cursor == 0:
                         break
             
-            # Clear the stream
+            # Clear BOTH streams
+            # 1. Clear the old stream (stream:requests)
             await self.redis.xtrim(self.stream_key, maxlen=0)
             
-            logger.info(f"Cleared {cleared} log-related keys")
+            # 2. Clear the main unified stream (logs:all:stream)
+            await self.redis.xtrim("logs:all:stream", maxlen=0)
+            
+            logger.info(f"Cleared {cleared} log-related keys and both streams")
             return cleared
             
         except Exception as e:

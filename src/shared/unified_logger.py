@@ -30,9 +30,9 @@ logger = logging.getLogger(__name__)
 LOG_REQUEST_HEADERS = os.getenv('LOG_REQUEST_HEADERS', 'true').lower() == 'true'
 LOG_RESPONSE_HEADERS = os.getenv('LOG_RESPONSE_HEADERS', 'true').lower() == 'true'
 LOG_REQUEST_BODY = os.getenv('LOG_REQUEST_BODY', 'true').lower() == 'true'
-LOG_RESPONSE_BODY = os.getenv('LOG_RESPONSE_BODY', 'false').lower() == 'true'
-LOG_BODY_MAX_SIZE = int(os.getenv('LOG_BODY_MAX_SIZE', '10240'))
-LOG_MASK_SENSITIVE = os.getenv('LOG_MASK_SENSITIVE', 'true').lower() == 'true'
+LOG_RESPONSE_BODY = os.getenv('LOG_RESPONSE_BODY', 'true').lower() == 'true'
+LOG_BODY_MAX_SIZE = int(os.getenv('LOG_BODY_MAX_SIZE', '102400'))
+LOG_MASK_SENSITIVE = os.getenv('LOG_MASK_SENSITIVE', 'false').lower() == 'true'
 
 # Sensitive headers to mask
 SENSITIVE_HEADERS = ['authorization', 'cookie', 'x-api-key', 'x-auth-token', 'x-csrf-token']
@@ -392,7 +392,8 @@ class UnifiedAsyncLogger:
         }
         
         # Add optional fields only if they have values
-        if masked_headers:
+        # Store headers when LOG_REQUEST_HEADERS is enabled and headers are provided
+        if headers and LOG_REQUEST_HEADERS:
             request_data["headers"] = json.dumps(masked_headers)
         if truncated_body:
             request_data["body"] = truncated_body.decode('utf-8', errors='ignore')
@@ -497,8 +498,9 @@ class UnifiedAsyncLogger:
             response_data["backend_url"] = backend_url
         if response_size is not None:
             response_data["bytes_sent"] = response_size
-        if masked_headers:
-            response_data["headers"] = json.dumps(masked_headers)
+        # Store headers when LOG_RESPONSE_HEADERS is enabled and headers are provided
+        if headers and LOG_RESPONSE_HEADERS:
+            response_data["response_headers"] = json.dumps(masked_headers)
         if truncated_body:
             response_data["body"] = truncated_body.decode('utf-8', errors='ignore')
         

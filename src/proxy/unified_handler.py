@@ -878,8 +878,11 @@ class UnifiedProxyHandler:
             # Fallback to standard extraction
             client_ip = get_real_client_ip(request)
         
-        # Get proxy hostname from request
-        proxy_hostname = request.headers.get("host", "unknown").split(":")[0]
+        # Get proxy hostname from request - be more robust
+        proxy_hostname = request.headers.get("host", "").split(":")[0]
+        if not proxy_hostname:
+            # Fallback to URL hostname if header missing
+            proxy_hostname = str(request.url.hostname or "unknown")
         
         # Resolve client hostname
         client_hostname = await self.dns_resolver.resolve_ptr(client_ip)
@@ -944,7 +947,36 @@ class UnifiedProxyHandler:
         method = request.method
         path = str(request.url.path)
         
-        # Don't log request here - wait for response to have complete info including status
+        # Capture request body before logging (handle read-once issue)
+        request_body = None
+        if request.method != 'GET':
+            try:
+                request_body = await request.body()
+                # Store body for later use
+                request._body_captured = request_body
+                # Recreate receive function so body can be read again later
+                async def receive():
+                    return {"type": "http.request", "body": request_body}
+                request._receive = receive
+            except Exception as e:
+                log_debug(f"Failed to capture request body: {e}", component="proxy_handler")
+        
+        # Log the request immediately (fire-and-forget)
+        log_request(
+            method=method,
+            path=path,
+            client_ip=client_ip,
+            proxy_hostname=proxy_hostname,
+            trace_id=trace_id,
+            client_hostname=log_ctx.get('client_hostname', ''),
+            query=log_ctx.get('request_query', ''),
+            user_agent=log_ctx.get('user_agent', ''),
+            referer=log_ctx.get('referer', ''),
+            headers=dict(request.headers) if request.headers else None,
+            body=request_body,
+            component="proxy_handler"
+        )
+        
         # Store request context for later use in log_response
         request_log_ctx = {
             'method': method,
@@ -988,13 +1020,17 @@ class UnifiedProxyHandler:
                     log_info("Authentication failed, returning auth error", component="proxy_handler", **log_ctx)
                     # Log response for auth error
                     duration_ms = (time.time() - start_time) * 1000
+                    # Extract response headers if available
+                    response_headers = dict(auth_response.headers) if hasattr(auth_response, 'headers') else None
                     log_response(
                         status=auth_response.status_code,
                         duration_ms=duration_ms,
                         component="proxy_handler",
                         **request_log_ctx,
                         auth_status="failed",
-                        response_type="auth_error"
+                        response_type="auth_error",
+                        headers=response_headers,  # Pass response headers for logging
+                        body=auth_response.body if hasattr(auth_response, 'body') else None
                     )
                     return auth_response  # Return auth error or redirect
                 # Authentication successful - update request_log_ctx with auth info
@@ -1022,6 +1058,8 @@ class UnifiedProxyHandler:
                 response = await self._forward_to_service(request, decision, normalized, log_ctx)
                 # Log response for route forward
                 duration_ms = (time.time() - start_time) * 1000
+                # Extract response headers if available
+                response_headers = dict(response.headers) if hasattr(response, 'headers') else None
                 log_response(
                     status=response.status_code,
                     duration_ms=duration_ms,
@@ -1031,7 +1069,9 @@ class UnifiedProxyHandler:
                     backend_url=decision.target,
                     auth_user=getattr(request.state, 'auth_user', None),
                     auth_scopes=','.join(getattr(request.state, 'auth_scopes', [])) if hasattr(request.state, 'auth_scopes') else None,
-                    response_type="route_forward"
+                    response_type="route_forward",
+                    headers=response_headers,  # Pass response headers for logging
+                    body=response.body if hasattr(response, 'body') else None
                 )
                 return response
             
@@ -1041,13 +1081,17 @@ class UnifiedProxyHandler:
                 response = await self._forward_to_proxy(request, decision, normalized, log_ctx)
                 # Log response for proxy forward
                 duration_ms = (time.time() - start_time) * 1000
+                # Extract response headers if available
+                response_headers = dict(response.headers) if hasattr(response, 'headers') else None
                 log_response(
                     status=response.status_code,
                     duration_ms=duration_ms,
                     component="proxy_handler",
                     **request_log_ctx,
                     backend_url=decision.target,
-                    response_type="proxy_forward"
+                    response_type="proxy_forward",
+                    headers=response_headers,  # Pass response headers for logging
+                    body=response.body if hasattr(response, 'body') else None
                 )
                 return response
             
@@ -1056,13 +1100,21 @@ class UnifiedProxyHandler:
                 log_error(f"NO ROUTE OR PROXY FOUND for {normalized.hostname}{normalized.path}", component="proxy_handler", **log_ctx)
                 # Log response for 404
                 duration_ms = (time.time() - start_time) * 1000
+                
+                # Create proper 404 response headers
+                not_found_headers = {
+                    "content-type": "application/json",
+                    "x-error-type": "not_found"
+                }
+                
                 log_response(
                     status=404,
                     duration_ms=duration_ms,
                     component="proxy_handler",
                     **request_log_ctx,
                     error="no_route_or_proxy",
-                    response_type="error"
+                    response_type="error",
+                    headers=not_found_headers  # Include headers for 404 responses
                 )
                 raise HTTPException(404, f"No route or proxy target for {normalized.hostname}")
         
@@ -1070,6 +1122,17 @@ class UnifiedProxyHandler:
             log_warning(f"HTTPException in handle_request: status_code={he.status_code}, detail={he.detail}", component="proxy_handler", **log_ctx)
             # Log response for HTTP exception
             duration_ms = (time.time() - start_time) * 1000
+            
+            # Create a proper error response with headers
+            error_response_headers = {
+                "content-type": "application/json",
+                "x-error-type": "http_exception"
+            }
+            
+            # Add WWW-Authenticate header for 401 errors
+            if he.status_code == 401:
+                error_response_headers["www-authenticate"] = "Bearer"
+            
             if 'request_log_ctx' in locals():
                 log_response(
                     status=he.status_code,
@@ -1078,7 +1141,8 @@ class UnifiedProxyHandler:
                     **request_log_ctx,
                     error=str(he.detail),
                     error_type="http_exception",
-                    response_type="error"
+                    response_type="error",
+                    headers=error_response_headers  # Include response headers for exceptions
                 )
             else:
                 log_response(
@@ -1092,7 +1156,8 @@ class UnifiedProxyHandler:
                     path=path if 'path' in locals() else str(request.url.path),
                     error=str(he.detail),
                     error_type="http_exception",
-                    response_type="error"
+                    response_type="error",
+                    headers=error_response_headers  # Include response headers for exceptions
                 )
             raise
         except Exception as e:
@@ -1102,6 +1167,12 @@ class UnifiedProxyHandler:
             dual_logger.error(f"Full traceback: {traceback.format_exc()}", **log_ctx)
             # Log response for unhandled exception
             duration_ms = (time.time() - start_time) * 1000
+            # Create error response headers
+            error_headers = {
+                "content-type": "application/json",
+                "x-error-type": "internal_server_error"
+            }
+            
             if 'request_log_ctx' in locals():
                 log_response(
                     status=500,
@@ -1110,7 +1181,8 @@ class UnifiedProxyHandler:
                     **request_log_ctx,
                     error=str(e),
                     error_type=type(e).__name__,
-                    response_type="error"
+                    response_type="error",
+                    headers=error_headers  # Include headers for 500 errors
                 )
             else:
                 log_response(
@@ -1124,7 +1196,8 @@ class UnifiedProxyHandler:
                     path=path if 'path' in locals() else str(request.url.path),
                     error=str(e),
                     error_type=type(e).__name__,
-                    response_type="error"
+                    response_type="error",
+                    headers=error_headers  # Include headers for 500 errors
                 )
             raise HTTPException(500, "Internal server error")
     
@@ -1254,8 +1327,15 @@ class UnifiedProxyHandler:
         if custom_headers:
             headers.update(custom_headers)
         
-        # Get request body
-        body = await request.body()
+        # Mark this as a proxied request so API doesn't duplicate logging
+        headers['X-Proxied-Request'] = 'true'
+        headers['X-Original-Trace-Id'] = log_ctx.get('request_id', '')  # Preserve trace ID
+        
+        # Use the body we already captured (if available), or read it now
+        if hasattr(request, '_body_captured'):
+            body = request._body_captured
+        else:
+            body = await request.body()
         
         # Special handling for MCP endpoint
         is_mcp_request = request.url.path == '/mcp'

@@ -397,8 +397,10 @@ class UnifiedStreamPublisher:
         # Publish to specific stream
         log_id = await self.publish(specific_stream, log_data, trace_id, batch=True)
         
-        # Also publish to master log stream
-        await self.publish(self.master_log_stream, log_data, trace_id, batch=True)
+        # Also publish to master log stream (make a copy to avoid mutation)
+        import copy
+        log_data_copy = copy.deepcopy(log_data)
+        await self.publish(self.master_log_stream, log_data_copy, trace_id, batch=True)
         
         return log_id
     

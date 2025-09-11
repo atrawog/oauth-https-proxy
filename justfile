@@ -124,6 +124,21 @@ oauth *args:
 log *args:
     @pixi run proxy-client log {{args}}
 
+# Extract complete HTTP traffic for an IP
+log-http-traffic ip proxy="" hours="24" headers="true" body="true":
+    #!/usr/bin/env bash
+    cmd="pixi run proxy-client log http-traffic {{ip}} --hours {{hours}}"
+    if [ -n "{{proxy}}" ]; then
+        cmd="$cmd --proxy {{proxy}}"
+    fi
+    if [ "{{headers}}" = "true" ]; then
+        cmd="$cmd --show-headers"
+    fi
+    if [ "{{body}}" = "true" ]; then
+        cmd="$cmd --show-body"
+    fi
+    eval $cmd
+
 # Generate comprehensive connection report for IP to proxy
 report ip proxy hours="24" output="":
     #!/usr/bin/env bash

@@ -21,7 +21,14 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next):
         """Process request with non-blocking logging."""
         
-        # Start timing
+        # SKIP ALL LOGGING for proxied requests to prevent duplicates
+        if request.headers.get('x-proxied-request') == 'true':
+            # This request is already being logged by the proxy layer
+            # Just pass it through without any logging
+            response = await call_next(request)
+            return response
+        
+        # Start timing for direct API calls only
         start_time = time.time()
         
         # Check for existing trace_id from dispatcher (via X-Trace-Id header)
@@ -65,9 +72,9 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
         # This is critical for diagnosing OAuth issues with Claude.ai
         headers = dict(request.headers)
         
-        # Capture body in DEBUG mode (for non-GET requests)
+        # Always capture body for comprehensive logging (for non-GET requests)
         body = None
-        if os.environ.get('LOG_LEVEL', 'INFO') == 'DEBUG' and method != 'GET':
+        if method != 'GET':
             try:
                 # Store body for later use since we can only read it once
                 body_bytes = await request.body()
@@ -103,9 +110,10 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
             # Fire-and-forget logging - NO await!
             status = response.status_code if response else 500
             
-            # Get response size and headers if available
+            # Get response size, headers, and body if available
             response_size = None
             response_headers = None
+            response_body = None
             if response and hasattr(response, 'headers'):
                 content_length = response.headers.get("content-length")
                 if content_length:
@@ -115,6 +123,11 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                         pass
                 # Capture response headers for debugging (especially WWW-Authenticate)
                 response_headers = dict(response.headers)
+                
+                # Try to capture response body if it's available
+                # Note: This works for standard Response objects
+                if hasattr(response, 'body'):
+                    response_body = response.body
             
             # Log the request with trace_id (fire-and-forget, no await!)
             log_request(
@@ -134,7 +147,7 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                 body=body
             )
             
-            # Log the response with same trace_id and headers (fire-and-forget, no await!)
+            # Log the response with same trace_id, headers, and body (fire-and-forget, no await!)
             log_response(
                 status=status,
                 duration_ms=duration_ms,
@@ -143,7 +156,8 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                 client_ip=client_ip,
                 client_hostname=client_hostname,
                 proxy_hostname=proxy_hostname or "unknown",
-                response_headers=response_headers  # Include response headers
+                headers=response_headers,  # Fixed: Use 'headers' parameter name to match function signature
+                body=response_body  # Pass response body for logging
             )
             
             # Log error if there was one with trace_id (fire-and-forget, no await!)
