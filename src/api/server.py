@@ -449,7 +449,7 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
                 proxy_hostname=proxy_hostname,
                 path=request.url.path,
                 protocol=proto,
-                resource_endpoint=resource_endpoint,
+                resource_endpoint=target.resource_endpoint,
                 resource_uri=resource_uri
             )
             
