@@ -53,6 +53,7 @@ class UnifiedProxyHandler:
         # Public endpoints - no auth required (MUST BE FIRST to override catch-all patterns)
         (r".*", r"/health", None),
         (r".*", r"/.well-known/.*", None),
+        (r".*", r"/token", None),  # OAuth token endpoint - public per RFC 6749
         
         # Admin scope - all create/update/delete operations
         (r"POST|PUT|DELETE|PATCH", r"/tokens/.*", ["admin"]),
@@ -108,8 +109,16 @@ class UnifiedProxyHandler:
             http2=True  # Enable HTTP/2 for better concurrent performance
         )
     
-    def extract_bearer_token(self, request: Request) -> Optional[str]:
-        """Extract bearer token from Authorization header."""
+    def extract_bearer_token(self, request: Request) -> tuple[Optional[str], Optional[str]]:
+        """Extract bearer token from Authorization header.
+        
+        Returns:
+            Tuple of (token, error_type) where error_type is:
+            - None if token extracted successfully
+            - "missing" if no Authorization header
+            - "malformed" if header doesn't start with "Bearer "
+            - "empty" if Bearer token is empty
+        """
         # Log all headers to see what we're receiving
         all_headers = dict(request.headers)
         log_info(f"BEARER EXTRACTION: Headers received: {list(all_headers.keys())}", component="proxy_handler")
@@ -124,28 +133,42 @@ class UnifiedProxyHandler:
         
         if not auth_header:
             log_info(f"BEARER EXTRACTION: No Authorization header found in {list(all_headers.keys())}", component="proxy_handler")
-            return None
+            return None, "missing"
             
         # Check for Bearer prefix (case-insensitive)
-        if auth_header.lower().startswith('bearer '):
-            token = auth_header[7:]  # Skip 'Bearer ' prefix
-            log_info(f"BEARER EXTRACTION: Successfully extracted token: {token[:20]}...", component="proxy_handler")
-            return token
-        
-        log_info(f"BEARER EXTRACTION: Authorization header does not start with 'Bearer ': '{auth_header[:50]}...'", component="proxy_handler")
-        return None
+        if not auth_header.lower().startswith('bearer '):
+            log_info(f"BEARER EXTRACTION: Authorization header does not start with 'Bearer ': '{auth_header[:50]}...'", component="proxy_handler")
+            return None, "malformed"
+            
+        token = auth_header[7:].strip()  # Skip 'Bearer ' prefix and strip whitespace
+        if not token:
+            log_info(f"BEARER EXTRACTION: Bearer token is empty", component="proxy_handler")
+            return None, "empty"
+            
+        log_info(f"BEARER EXTRACTION: Successfully extracted token: {token[:20]}...", component="proxy_handler")
+        return token, None
     
     async def _get_proxy_resource_uri(self, proxy_hostname: str) -> str:
         """Get the proxy's resource URI for audience validation.
         
         The resource URI is the canonical identifier for this proxy as an MCP resource.
         For localhost, it's http://localhost. For production, it's https://{hostname}
+        If a resource_endpoint is configured, it's appended to the URI.
         """
-        # Build the resource URI
+        # Get proxy configuration to check for resource_endpoint
+        proxy_target = await self.storage.get_proxy_target(proxy_hostname)
+        
+        # Build the base resource URI
         if proxy_hostname == "localhost":
-            return "http://localhost"
+            base_uri = "http://localhost"
         else:
-            return f"https://{proxy_hostname}"
+            base_uri = f"https://{proxy_hostname}"
+        
+        # Append resource endpoint if configured (e.g., /mcp)
+        if proxy_target and proxy_target.resource_endpoint:
+            return f"{base_uri}{proxy_target.resource_endpoint}"
+        
+        return base_uri
     
     def _build_www_authenticate_header(self, proxy_target, request, error=None) -> str:
         """Build RFC-compliant WWW-Authenticate header per proxy.
@@ -683,10 +706,22 @@ class UnifiedProxyHandler:
                 return None
         
         # NOW we know auth is required - check for token
-        token = self.extract_bearer_token(request)
+        token, error_type = self.extract_bearer_token(request)
         if not token:
-            log_info("No bearer token found in request", component="proxy_handler", **log_ctx)
-            return await self._return_auth_error(request, proxy_target, log_ctx)
+            # Determine appropriate error based on error type
+            if error_type == "missing":
+                # RFC 6750 §3.1: Protected resources SHOULD NOT include error code when auth is missing
+                error = None
+            elif error_type == "malformed":
+                error = {'error': 'invalid_request', 'error_description': 'Authorization header must use Bearer scheme'}
+            elif error_type == "empty":
+                error = {'error': 'invalid_token', 'error_description': 'Bearer token is empty'}
+            else:
+                # RFC 6750: No error code when auth is missing
+                error = None
+            
+            log_info(f"Token extraction failed: {error_type}", component="proxy_handler", **log_ctx)
+            return await self._return_auth_error(request, proxy_target, log_ctx, error)
         
         # Validate OAuth JWT (add proxy_hostname to log_ctx for audience validation)
         auth_log_ctx = {**log_ctx, 'proxy_hostname': proxy_hostname}
@@ -814,15 +849,22 @@ class UnifiedProxyHandler:
                 **log_ctx
             )
             
-            # Build error response body
-            error_body = error if error else {"error": "unauthorized", "error_description": "OAuth authentication required"}
+            # Build error response body per RFC 6750
+            if error is None:
+                # RFC 6750 §3.1: Empty body when auth is missing from protected resource
+                error_body = ""
+                content_type = "text/plain"
+            else:
+                # Include error details when error is specified
+                error_body = json.dumps(error)
+                content_type = "application/json"
             
             return Response(
-                content=json.dumps(error_body),
+                content=error_body,
                 status_code=401,
                 headers={
                     "WWW-Authenticate": www_auth,
-                    "Content-Type": "application/json"
+                    "Content-Type": content_type
                 }
             )
         
@@ -852,9 +894,9 @@ class UnifiedProxyHandler:
         
         # Default fallback - return 401
         return Response(
-            content=json.dumps({"error": "unauthorized", "error_description": "Authentication required"}),
+            content=json.dumps({"error": "invalid_request", "error_description": "Authentication required"}),
             status_code=401,
-            headers={"WWW-Authenticate": "Bearer"}
+            headers={"WWW-Authenticate": 'Bearer, error="invalid_request", error_description="Authentication required"'}
         )
     
     async def _create_unified_log_context(self, request: Request, protocol: str = "HTTP") -> Dict[str, Any]:
