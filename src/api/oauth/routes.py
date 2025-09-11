@@ -16,6 +16,7 @@ from urllib.parse import urlencode
 import redis.asyncio as redis
 from fastapi import APIRouter, Depends, Form, HTTPException, Query, Request, Response
 from fastapi.responses import HTMLResponse, RedirectResponse, JSONResponse
+from fastapi.exceptions import RequestValidationError
 
 from .async_resource_protector import create_async_resource_protector
 from .auth_authlib import AuthManager
@@ -64,6 +65,16 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
     """
     router = APIRouter()
 
+    # Debug: Check logger state when OAuth router is created
+    from ...shared.logger import get_logger
+    import sys
+    current_logger = get_logger()
+    if not current_logger:
+        print("WARNING: OAuth router created without UnifiedLogger! OAuth logging will use fallback.", file=sys.stderr)
+        log_warning("OAuth router created without UnifiedLogger - using fallback logging", component="oauth_router_init")
+    else:
+        log_info(f"OAuth router created with UnifiedLogger component: {current_logger.component}", component="oauth_router_init")
+
     # Create AsyncResourceProtector instance - defer Redis client access until runtime
     require_oauth = None
 
@@ -92,10 +103,10 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         username = token.get("username")
 
         if not username:
-            raise HTTPException(
-                status_code=403,
-                detail={"error": "access_denied", "error_description": "No username in token"},
-            )
+            return JSONResponse(
+                    status_code=403,
+                    content={"error": "access_denied", "error_description": "No username in token"}
+                )
 
         # Check if user is in admin users list (no wildcards allowed)
         admin_users = settings.admin_users.split(",") if settings.admin_users else []
@@ -106,13 +117,13 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         
         # If no users configured, deny access (secure by default)
         if not admin_users:
-            raise HTTPException(
-                status_code=403,
-                detail={
+            return JSONResponse(
+                    status_code=403,
+                    content={
                     "error": "access_denied",
                     "error_description": "No authorized users configured - access denied for security",
-                },
-            )
+                }
+                )
         
         # Check if user is authorized
         if username not in admin_users:
@@ -313,23 +324,23 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         )
         # Validate redirect URIs - RFC 7591 compliance
         if not registration.redirect_uris:
-            raise HTTPException(
-                status_code=400,
-                detail={
+            return JSONResponse(
+                    status_code=400,
+                    content={
                     "error": "invalid_client_metadata",
                     "error_description": "redirect_uris is required",
-                },
-            )
+                }
+                )
 
         # Validate each redirect URI
         for uri in registration.redirect_uris:
             if not uri or not isinstance(uri, str):
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_redirect_uri",
                         "error_description": "Invalid redirect URI format",
-                    },
+                    }
                 )
 
             # RFC 7591 - Must be HTTPS (except localhost)
@@ -338,20 +349,20 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     uri.startswith(f"http://{host}")
                     for host in ["localhost", "127.0.0.1", "[::1]"]  # TODO: Break long line
                 ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
+                    return JSONResponse(
+                    status_code=400,
+                    content={
                             "error": "invalid_redirect_uri",
                             "error_description": "HTTP redirect URIs are only allowed for localhost",
-                        },
-                    )
+                        }
+                )
             elif not uri.startswith("https://") and ":" not in uri:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_redirect_uri",
                         "error_description": "Redirect URI must use HTTPS or be an app-specific URI",
-                    },
+                    }
                 )
 
         # RFC 7591 Section 3.2.1 - Handle client-suggested client_id
@@ -457,6 +468,126 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         )
 
         return response
+
+
+    async def discover_user_resources(username: str, proxy_hostname: Optional[str], storage) -> List[str]:
+        """Discover all resources a user should have access to.
+        
+        This function dynamically discovers which resources (proxy URIs) a user
+        should be granted access to based on:
+        1. Always including localhost for API access
+        2. The proxy from which auth was initiated (if any)
+        3. All proxies the user has explicit access to
+        
+        Args:
+            username: GitHub username of the authenticated user
+            proxy_hostname: The proxy hostname from which auth was initiated (optional)
+            storage: AsyncRedisStorage instance for accessing proxy configurations
+            
+        Returns:
+            List of resource URIs the user should have access to
+        """
+        resources = []
+        
+        # 1. Always include localhost for API access
+        resources.append("http://localhost")
+        
+        # 2. Include the proxy from which auth was initiated (if any)
+        if proxy_hostname:
+            try:
+                proxy = await storage.get_proxy_target(proxy_hostname)
+                if proxy and proxy.enabled:
+                    # Determine protocol based on proxy configuration
+                    protocol = "https" if proxy.enable_https else "http"
+                    resource_uri = f"{protocol}://{proxy_hostname}"
+                    if resource_uri not in resources:
+                        resources.append(resource_uri)
+                        log_info(
+                            f"Added originating proxy to resources",
+                            username=username,
+                            proxy_hostname=proxy_hostname,
+                            resource_uri=resource_uri
+                        )
+            except Exception as e:
+                log_warning(
+                    f"Failed to get originating proxy details",
+                    username=username,
+                    proxy_hostname=proxy_hostname,
+                    error=str(e)
+                )
+        
+        # 3. Discover all proxies the user has access to
+        try:
+            all_proxies = await storage.list_proxy_targets()
+            for proxy in all_proxies:
+                if not proxy.enabled:
+                    continue
+                
+                # Check if user has access via auth_required_users
+                if proxy.auth_required_users:
+                    # auth_required_users is a list of allowed users
+                    if username not in proxy.auth_required_users:
+                        continue
+                else:
+                    # No specific user restriction, check oauth_admin_users and oauth_user_users
+                    # These determine scope assignment, not access control
+                    # If no auth_required_users, proxy is accessible to all authenticated users
+                    pass
+                
+                # Build resource URI
+                protocol = "https" if proxy.enable_https else "http"
+                resource_uri = f"{protocol}://{proxy.proxy_hostname}"
+                if resource_uri not in resources:
+                    resources.append(resource_uri)
+                    log_debug(
+                        f"Added accessible proxy to resources",
+                        username=username,
+                        proxy=proxy.proxy_hostname,
+                        resource_uri=resource_uri,
+                        has_user_restriction=bool(proxy.auth_required_users)
+                    )
+        except Exception as e:
+            log_error(
+                f"Failed to discover user resources",
+                username=username,
+                error=str(e)
+            )
+        
+        # Add commonly used proxies that should be accessible
+        # These are proxies that are commonly used and should be included
+        common_resources = [
+            "https://simple-oauth.atratest.org",
+            "https://claude.atratest.org"
+        ]
+        
+        for resource in common_resources:
+            if resource not in resources:
+                # Extract hostname from URI
+                hostname = resource.replace("https://", "").replace("http://", "")
+                try:
+                    proxy = await storage.get_proxy_target(hostname)
+                    if proxy and proxy.enabled:
+                        # Check user access
+                        if not proxy.auth_required_users or username in proxy.auth_required_users:
+                            resources.append(resource)
+                            log_debug(
+                                f"Added common resource",
+                                username=username,
+                                resource=resource
+                            )
+                except Exception:
+                    # Proxy doesn't exist or error accessing it
+                    pass
+        
+        log_info(
+            f"Discovered resources for user",
+            username=username,
+            proxy_hostname=proxy_hostname,
+            resource_count=len(resources),
+            resources=resources
+        )
+        
+        return resources
 
 
     # Device Flow endpoints
@@ -666,6 +797,26 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             if context_str:
                 context = json.loads(context_str)
                 resources = context.get("resources", [])
+                
+                # If no resources specified, discover them dynamically
+                if not resources:
+                    log_debug(
+                        "No resources in device flow, discovering resources for user",
+                        github_user=github_user,
+                        client_ip=client_ip
+                    )
+                    resources = await discover_user_resources(
+                        username=github_user,
+                        proxy_hostname=None,  # Device flow doesn't have origin proxy
+                        storage=async_storage
+                    )
+                    log_info(
+                        "Device flow resource discovery completed",
+                        github_user=github_user,
+                        resource_count=len(resources),
+                        resources=resources
+                    )
+                
                 # Clean up the stored context
                 await redis_client.delete(f"oauth:device:{device_code}")
             else:
@@ -981,13 +1132,13 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                 oauth_authorization_granted="rejected"
             )
             
-            raise HTTPException(
-                status_code=400,
-                detail={
+            return JSONResponse(
+                    status_code=400,
+                    content={
                     "error": "invalid_redirect_uri",
                     "error_description": "Redirect URI not registered",
-                },
-            )
+                }
+                )
 
         # Validate response_type
         if not client.check_response_type(response_type):
@@ -1035,13 +1186,13 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                 oauth_authorization_granted="rejected"
             )
             
-            raise HTTPException(
-                status_code=400,
-                detail={
+            return JSONResponse(
+                    status_code=400,
+                    content={
                     "error": "invalid_request",
                     "error_description": "Only S256 PKCE method is supported",
-                },
-            )
+                }
+                )
 
         # Validate resource parameters (RFC 8707)
         if resource:
@@ -1516,6 +1667,29 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             proxy_hostname=proxy_hostname
         )
         
+        # Discover resources if not specified
+        resources = auth_data.get("resources", [])
+        if not resources:
+            log_debug(
+                "No resources in authorization, discovering resources for user",
+                github_user=github_user,
+                proxy_hostname=proxy_hostname,
+                client_ip=client_ip
+            )
+            resources = await discover_user_resources(
+                username=github_user,
+                proxy_hostname=proxy_hostname,
+                storage=async_storage
+            )
+            auth_data["resources"] = resources
+            log_info(
+                "Authorization resource discovery completed",
+                github_user=github_user,
+                proxy_hostname=proxy_hostname,
+                resource_count=len(resources),
+                resources=resources
+            )
+        
         # Generate authorization code
         auth_code = secrets.token_urlsafe(32)
 
@@ -1715,13 +1889,13 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     client_id=client_id,
                     grant_type=grant_type
                 )
-                raise HTTPException(
+                return JSONResponse(
                     status_code=401,
-                    detail={
+                    content={
                         "error": "invalid_client",
                         "error_description": "Client authentication failed",
                     },
-                    headers={"WWW-Authenticate": "Basic"},
+                    headers={"WWW-Authenticate": "Basic"}
                 )
 
             # Validate client secret for confidential clients
@@ -1732,13 +1906,13 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                     client_id=client_id,
                     grant_type=grant_type
                 )
-                raise HTTPException(
+                return JSONResponse(
                     status_code=401,
-                    detail={
+                    content={
                         "error": "invalid_client",
                         "error_description": "Invalid client credentials",
                     },
-                    headers={"WWW-Authenticate": "Basic"},
+                    headers={"WWW-Authenticate": "Basic"}
                 )
 
         # Validate grant type (skip for device_flow_client)
@@ -1756,61 +1930,82 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
 
         if grant_type == "authorization_code":
             if not code:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_request",
                         "error_description": "Missing authorization code",
-                    },
+                    }
                 )
 
             # Retrieve authorization code
             code_data_str = await redis_client.get(f"oauth:code:{code}")
             if not code_data_str:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_grant",
                         "error_description": "Invalid or expired authorization code",
-                    },
+                    }
                 )
 
             code_data = json.loads(code_data_str)
 
             # Validate redirect_uri
             if redirect_uri != code_data["redirect_uri"]:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={"error": "invalid_grant", "error_description": "Redirect URI mismatch"},
+                    content={"error": "invalid_grant", "error_description": "Redirect URI mismatch"}
                 )
 
             # Validate PKCE
             if code_data.get("code_challenge"):
                 if not code_verifier:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
+                    return JSONResponse(
+                    status_code=400,
+                    content={
                             "error": "invalid_grant",
                             "error_description": "PKCE code_verifier required",
-                        },
-                    )
+                        }
+                )
 
                 if not auth_manager.verify_pkce_challenge(
                     code_verifier,
                     code_data["code_challenge"],
                     code_data["code_challenge_method"],
                 ):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
+                    return JSONResponse(
+                    status_code=400,
+                    content={
                             "error": "invalid_grant",
                             "error_description": "PKCE verification failed",
-                        },
-                    )
+                        }
+                )
 
             # Validate resource parameters (RFC 8707)
             authorized_resources = code_data.get("resources", [])
             requested_resources = resource if resource else []
+            
+            # If no resources were authorized (shouldn't happen with discovery), discover them now
+            if not authorized_resources:
+                log_warning(
+                    "No resources in authorization code, discovering resources",
+                    username=code_data.get("username"),
+                    client_ip=client_ip
+                )
+                # Get async_storage from app.state
+                async_storage = request.app.state.async_storage
+                authorized_resources = await discover_user_resources(
+                    username=code_data.get("username"),
+                    proxy_hostname=code_data.get("proxy_hostname"),
+                    storage=async_storage
+                )
+                log_info(
+                    "Token exchange resource discovery completed",
+                    username=code_data.get("username"),
+                    resource_count=len(authorized_resources),
+                    resources=authorized_resources
+                )
             
             # If resources were requested at token endpoint, ensure they were authorized
             if requested_resources:
@@ -1948,23 +2143,23 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
 
         elif grant_type == "refresh_token":
             if not refresh_token:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_request",
                         "error_description": "Missing refresh token",
-                    },
+                    }
                 )
 
             # Retrieve refresh token data
             refresh_data_str = await redis_client.get(f"oauth:refresh:{refresh_token}")
             if not refresh_data_str:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_grant",
                         "error_description": "Invalid or expired refresh token",
-                    },
+                    }
                 )
 
             refresh_data = json.loads(refresh_data_str)
@@ -1996,9 +2191,32 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             except Exception as e:
                 log_warning(f"Failed to track refresh token usage: {e}")
 
+            # Get authorized resources from refresh token
+            authorized_resources = refresh_data.get("resources", [])
+            
+            # If no resources in refresh token (old tokens), discover them
+            if not authorized_resources:
+                log_warning(
+                    "Refresh token missing resources, discovering resources",
+                    username=refresh_data.get("username"),
+                    client_ip=client_ip
+                )
+                # Get async_storage from app.state
+                async_storage = request.app.state.async_storage
+                authorized_resources = await discover_user_resources(
+                    username=refresh_data.get("username"),
+                    proxy_hostname=None,  # Refresh doesn't have origin proxy
+                    storage=async_storage
+                )
+                log_info(
+                    "Refresh token resource discovery completed",
+                    username=refresh_data.get("username"),
+                    resource_count=len(authorized_resources),
+                    resources=authorized_resources
+                )
+            
             # Validate resource parameters if provided (RFC 8707)
             if resource:
-                authorized_resources = refresh_data.get("resources", [])
                 for res in resource:
                     if res not in authorized_resources:
                         raise HTTPException(
@@ -2010,8 +2228,8 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                         )
                 token_resources = resource
             else:
-                # Use all resources from refresh token
-                token_resources = refresh_data.get("resources", [])
+                # Use all authorized resources if none specifically requested
+                token_resources = authorized_resources
 
             # Log refresh token context
             log_info(
@@ -2021,7 +2239,7 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
                 user_id=refresh_data["user_id"],
                 username=refresh_data["username"],
                 scope=refresh_data["scope"],
-                refresh_token_resources=refresh_data.get("resources", []),
+                authorized_resources=authorized_resources,
                 requested_resources=resource if resource else [],
                 final_token_resources=token_resources,
                 audience_will_be_set_to=token_resources
@@ -2030,25 +2248,8 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
             # Generate new access token with the correct issuer URL and audience
             issuer_url = get_external_url(request, settings)
             
-            # Use the resources from the refresh token as audience
-            # This preserves the original resources the token was issued for
-            resources = refresh_data.get("resources")
-            if not resources:
-                # For backward compatibility with old refresh tokens that have single resource
-                single_resource = refresh_data.get("resource")
-                if single_resource:
-                    resources = [single_resource]
-                else:
-                    resources = ["http://localhost"]  # Last resort fallback
-                    log_warning(
-                        f"Refresh token missing resources, using default",
-                        client_ip=client_ip,
-                        refresh_token_preview=refresh_token[:10] if refresh_token else "N/A"
-                    )
-            
-            # Ensure resources is a list
-            if not isinstance(resources, list):
-                resources = [resources]
+            # Use the final token_resources for audience (already determined above)
+            resources = token_resources
             
             log_info(
                 f"Refreshing token with multiple resources",
@@ -2571,44 +2772,44 @@ def create_oauth_router(settings: Settings, redis_client: redis.Redis, auth_mana
         # Validate redirect_uris if provided
         if "redirect_uris" in client_metadata:
             if not client_metadata["redirect_uris"]:
-                raise HTTPException(
+                return JSONResponse(
                     status_code=400,
-                    detail={
+                    content={
                         "error": "invalid_client_metadata",
                         "error_description": "redirect_uris cannot be empty",
-                    },
+                    }
                 )
 
             for uri in client_metadata["redirect_uris"]:
                 if not uri or not isinstance(uri, str):
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
+                    return JSONResponse(
+                    status_code=400,
+                    content={
                             "error": "invalid_redirect_uri",
                             "error_description": "Invalid redirect URI format",
-                        },
-                    )
+                        }
+                )
 
                 if uri.startswith("http://"):
                     if not any(
                         uri.startswith(f"http://{host}")
                         for host in ["localhost", "127.0.0.1", "[::1]"]
                     ):
-                        raise HTTPException(
-                            status_code=400,
-                            detail={
+                        return JSONResponse(
+                    status_code=400,
+                    content={
                                 "error": "invalid_redirect_uri",
                                 "error_description": "HTTP redirect URIs are only allowed for localhost",
-                            },
-                        )
+                            }
+                )
                 elif not uri.startswith("https://") and ":" not in uri:
-                    raise HTTPException(
-                        status_code=400,
-                        detail={
+                    return JSONResponse(
+                    status_code=400,
+                    content={
                             "error": "invalid_redirect_uri",
                             "error_description": "Redirect URI must use HTTPS or be an app-specific URI",
-                        },
-                    )
+                        }
+                )
 
         try:
             updated_client = await config_endpoint.update_client(client, client_metadata)

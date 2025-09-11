@@ -96,11 +96,12 @@ class ProxyOnlyApp:
         self.metadata_handler = OAuthMetadataHandler(self.settings, storage)
         
         # Create minimal Starlette app
+        # IMPORTANT: OAuth metadata route MUST come before catch-all route for proper matching
         self.app = Starlette(
             routes=[
                 Route("/proxy-health", self.handle_health, methods=["GET"]),  # Health check endpoint
-                Route("/.well-known/oauth-authorization-server", self.handle_oauth_metadata, methods=["GET"]),
-                Route("/{path:path}", self.handle_proxy, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]),
+                Route("/.well-known/oauth-authorization-server", self.handle_oauth_metadata, methods=["GET"]),  # OAuth metadata - BEFORE catch-all
+                Route("/{path:path}", self.handle_proxy, methods=["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"]),  # Catch-all - MUST be last
             ],
             on_startup=[self.startup],
             on_shutdown=[self.shutdown]
@@ -218,16 +219,59 @@ class ProxyOnlyApp:
     async def handle_oauth_metadata(self, request: Request) -> Response:
         """Handle OAuth authorization server metadata requests."""
         try:
-            # Get hostname from request
-            proxy_hostname = request.headers.get("host", "").split(":")[0]
-            if not proxy_hostname:  # Fixed: use correct variable name
+            # Log ALL request headers for debugging Claude.ai 404 issue
+            log_info("OAuth metadata endpoint called", component="proxy_app", 
+                    path=request.url.path,
+                    method=request.method,
+                    url=str(request.url))
+            
+            # Log each header individually for complete visibility
+            headers_dict = dict(request.headers)
+            log_info(f"OAuth metadata request headers: {headers_dict}", component="proxy_app")
+            for header_name, header_value in request.headers.items():
+                log_debug(f"OAuth metadata header: {header_name}={header_value}", component="proxy_app")
+            
+            # Get hostname from request - check multiple sources
+            proxy_hostname = None
+            
+            # First try x-forwarded-host (from proxy)
+            if request.headers.get("x-forwarded-host"):
+                proxy_hostname = request.headers.get("x-forwarded-host", "").split(":")[0]
+                log_info(f"OAuth metadata using x-forwarded-host: {proxy_hostname}", component="proxy_app")
+            
+            # Fallback to host header
+            if not proxy_hostname and request.headers.get("host"):
+                proxy_hostname = request.headers.get("host", "").split(":")[0]
+                log_info(f"OAuth metadata using host header: {proxy_hostname}", component="proxy_app")
+            
+            if not proxy_hostname:
+                log_warning("OAuth metadata: No hostname found in headers", component="proxy_app",
+                          headers=list(request.headers.keys()))
                 return JSONResponse({"error": "No host header"}, status_code=404)
             
+            log_info(f"OAuth metadata resolved hostname: {proxy_hostname}", component="proxy_app")
+            
             # Get metadata using the handler
-            metadata = await self.metadata_handler.get_authorization_server_metadata(request, proxy_hostname)  # Fixed: use correct variable name
-            return JSONResponse(metadata)
+            metadata = await self.metadata_handler.get_authorization_server_metadata(request, proxy_hostname)
+            
+            # Log successful response
+            log_info(f"OAuth metadata response generated successfully", component="proxy_app",
+                    hostname=proxy_hostname,
+                    issuer=metadata.get('issuer'),
+                    token_endpoint=metadata.get('token_endpoint'))
+            
+            response = JSONResponse(metadata)
+            
+            # Log response headers
+            log_debug(f"OAuth metadata response headers: {dict(response.headers)}", component="proxy_app")
+            
+            return response
         except Exception as e:
-            log_error(f"OAuth metadata error: {e}", component="proxy_app")
+            log_error(f"OAuth metadata error: {e}", component="proxy_app", 
+                     error_type=type(e).__name__,
+                     traceback=True)
+            import traceback
+            log_debug(f"OAuth metadata traceback: {traceback.format_exc()}", component="proxy_app")
             return JSONResponse({"error": str(e)}, status_code=500)
     
     async def handle_proxy(self, request: Request) -> Response:

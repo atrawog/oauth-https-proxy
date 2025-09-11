@@ -114,6 +114,18 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     oauth_settings = OAuthSettings()
     auth_manager = AuthManager(oauth_settings)
     
+    # Initialize temporary logger early for OAuth routes and other early logging
+    # Note: We can't fully initialize UnifiedAsyncLogger here because RedisClients
+    # requires async initialization. The logger will use fallback until async_init completes.
+    # This is OK - logs will go to stderr initially, then to Redis after full initialization.
+    from ..shared.logger import get_logger
+    
+    # Check if logger is already initialized (shouldn't be at this point)
+    if get_logger():
+        logger.info("Global logger already initialized before create_api_app")
+    else:
+        logger.info("Global logger not yet initialized - OAuth routes will use fallback logging until async_init completes")
+    
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         """Manage application lifecycle."""
@@ -266,6 +278,36 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
         logger.debug("Debug message")
         logger.warning("Warning message")
         return {"status": "ok", "message": "Logging test"}
+    
+    # Logger health check endpoint
+    @app.get("/debug/logger-status")
+    async def logger_status(request: Request):
+        """Check the status of the UnifiedAsyncLogger."""
+        from ..shared.logger import get_logger
+        current_logger = get_logger()
+        
+        # Get client info for logging
+        client_ip = get_real_client_ip(request)
+        
+        if current_logger:
+            # Logger is initialized
+            return {
+                "logger_initialized": True,
+                "component": current_logger.component,
+                "redis_connected": current_logger.redis_clients is not None,
+                "client_ip": client_ip,
+                "message": "UnifiedAsyncLogger is active and logging to Redis"
+            }
+        else:
+            # Logger not initialized - using fallback
+            return {
+                "logger_initialized": False,
+                "component": None,
+                "redis_connected": False,
+                "client_ip": client_ip,
+                "message": "UnifiedAsyncLogger not initialized - using Python fallback logger",
+                "warning": "Check logs on stderr for fallback logging output"
+            }
     
     # MCP OAuth protected resource metadata endpoint
     @app.get("/.well-known/oauth-protected-resource")
@@ -493,6 +535,35 @@ def create_api_app(storage, cert_manager, scheduler) -> FastAPI:
     oauth_router = create_oauth_router(oauth_settings, storage.redis_client, auth_manager)
     app.include_router(oauth_router)
     logger.info("OAuth router included successfully")
+    
+    # Add validation error handler for RFC 6749 compliance on token endpoint
+    from fastapi.exceptions import RequestValidationError
+    from fastapi.responses import JSONResponse
+    
+    @app.exception_handler(RequestValidationError)
+    async def validation_error_handler(request: Request, exc: RequestValidationError):
+        """Convert FastAPI validation errors to RFC 6749 compliant format for OAuth endpoints."""
+        # Only handle OAuth token endpoint validation errors
+        if request.url.path == "/token":
+            # Extract the first error message
+            errors = exc.errors()
+            if errors:
+                first_error = errors[0]
+                field = first_error.get('loc', ['unknown'])[-1]
+                error_description = f"Missing or invalid parameter: {field}"
+            else:
+                error_description = "Invalid request parameters"
+            
+            # Return RFC 6749 compliant error response at JSON top level
+            return JSONResponse(
+                status_code=400,
+                content={
+                    "error": "invalid_request",
+                    "error_description": error_description
+                }
+            )
+        # For non-OAuth endpoints, use default validation error format
+        return await request.app.default_exception_handler(request, exc)
     
     # Note: All routers are registered via the unified router registry
     # This happens after async components are attached in main.py or app.py

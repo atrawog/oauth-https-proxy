@@ -61,10 +61,9 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
         user_agent = request.headers.get("user-agent", "")
         referer = request.headers.get("referer", "")
         
-        # Capture headers in DEBUG mode
-        headers = None
-        if os.environ.get('LOG_LEVEL', 'INFO') == 'DEBUG':
-            headers = dict(request.headers)
+        # ALWAYS capture headers for comprehensive logging (not just DEBUG mode)
+        # This is critical for diagnosing OAuth issues with Claude.ai
+        headers = dict(request.headers)
         
         # Capture body in DEBUG mode (for non-GET requests)
         body = None
@@ -104,8 +103,9 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
             # Fire-and-forget logging - NO await!
             status = response.status_code if response else 500
             
-            # Get response size if available
+            # Get response size and headers if available
             response_size = None
+            response_headers = None
             if response and hasattr(response, 'headers'):
                 content_length = response.headers.get("content-length")
                 if content_length:
@@ -113,6 +113,8 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                         response_size = int(content_length)
                     except:
                         pass
+                # Capture response headers for debugging (especially WWW-Authenticate)
+                response_headers = dict(response.headers)
             
             # Log the request with trace_id (fire-and-forget, no await!)
             log_request(
@@ -132,7 +134,7 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                 body=body
             )
             
-            # Log the response with same trace_id (fire-and-forget, no await!)
+            # Log the response with same trace_id and headers (fire-and-forget, no await!)
             log_response(
                 status=status,
                 duration_ms=duration_ms,
@@ -140,7 +142,8 @@ class UnifiedLoggingMiddleware(BaseHTTPMiddleware):
                 bytes_sent=response_size or 0,
                 client_ip=client_ip,
                 client_hostname=client_hostname,
-                proxy_hostname=proxy_hostname or "unknown"
+                proxy_hostname=proxy_hostname or "unknown",
+                response_headers=response_headers  # Include response headers
             )
             
             # Log error if there was one with trace_id (fire-and-forget, no await!)

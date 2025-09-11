@@ -148,7 +148,13 @@ class UnifiedProxyHandler:
             return f"https://{proxy_hostname}"
     
     def _build_www_authenticate_header(self, proxy_target, request, error=None) -> str:
-        """Build fully configurable MCP-compliant WWW-Authenticate header per proxy.
+        """Build RFC-compliant WWW-Authenticate header per proxy.
+        
+        Per RFC 6750 and RFC 9728, the WWW-Authenticate header should include:
+        - realm (RFC 6750)
+        - scope (RFC 6750) 
+        - error, error_description, error_uri (RFC 6750)
+        - resource_metadata (RFC 9728) - NOT resource_uri
         
         Args:
             proxy_target: The proxy target configuration
@@ -160,24 +166,19 @@ class UnifiedProxyHandler:
         """
         params = ['Bearer']
         
-        # Realm (configurable or default to auth_proxy)
+        # Realm (RFC 6750 - optional)
         realm = getattr(proxy_target, 'auth_realm', None) or proxy_target.auth_proxy
         if realm:
             params.append(f'realm="{realm}"')
         
-        # Metadata URLs (configurable, default True)
+        # Resource metadata URL (RFC 9728 - use resource_metadata, NOT resource_uri)
         include_metadata = getattr(proxy_target, 'auth_include_metadata_urls', True)
         if include_metadata:
-            # Authorization server metadata
-            if proxy_target.auth_proxy:
-                as_uri = f"https://{proxy_target.auth_proxy}/.well-known/oauth-authorization-server"
-                params.append(f'as_uri="{as_uri}"')
-            
-            # Resource metadata
+            # Protected resource metadata (RFC 9728)
             host = request.headers.get("host", proxy_target.proxy_hostname)
             proto = request.headers.get("x-forwarded-proto", "https")
-            resource_uri = f"{proto}://{host}/.well-known/oauth-protected-resource"
-            params.append(f'resource_uri="{resource_uri}"')
+            resource_metadata_url = f"{proto}://{host}/.well-known/oauth-protected-resource"
+            params.append(f'resource_metadata="{resource_metadata_url}"')
         
         # Error details (if provided)
         if error:
@@ -205,7 +206,11 @@ class UnifiedProxyHandler:
             for key, value in additional_params.items():
                 params.append(f'{key}="{value}"')
         
-        return ', '.join(params)
+        # Log the constructed header for debugging
+        header_value = ', '.join(params)
+        log_debug(f"Built WWW-Authenticate header: {header_value}", component="proxy_handler")
+        
+        return header_value
     
     async def validate_oauth_jwt(self, token: str, log_ctx: Dict[str, Any] = None) -> Optional[Dict[str, Any]]:
         """Validate OAuth JWT token with audience checking.
@@ -688,7 +693,18 @@ class UnifiedProxyHandler:
         token_info = await self.validate_oauth_jwt(token, auth_log_ctx)
         if not token_info:
             log_warning("Invalid or expired OAuth token", component="proxy_handler", **log_ctx)
-            return await self._return_auth_error(request, proxy_target, log_ctx, error={'error': 'invalid_token', 'error_description': 'Token is invalid or expired'})
+            return await self._return_auth_error(request, proxy_target, log_ctx, 
+                                                error={'error': 'invalid_token', 
+                                                       'error_description': 'Token is invalid or expired'})
+        
+        # Check if this was a deleted DCR client (Anthropic MCP requirement)
+        if token_info.get('_dcr_client_deleted'):
+            client_id = token_info.get('azp') or token_info.get('client_id')
+            log_warning(f"DCR client {client_id} was deleted - returning invalid_client error per Anthropic requirements", 
+                       component="proxy_handler", **log_ctx)
+            return await self._return_auth_error(request, proxy_target, log_ctx, 
+                                                error={'error': 'invalid_client', 
+                                                       'error_description': 'Client no longer exists'})
         
         # Validate scopes (required_scopes already determined above)
         token_scopes = token_info.get('scope', '').split() if token_info.get('scope') else []

@@ -14,14 +14,14 @@ Usage:
     log_trace("Detailed internal state", data=complex_object)
 """
 
-import asyncio
-from typing import Optional, Any, Dict, TYPE_CHECKING
+from typing import Optional, TYPE_CHECKING, Dict, Any
+from .lazy_unified_logger import LazyUnifiedAsyncLogger
 
 if TYPE_CHECKING:
     from .unified_logger import UnifiedAsyncLogger
 
-# Global logger instance
-_logger: Optional['UnifiedAsyncLogger'] = None
+# Global lazy logger that initializes itself when needed
+_lazy_logger = LazyUnifiedAsyncLogger(component="global")
 
 
 def set_global_logger(logger: 'UnifiedAsyncLogger'):
@@ -32,17 +32,18 @@ def set_global_logger(logger: 'UnifiedAsyncLogger'):
     Args:
         logger: Initialized UnifiedAsyncLogger instance
     """
-    global _logger
-    _logger = logger
+    global _lazy_logger
+    # Transfer the real logger to the lazy wrapper
+    _lazy_logger.set_real_logger(logger)
 
 
-def get_logger() -> Optional['UnifiedAsyncLogger']:
-    """Get the global unified logger instance.
+def get_logger() -> LazyUnifiedAsyncLogger:
+    """Get the global logger instance.
     
     Returns:
-        UnifiedAsyncLogger instance if initialized, None otherwise
+        LazyUnifiedAsyncLogger instance (always available)
     """
-    return _logger
+    return _lazy_logger
 
 
 # Fire-and-forget logging functions
@@ -56,8 +57,7 @@ def log_debug(message: str, component: Optional[str] = None, **kwargs):
         component: Optional component name override
         **kwargs: Additional structured data
     """
-    if _logger:
-        _logger.debug(message, component=component, **kwargs)
+    _lazy_logger.debug(message, component=component, **kwargs)
 
 
 def log_info(message: str, component: Optional[str] = None, **kwargs):
@@ -68,8 +68,7 @@ def log_info(message: str, component: Optional[str] = None, **kwargs):
         component: Optional component name override
         **kwargs: Additional structured data
     """
-    if _logger:
-        _logger.info(message, component=component, **kwargs)
+    _lazy_logger.info(message, component=component, **kwargs)
 
 
 def log_warning(message: str, component: Optional[str] = None, **kwargs):
@@ -80,8 +79,7 @@ def log_warning(message: str, component: Optional[str] = None, **kwargs):
         component: Optional component name override
         **kwargs: Additional structured data
     """
-    if _logger:
-        _logger.warning(message, component=component, **kwargs)
+    _lazy_logger.warning(message, component=component, **kwargs)
 
 
 def log_error(message: str, component: Optional[str] = None, error: Optional[Exception] = None, trace_id: Optional[str] = None, **kwargs):
@@ -94,15 +92,14 @@ def log_error(message: str, component: Optional[str] = None, error: Optional[Exc
         trace_id: Optional trace ID for correlation
         **kwargs: Additional structured data
     """
-    if _logger:
-        if error:
-            kwargs['error'] = str(error)
-            kwargs['error_type'] = type(error).__name__
-        
-        if trace_id:
-            kwargs['trace_id'] = trace_id
-        
-        _logger.error(message, component=component, **kwargs)
+    if error:
+        kwargs['error'] = str(error)
+        kwargs['error_type'] = type(error).__name__
+    
+    if trace_id:
+        kwargs['trace_id'] = trace_id
+    
+    _lazy_logger.error(message, component=component, **kwargs)
 
 
 def log_critical(message: str, component: Optional[str] = None, **kwargs):
@@ -113,8 +110,7 @@ def log_critical(message: str, component: Optional[str] = None, **kwargs):
         component: Optional component name override
         **kwargs: Additional structured data
     """
-    if _logger:
-        _logger.critical(message, component=component, **kwargs)
+    _lazy_logger.critical(message, component=component, **kwargs)
 
 
 def log_trace(message: str, component: Optional[str] = None, **kwargs):
@@ -125,8 +121,7 @@ def log_trace(message: str, component: Optional[str] = None, **kwargs):
         component: Optional component name override
         **kwargs: Additional structured data
     """
-    if _logger:
-        _logger.trace(message, component=component, **kwargs)
+    _lazy_logger.trace(message, component=component, **kwargs)
 
 
 # Specialized logging helpers
@@ -142,8 +137,16 @@ def log_request(method: str, path: str, client_ip: str, proxy_hostname: str, tra
         trace_id: Request trace ID
         **kwargs: Additional request data
     """
-    if _logger:
-        asyncio.create_task(_logger.log_request(method, path, client_ip, proxy_hostname, trace_id=trace_id, **kwargs))
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        asyncio.create_task(_lazy_logger.log_request(method, path, client_ip, proxy_hostname, trace_id=trace_id, **kwargs))
+    except RuntimeError:
+        # No event loop, queue it
+        _lazy_logger._queue_message("INFO", f"REQUEST: {method} {path}", 
+                                   request_method=method, request_path=path,
+                                   client_ip=client_ip, proxy_hostname=proxy_hostname,
+                                   trace_id=trace_id, **kwargs)
 
 
 def log_response(status: int, duration_ms: float, trace_id: Optional[str] = None, **kwargs):
@@ -155,8 +158,15 @@ def log_response(status: int, duration_ms: float, trace_id: Optional[str] = None
         trace_id: Optional trace ID for correlation
         **kwargs: Additional response data
     """
-    if _logger:
-        asyncio.create_task(_logger.log_response(status, duration_ms, trace_id, **kwargs))
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        asyncio.create_task(_lazy_logger.log_response(status, duration_ms, trace_id, **kwargs))
+    except RuntimeError:
+        # No event loop, queue it
+        _lazy_logger._queue_message("INFO", f"RESPONSE: {status} in {duration_ms:.2f}ms",
+                                   status=status, duration_ms=duration_ms,
+                                   trace_id=trace_id, **kwargs)
 
 
 def log_event(event_type: str, data: Dict[str, Any], trace_id: Optional[str] = None):
@@ -167,8 +177,15 @@ def log_event(event_type: str, data: Dict[str, Any], trace_id: Optional[str] = N
         data: Event data
         trace_id: Optional trace ID for correlation
     """
-    if _logger:
-        asyncio.create_task(_logger.event(event_type, data, trace_id))
+    import asyncio
+    try:
+        loop = asyncio.get_running_loop()
+        asyncio.create_task(_lazy_logger.event(event_type, data, trace_id))
+    except RuntimeError:
+        # No event loop, queue it
+        _lazy_logger._queue_message("INFO", f"EVENT: {event_type}",
+                                   event_type=event_type, event_data=data,
+                                   trace_id=trace_id)
 
 
 # Trace management helpers
@@ -183,9 +200,7 @@ def start_trace(operation: str, **metadata) -> Optional[str]:
     Returns:
         Trace ID for correlation, or None if logger not initialized
     """
-    if _logger:
-        return _logger.start_trace(operation, **metadata)
-    return None
+    return _lazy_logger.start_trace(operation, **metadata)
 
 
 async def end_trace(trace_id: str, status: str = "success", **metadata):
@@ -196,6 +211,6 @@ async def end_trace(trace_id: str, status: str = "success", **metadata):
         status: Final status of the trace
         **metadata: Additional metadata
     """
-    if _logger and trace_id:
-        await _logger.end_trace(trace_id, status, **metadata)
+    if trace_id:
+        await _lazy_logger.end_trace(trace_id, status, **metadata)
 
